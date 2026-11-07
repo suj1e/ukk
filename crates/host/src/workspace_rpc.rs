@@ -180,6 +180,27 @@ fn dispatch_with(store: &mut Store, method: &str, params: &Value) -> Result<Valu
                 message: error.to_string(),
             })
         }
+        "workspace.tab.move" => {
+            let session_id = str_arg(params, "session_id")?;
+            let source_group_id = str_arg(params, "source_group_id")?;
+            let tab_id = str_arg(params, "tab_id")?;
+            let destination_pane_id = str_arg(params, "destination_pane_id")?;
+            let expected = revision_arg(params)?;
+            let current = store.get_layout(session_id)?;
+            if current.revision != expected {
+                return Err(StoreError::Conflict.into());
+            }
+            let next = current.root.move_tab(
+                source_group_id,
+                tab_id,
+                destination_pane_id,
+            )?;
+            let layout = store.set_layout(session_id, expected, next)?;
+            serde_json::to_value(layout).map_err(|error| RpcError {
+                code: -32032,
+                message: error.to_string(),
+            })
+        }
         "workspace.tab.reorder" => {
             let session_id = str_arg(params, "session_id")?;
             let group_id = str_arg(params, "group_id")?;
