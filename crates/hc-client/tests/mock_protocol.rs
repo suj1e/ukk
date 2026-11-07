@@ -100,7 +100,10 @@ fn watches_snapshot_event_and_missed() {
         Ok(())
     });
     // A finite mock closes stdout. A live core should stream indefinitely.
-    assert!(matches!(final_result, Err(HcError::Protocol(_))));
+    assert!(
+        matches!(final_result, Err(HcError::Protocol(_))),
+        "unexpected notification-stream termination: {final_result:?}; received: {received:?}"
+    );
     assert_eq!(received.len(), 3);
     assert_eq!(received[0]["kind"], "snapshot");
     assert_eq!(received[0]["data"]["seq"], 10);
