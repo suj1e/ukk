@@ -107,15 +107,17 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().size(px(7.0)).rounded_full().bg(rgb(if !self.online || terminal.lifecycle == "finished" {
-                        0xbfc3cc
-                    } else if terminal.reported_status.as_deref() == Some("blocked") {
-                        0xe4a84e
-                    } else if terminal.reported_status.as_deref() == Some("working") {
-                        0x58ab83
-                    } else {
-                        0xa5aab6
-                    })))
+                    .child(div().size(px(7.0)).rounded_full().bg(rgb(
+                        if !self.online || terminal.lifecycle == "finished" {
+                            0xbfc3cc
+                        } else if terminal.reported_status.as_deref() == Some("blocked") {
+                            0xe4a84e
+                        } else if terminal.reported_status.as_deref() == Some("working") {
+                            0x58ab83
+                        } else {
+                            0xa5aab6
+                        },
+                    )))
                     .child(
                         div()
                             .flex_1()
