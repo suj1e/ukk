@@ -3,5 +3,8 @@ resolver = "2"
 members = [
     "crates/hc-client",
     "crates/host",
+    "crates/host-client",
 ]
-default-members = ["crates/hc-client", "crates/host"]
+default-members = ["crates/hc-client", "crates/host", "crates/host-client"]
+# GPUI app is a standalone pinned workspace until its native build is validated.
+exclude = ["apps/desktop"]
