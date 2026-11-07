@@ -127,7 +127,7 @@ GPUI 原生窗口现在可从 `workspace.snapshot` 读取 Space / Session 列表
 cargo run -p ukk-host -- space-create ukk /your/project/path
 cargo run -p ukk-host -- workspace-dump
 # 用输出的真实 space_id 创建会话：
-cargo run -p ukk-host -- session-create <space-id> "Implement sync protocol"
+cargo run -p ukk-host -- session-create SPACE_ID "Implement sync protocol"
 cargo run -p ukk-host -- workspace-dump
 ```
 
@@ -140,7 +140,8 @@ cargo run -p ukk-host -- workspace-dump
 | [中文版总览](docs/OVERVIEW.zh-CN.md) | 产品方向、中文架构图、对象关系 |
 | [Product Requirements](docs/PRODUCT.md) | 完整功能矩阵、用户场景和体验原则 |
 | [Architecture](docs/ARCHITECTURE.md) | 端到端架构、组件边界和部署 |
-| [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md) | SQLite Space/Session/AgentRun、布局版本与开发运行命令 |\n| [Domain Model](docs/DOMAIN_MODEL.md) | Spaces / Sessions / AgentRuns / Panes |
+| [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md) | SQLite Space/Session/AgentRun、布局版本与开发运行命令 |
+| [Domain Model](docs/DOMAIN_MODEL.md) | Spaces / Sessions / AgentRuns / Panes |
 | [Plugin System](docs/PLUGINS.md) | 插件生命周期、能力代理、UI 槽位 |
 | [Pairing](docs/PAIRING.md) | QR 扫码、设备授权与密钥 |
 | [Remote Protocol](docs/PROTOCOL.md) | Commands、Events、重连与同步 |
@@ -149,7 +150,9 @@ cargo run -p ukk-host -- workspace-dump
 | [Roadmap](docs/ROADMAP.md) | 完整产品开发阶段和验收标准 |
 | [Development](docs/DEVELOPMENT.md) | 预期代码目录和工程验证步骤 |
 | [Runtime Spike 01](docs/RUNTIME_SPIKE.md) | Rust Host 原型、命令、模拟测试和真实 Mac 验收项 |
-| [Windows IPC](docs/WINDOWS_IPC.md) | Windows Named Pipe、用户 ACL、安全约束、验收清单 |\n| [Platform Support](docs/PLATFORM_SUPPORT.md) | macOS / Windows / Linux 一等桌面支持、OS 特定适配及测试清单 |\n| [Desktop Spike 02](docs/DESKTOP_SPIKE.md) | GPUI 原生窗口、真实终端状态、macOS 构建验收项 |
+| [Windows IPC](docs/WINDOWS_IPC.md) | Windows Named Pipe、用户 ACL、安全约束、验收清单 |
+| [Platform Support](docs/PLATFORM_SUPPORT.md) | macOS / Windows / Linux 一等桌面支持、OS 特定适配及测试清单 |
+| [Desktop Spike 02](docs/DESKTOP_SPIKE.md) | GPUI 原生窗口、真实终端状态、macOS 构建验收项 |
 | [Live Runtime Sync](docs/LIVE_EVENTS.md) | Host 实时订阅、事件缺口恢复、Desktop 自动刷新和测试 |
 | [Upstream References](docs/REFERENCES.md) | 官方依赖、许可和待确认事项 |
 | [ADR-0001](docs/adr/0001-platform-and-runtime.md) | GPUI + SwiftUI + herdr-core 的技术决策 |
@@ -158,12 +161,12 @@ cargo run -p ukk-host -- workspace-dump
 
 ## First end-to-end goal
 
-在 Mac 启动多个 Agent → 退出 Desktop 窗口但 Agent 继续运行 → iPhone 扫码连接并恢复会话 → 查看 Diff / 发送命令 / 审批 → 临时打开悬浮 Remote Screen 完成一项桌面操作 → 收起小窗继续 Agent 对话。
+在 macOS / Windows / Linux 电脑上启动多个 Agent → 退出 Desktop 窗口但 Agent 继续运行 → iPhone 扫码连接并恢复会话 → 查看 Diff / 发送命令 / 审批 → 临时打开悬浮 Remote Screen 完成一项桌面操作 → 收起小窗继续 Agent 对话。
 
 详细验收拆解见 [Roadmap](docs/ROADMAP.md)。
 
 ## Project status
 
-文档基线已建立，已有本地只读 Rust Host / hc-client 及 GPUI Desktop 原型源码（尚未完成 Mac 验证）。GPUI 版本、herdr-core API 兼容、alma-relay 配对接入、iOS 真机、WebRTC 和 macOS 权限等都需要实际验证。
+文档基线已建立，已有本地 Host / hc-client、跨平台 GPUI Desktop 和 SQLite Workspace 原型源码（尚未完成三平台 CI 与实机验证）。GPUI 版本、herdr-core API 兼容、alma-relay 配对接入、iOS 真机、WebRTC 和 macOS 权限等都需要实际验证。
 
 **Repository license:** 尚未决定（仓库目前为 Private）；参考项目的 Apache-2.0/MIT 不等于自动给 ukk 授权。
