@@ -8,6 +8,12 @@
 
 Primary user: a developer who works with several coding agents and wants persistence, parallelism, native UI and reliable mobility.
 
+## Current delivery boundary
+
+Build a **complete product**, not just a terminal MVP, on native Desktop (macOS/Windows/Linux) and iOS/iPadOS first. The plugin architecture, multi-Agent management, persistent state, safe device pairing, remote mobile session access, and optional floating Remote Screen are core scope.
+
+Android/Web/TUI are explicitly **deferred client implementations**. Do not build their UI, bootstrap repositories or claim shipping support during the current delivery track. Keep the protocol modular so they can be added later without reworking Host or runtime.
+
 ## Design pillars
 
 1. **Multi-agent, not fixed pipeline.** Codex, Claude Code and compatible agents are dynamic peers. Agents may delegate to children; no hard-coded Planner/Coder/Reviewer/Tester funnel.
@@ -33,7 +39,7 @@ Primary user: a developer who works with several coding agents and wants persist
 | Automation | Scheduled jobs, event triggers, webhooks, user-reviewed actions, agent handoffs and integrations as optional plugins. |
 | Operations | Startup service, resource usage, logging, diagnostics, version negotiation, migrations, offline state, update checks, backups/export. |
 | Security | Device-level grants, short-lived pairing, key rotation, permissions for approvals/screen/input, audit log, session termination, revocation, local-only mode. |
-| Future surfaces | Windows/Linux parity, Android Compose, Web, Ratatui TUI, headless server; reuse protocol, not necessarily same UI components. |
+| Platform scope | **Active:** GPUI Desktop on macOS/Windows/Linux, SwiftUI iOS/iPadOS; all three desktop OSes are first-class. **Deferred:** Android Compose, Web, Ratatui TUI — no work scheduled yet. Headless Host is a runtime/deployment capability, not a separate UI client. |
 
 ## UX flows
 
