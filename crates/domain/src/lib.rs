@@ -137,7 +137,9 @@ impl PaneNode {
             }
             Ok(())
         }
-        visit(self, 0, &mut HashSet::new(), &mut 0)
+        let mut ids = HashSet::new();
+        let mut leaf_count = 0usize;
+        visit(self, 0, &mut ids, &mut leaf_count)
     }
 
     /// Return a new tree with a split, leaving the original unchanged on error.
