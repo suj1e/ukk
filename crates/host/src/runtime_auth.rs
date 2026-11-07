@@ -191,12 +191,14 @@ impl AgentControlAuth {
         let parent = path
             .parent()
             .ok_or_else(|| io::Error::other("invalid agent-control token path"))?;
-        let created_parent = !parent.exists();
+        // Prefixed so the binding is not an unused variable on Windows, where
+        // the chmod branch below is compiled out.
+        let _created_parent = !parent.exists();
         fs::create_dir_all(parent)?;
         // Never chmod an existing directory: an env override may point at a
         // shared directory such as /tmp or a user's home.
         #[cfg(unix)]
-        if created_parent {
+        if _created_parent {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
         }
