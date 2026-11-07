@@ -315,7 +315,7 @@ mod tests {
         let broker = Broker::new();
         broker.apply(&snapshot(10)).unwrap();
         let error = broker.apply(&event(12, "removed", "t3", json!({}))).unwrap_err();
-        assert!(error.contains("gap"));
+        assert!(error.contains("sequence mismatch"));
         assert_eq!(broker.snapshot()["terminals"].as_array().unwrap().len(), 1);
         assert_eq!(broker.snapshot()["hc_seq"], 10);
     }
