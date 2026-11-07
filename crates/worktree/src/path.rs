@@ -1,5 +1,6 @@
 //! Repository-relative paths stored as bytes so non-UTF-8 names survive.
 
+#[cfg(unix)]
 use crate::bytes_to_os_string;
 use crate::WorktreeError;
 use std::borrow::Cow;
