@@ -33,7 +33,7 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .font_semibold()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_lg()
                             .text_color(rgb(INK))
                             .child("ukk"),
