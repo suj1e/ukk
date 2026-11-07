@@ -104,7 +104,16 @@ pub struct Store {
 
 impl Store {
     pub fn open_default() -> Result<Self> {
-        Self::open(&default_database_path()?)
+        let path = default_database_path()?;
+        #[cfg(unix)]
+        if env::var_os("UKK_DB_PATH").is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+            }
+        }
+        Self::open(&path)
     }
 
     pub fn open(path: &Path) -> Result<Self> {
@@ -209,7 +218,7 @@ impl Store {
         let title = nonempty(title, "Session title")?;
         let space_id = nonempty(space_id, "Space ID")?;
         let exists: Option<String> = self.conn.query_row(
-            "SELECT id FROM spaces WHERE id=?1", [&space_id], |row| row.get(0),
+            "SELECT id FROM spaces WHERE id=?1", params![space_id], |row| row.get(0),
         ).optional()?;
         if exists.is_none() {
             return Err(StoreError::NotFound(format!("space {space_id}")));
@@ -254,14 +263,14 @@ impl Store {
         let terminal_address = nonempty(terminal_address, "terminal address")?;
         let adapter = nonempty(adapter, "adapter")?;
         let session: Option<String> = self.conn.query_row(
-            "SELECT id FROM sessions WHERE id=?1", [&session_id], |row| row.get(0),
+            "SELECT id FROM sessions WHERE id=?1", params![session_id], |row| row.get(0),
         ).optional()?;
         if session.is_none() {
             return Err(StoreError::NotFound(format!("session {session_id}")));
         }
         if let Some(parent) = parent_run_id {
             let parent_session: Option<String> = self.conn.query_row(
-                "SELECT session_id FROM agent_runs WHERE id=?1", [parent], |row| row.get(0),
+                "SELECT session_id FROM agent_runs WHERE id=?1", params![parent], |row| row.get(0),
             ).optional()?;
             if parent_session.as_deref() != Some(&session_id) {
                 return Err(StoreError::Invalid("parent AgentRun must belong to the same Session".into()));
@@ -298,7 +307,7 @@ impl Store {
     pub fn get_layout(&self, session_id: &str) -> Result<SessionLayout> {
         let row: Option<(i64, String)> = self.conn.query_row(
             "SELECT revision,content_json FROM session_layouts WHERE session_id=?1",
-            [session_id], |row| Ok((row.get(0)?, row.get(1)?)),
+            params![session_id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
         let (revision, encoded) = row.ok_or_else(|| StoreError::NotFound(format!("layout for {session_id}")))?;
         let root: PaneNode = serde_json::from_str(&encoded)?;
@@ -322,7 +331,7 @@ impl Store {
             if let PaneContent::Agent { agent_run_id } | PaneContent::Terminal { agent_run_id } = content {
                 let matching_session: Option<String> = self.conn.query_row(
                     "SELECT session_id FROM agent_runs WHERE id=?1",
-                    [agent_run_id],
+                    params![agent_run_id],
                     |row| row.get(0),
                 ).optional()?;
                 if matching_session.as_deref() != Some(session_id) {
@@ -340,7 +349,8 @@ impl Store {
         if changed == 0 {
             return match self.get_layout(session_id) {
                 Err(StoreError::NotFound(_)) => Err(StoreError::NotFound(format!("layout for {session_id}"))),
-                _ => Err(StoreError::Conflict),
+                Ok(_) => Err(StoreError::Conflict),
+                Err(error) => Err(error),
             };
         }
         Ok(SessionLayout { session_id: session_id.to_owned(), revision, root })
