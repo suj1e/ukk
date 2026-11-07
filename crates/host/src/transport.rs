@@ -52,7 +52,11 @@ pub(super) fn serve() -> AppResult<()> {
 
 // This handler is shared by UnixStream (macOS/Linux) and Win32 Named Pipe
 // File handles. Every client uses the same read-only JSON-RPC dispatcher.
-fn serve_one<S: Read + Write>(mut stream: S, broker: Arc<Broker>, auth: Arc<LocalAuth>) -> AppResult<()> {
+fn serve_one<S: Read + Write>(
+    mut stream: S,
+    broker: Arc<Broker>,
+    auth: Arc<LocalAuth>,
+) -> AppResult<()> {
     const MAX_LINE: usize = 64 * 1024;
     loop {
         let mut bytes = Vec::new();
@@ -75,10 +79,13 @@ fn serve_one<S: Read + Write>(mut stream: S, broker: Arc<Broker>, auth: Arc<Loca
         let input: Value = match serde_json::from_slice(&bytes) {
             Ok(value) => value,
             Err(_) => {
-                write_json(&mut stream, &json!({
-                    "jsonrpc":"2.0","id":null,
-                    "error":{"code":-32700,"message":"invalid JSON"}
-                }))?;
+                write_json(
+                    &mut stream,
+                    &json!({
+                        "jsonrpc":"2.0","id":null,
+                        "error":{"code":-32700,"message":"invalid JSON"}
+                    }),
+                )?;
                 continue;
             }
         };
