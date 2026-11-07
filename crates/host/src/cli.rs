@@ -116,6 +116,11 @@ pub(super) fn execute() -> AppResult<()> {
             println!("{}", serde_json::to_string_pretty(&updated)?);
             Ok(())
         }
+        "install" => lifecycle::install(),
+        "uninstall" => lifecycle::uninstall(),
+        "restart" => lifecycle::restart(),
+        "status" => lifecycle::status(),
+        "cleanup" => lifecycle::cleanup(),
         #[cfg(unix)]
         "serve" => serve(),
         #[cfg(windows)]
@@ -155,6 +160,12 @@ Commands:
   pane-close           <session_id> <pane_id> (never stops Agent)
   serve                Start private local Unix socket / Named Pipe
   request [method]     Read local Host RPC (default host.ping)
+Lifecycle (explicit; `serve` never installs anything):
+  install              Register the current-user Host service (launchd/systemd --user/logon task)
+  uninstall            Remove it (herdr-core Agents keep running)
+  restart              Restart the Host only (Agents keep running)
+  status               Service, endpoint, permission and stale-socket diagnostics
+  cleanup              Remove a stale Unix socket only after proving no live Host
 Local-only RPC metadata editing:
   workspace.session.create; workspace.pane.split/close/resize
   Requires rotated per-Host capability; never enables Agent commands.

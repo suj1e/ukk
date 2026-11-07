@@ -2,7 +2,12 @@
 //! mutations and developer CLI are separate modules.
 mod broker;
 mod cli;
+mod lifecycle;
 mod local_auth;
+#[cfg(unix)]
+mod local_fs;
+#[cfg(unix)]
+mod peer;
 mod rpc;
 mod transport;
 mod workspace_rpc;
