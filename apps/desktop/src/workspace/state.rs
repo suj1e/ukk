@@ -33,7 +33,7 @@ impl Workspace {
 
     /// A long-poll task stays alive only as long as this GPUI entity exists.
     /// Neither rendering nor click handlers ever block on herdr-core.
-    fn watch_updates(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn watch_updates(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let mut epoch = String::new();
             let mut revision = 0_u64;
