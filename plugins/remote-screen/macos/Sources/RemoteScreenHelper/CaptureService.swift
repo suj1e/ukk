@@ -106,7 +106,7 @@ enum CaptureService {
         do {
             return try await SCShareableContent.excludingDesktopWindows(
                 false,
-                onScreenWindowsOnly: true
+                onScreenWindowsOnly: false
             )
         } catch {
             throw HelperError.mapCaptureError(error)
