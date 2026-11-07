@@ -3,7 +3,7 @@
 **Native, extensible Multi-Agent Workspace.**
 
 > **设计阶段 / Architecture-first** · GPUI Desktop + SwiftUI iOS + herdr-core + Relay + Plugins  
-> 当前尚未实现可运行的客户端和 Agent Host。下面的架构图与功能均为拟定设计。
+> **当前阶段：运行时集成 Spike 01。** 已提交一个本地只读 Rust Host / hc-client 原型；尚未经过真实 Mac + herdr-core 联调，也尚未实现 GPUI 界面。下面的完整架构与功能仍是目标设计。
 
 ukk 是一个从零打造的原生 Coding Agent 工作空间：同时运行多个 Codex、Claude Code 或其他兼容 Agent，保留可持久恢复的工作会话，通过 iPhone 扫码连接电脑，并在必要时以**悬浮小窗**查看或操控电脑屏幕。
 
@@ -55,6 +55,22 @@ flowchart TB
 - **Persistent runtime:** herdr-core 持有实际执行；ukk Host 管理产品级状态与跨端同步。
 - **Future clients:** Windows/Linux、Android、Web、TUI、Headless，按阶段推进但不删减完整愿景。
 
+## Runtime Spike 01 — source now available
+
+First executable Rust prototype: `ukk-hc-client` talks to herdr-core through `hc connect` in plain JSON-RPC mode, and `ukk-host` exposes a **private local read-only Unix socket** for `host.ping` and `terminal.list`. A mock protocol test and GitHub Actions workflow are included; real Mac verification remains pending.
+
+```bash
+cargo test --workspace
+cargo run -p ukk-host -- doctor
+cargo run -p ukk-host -- list
+# Start Host in a separate terminal:
+cargo run -p ukk-host -- serve
+# Query the local Host socket:
+cargo run -p ukk-host -- request terminal.list
+```
+
+See [Runtime Spike 01 — runbook and acceptance](docs/RUNTIME_SPIKE.md) for `hc` installation, live events and exact limitations.
+
 ## Documentation
 
 | Document | Contents |
@@ -70,6 +86,7 @@ flowchart TB
 | [Security](docs/SECURITY.md) | 威胁模型、权限、风险与测试 |
 | [Roadmap](docs/ROADMAP.md) | 完整产品开发阶段和验收标准 |
 | [Development](docs/DEVELOPMENT.md) | 预期代码目录和工程验证步骤 |
+| [Runtime Spike 01](docs/RUNTIME_SPIKE.md) | Rust Host 原型、命令、模拟测试和真实 Mac 验收项 |
 | [Upstream References](docs/REFERENCES.md) | 官方依赖、许可和待确认事项 |
 | [ADR-0001](docs/adr/0001-platform-and-runtime.md) | GPUI + SwiftUI + herdr-core 的技术决策 |
 | [ADR-0002](docs/adr/0002-remote-control-is-plugin.md) | 远控作为会话插件的交互决策 |
@@ -83,6 +100,6 @@ flowchart TB
 
 ## Project status
 
-文档基线已建立，尚未开发代码。GPUI 版本、herdr-core API 兼容、alma-relay 配对接入、iOS 真机、WebRTC 和 macOS 权限等都需要实际验证。
+文档基线已建立，已有本地只读 Rust Host/hc-client Spike 源代码（尚未在真实 Mac 验证）。GPUI 版本、herdr-core API 兼容、alma-relay 配对接入、iOS 真机、WebRTC 和 macOS 权限等都需要实际验证。
 
 **Repository license:** 尚未决定（仓库目前为 Private）；参考项目的 Apache-2.0/MIT 不等于自动给 ukk 授权。
