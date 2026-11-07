@@ -129,9 +129,10 @@ device's retry record or learn its result.
 
 ## Pairing and device trust (implemented, S2 core)
 
-`crates/remote` implements the pairing core; relay networking, OS key storage
-and iOS UI are separate follow-ups. See [PAIRING.md](PAIRING.md) for the exact
-wire fields, prologue encoding and dependency record.
+`crates/remote` implements the pairing core and the outbound signalling
+boundary; a real WSS relay adapter, OS key storage and iOS UI are separate
+follow-ups. See [PAIRING.md](PAIRING.md) for the exact wire fields, prologue
+encoding, signalling envelope and dependency record.
 
 | Control | Implementation |
 | --- | --- |
@@ -146,14 +147,31 @@ wire fields, prologue encoding and dependency record.
 | Key storage | `DeviceKeyStore` trait; only an in-memory test store ships. OS Keychain/Keyring is **NOT VERIFIED** and must not fall back to plaintext SQLite |
 | WAN proof of possession | **NOT IMPLEMENTED / MAJOR GATE.** S2 authenticates the device only during pairing. S1 `accept_hello` trusts a client-supplied `DeviceClaim` on `TransportBinding::remote()`; until host/relay wiring requires a fresh Noise session keyed by the device static key (or a signature over hello), a captured claim can be replayed. Do not expose a WAN listener. |
 
-The pairing crate performs no network I/O. `RelayTransport` documents the
-outbound-WSS assumptions but no relay wire format is implemented;
-`recv_frame(max_bytes)` makes the 4096-byte frame bound part of the adapter
-contract.
+### Relay signalling boundary (ukk-internal, mock-tested)
 
-**NOT VERIFIED in S2:** WAN device-claim proof-of-possession, real alma-relay
-exchange, OS protected key storage, physical iPhone, relay outage/reconnect and
-independent cryptographic review.
+`transport::RelayConnection` is the only outbound seam, and
+`relay::RelayDriver` is the protocol state machine. The envelope is
+**ukk-internal** and is not claimed to be alma-relay-compatible; see the gap
+record in [PAIRING.md](PAIRING.md).
+
+| Control | Implementation |
+| --- | --- |
+| Outbound only | The Host sends `register`; there is no inbound listener, port forwarding or TCP fallback, and the relay never dials the Host |
+| Reconnect generation | Monotonic `generation()`; the driver refuses a reused/stale generation and resets all state on a higher one. State never crosses a connection generation |
+| Bounds | Encoded envelope ≤ 8192 bytes, opaque pairing payload ≤ 4096 bytes, session id `[A-Za-z0-9_-]{16,128}`; oversize rejected before parse/buffer |
+| Fail closed | Duplicate registration, unknown route, offline peer, oversized frame, stale generation, wrong Host, out-of-order message, session close and revocation all produce a typed error and close the driver |
+| Resume | Not implemented in v1; `register`/`connect` with `resume_session` is refused (`unknown_route`) rather than guessed |
+| Relay authority | The relay only routes ciphertext and typed control; it cannot grant scopes, authenticate a device or alter pairing state |
+| Test evidence | Synchronous in-memory mock relay (`tests/relay.rs`); no socket, TLS, relay process or external call |
+
+The pairing crate performs no network I/O and adds no cryptographic primitive:
+the driver carries opaque Noise frames and only enforces routing, ordering,
+version and size bounds.
+
+**NOT VERIFIED in S2:** WAN device-claim proof-of-possession, a real WSS/TLS
+relay adapter, relay operator authentication, TURN/media credentials,
+real alma-relay exchange, OS protected key storage, physical iPhone, relay
+outage/reconnect against a real process and independent cryptographic review.
 
 ## Threat scenarios and mitigations
 

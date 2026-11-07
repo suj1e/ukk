@@ -12,8 +12,11 @@
 //!   registry, including rotation, revocation and grant expiry.
 //! * [`keys`] — static X25519 keys and the [`keys::DeviceKeyStore`] trait with
 //!   an in-memory test implementation. OS Keychain/Keyring is out of scope.
-//! * [`transport`] — the opaque relay frame trait and documented outbound WSS
-//!   assumptions. No relay wire protocol is implemented.
+//! * [`relay`] — a versioned ukk-internal signalling envelope and the
+//!   [`relay::RelayDriver`] state machine for outbound register/connect/route.
+//!   It is explicitly not the alma-relay wire protocol.
+//! * [`transport`] — the outbound [`transport::RelayConnection`] seam and the
+//!   documented outbound WSS assumptions. This crate performs no network I/O.
 //!
 //! ## What is proven by tests
 //!
@@ -22,7 +25,9 @@
 //! confirmation-code agreement and wrong-code rejection, pending-until-ack
 //! commit, scope-escalation denial, device revocation/key rotation and bounded
 //! malformed input all have contract tests. A deterministic Noise vector is
-//! included.
+//! included. The relay boundary has an in-memory mock-relay contract test for
+//! outbound registration, routing bounded pairing frames, duplicate
+//! registration, unknown routes, oversized frames, reconnect and revocation.
 //!
 //! ## What is NOT VERIFIED
 //!
@@ -31,13 +36,16 @@
 //! proof-of-possession; do not expose a relay listener until host/relay wiring
 //! binds a fresh session to the paired device static key. No real relay was
 //! contacted, no OS key store was used, no physical iPhone ran this code and
-//! there has been no external cryptographic or security review. Do not
+//! there has been no external cryptographic or security review. The
+//! ukk-internal signalling envelope is **not** alma-relay-compatible; see
+//! [docs/PAIRING.md](../../../docs/PAIRING.md) for the gap record. Do not
 //! describe this as production-ready cryptography.
 
 pub mod error;
 pub mod handshake;
 pub mod invite;
 pub mod keys;
+pub mod relay;
 pub mod transport;
 pub mod trust;
 
@@ -59,7 +67,12 @@ pub use keys::{
     DeviceKeyStore, InMemoryDeviceKeyStore, KeyStoreError, PublicKey, StaticKeypair,
     STATIC_KEY_BYTES,
 };
-pub use transport::RelayTransport;
+pub use relay::{
+    CloseReason, OpaqueFrame, RelayDriver, RelayError, RelayErrorCode, RelayEvent, RelayMessage,
+    RelayRole, RelayState, SessionId, MAX_SESSION_ID_BYTES, MAX_SIGNALLING_FRAME_BYTES,
+    MAX_SIGNALLING_PAYLOAD_BYTES, MIN_SESSION_ID_BYTES, SIGNALLING_VERSION,
+};
+pub use transport::RelayConnection;
 pub use trust::{
     is_pairing_grantable, validate_grant_ttl, validate_pairing_scopes, DeviceTrust, PairedDevice,
     DEFAULT_GRANT_TTL_MS, MAX_GRANT_TTL_MS, PAIRING_GRANTABLE_SCOPES,
