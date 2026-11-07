@@ -549,7 +549,7 @@ impl Workspace {
                         div().text_xs().text_color(rgb(MUTED))
                             .child(format!("{}% / {}%",
                                 (*ratio * 100.0).round() as i32,
-                                ((1.0 - ratio) * 100.0).round() as i32)),
+                                ((1.0 - *ratio) * 100.0).round() as i32)),
                     )
                     .child(self.pane_button(cx, format!("{id}-smaller"), "−",
                         PaneAction::Resize { split_id: id.clone(), ratio: smaller }))
@@ -567,7 +567,7 @@ impl Workspace {
                     .flex_shrink_1()
                     .min_w_0()
                     .min_h_0()
-                    .flex_basis(gpui::DefiniteLength::Fraction(1.0 - ratio))
+                    .flex_basis(gpui::DefiniteLength::Fraction(1.0 - *ratio))
                     .child(self.session_pane(second, cx));
                 let columns = div().flex().flex_1().min_w_0().min_h_0().gap_3();
                 let columns = if *axis == SplitAxis::Vertical {
@@ -690,7 +690,11 @@ impl Workspace {
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entries: Vec<(Terminal, usize)> = self.snapshot.hierarchy().into_iter().map(|(t, depth)| (t.clone(), depth)).collect();
-        let sessions = self.domain.sessions.clone();
+        let sessions: Vec<Session> = self.domain.sessions.iter()
+            .filter(|session| !session.archived &&
+                self.selected_space.as_ref().is_none_or(|space| &session.space_id == space))
+            .cloned()
+            .collect();
         let spaces = self.domain.spaces.clone();
         div()
             .flex()
@@ -734,15 +738,27 @@ impl Workspace {
                 div().mt_4().text_xs().font_semibold().text_color(rgb(MUTED))
                     .child("PROJECT SPACES"),
             )
-            .children(spaces.into_iter().map(|space| {
-                div().px_3().py_2().text_sm().text_color(rgb(INK))
-                    .child(space.title)
-            }))
+            .children(spaces.iter().map(|space| self.space_row(space, cx)))
             .child(
-                div().mt_5().mb_2().text_xs().font_semibold().text_color(rgb(MUTED))
-                    .child("SESSIONS"),
+                div().flex().items_center().justify_between().mt_5().mb_2()
+                    .child(div().text_xs().font_semibold().text_color(rgb(MUTED))
+                        .child("SESSIONS"))
+                    .child(
+                        div().id("new-session").px_2().py_1().rounded_md()
+                            .bg(rgb(SURFACE)).text_xs().text_color(rgb(ACCENT))
+                            .cursor_pointer().hover(|style| style.bg(rgb(0xe9ebf7)))
+                            .on_click(cx.listener(|this, _, _, cx| this.create_session(cx)))
+                            .child(if self.mutation_busy { "Saving…" } else { "+ New" }),
+                    ),
             )
             .children(sessions.iter().map(|session| self.session_row(session, cx)))
+            .when_some(self.mutation_error.clone(), |element, message| {
+                element.child(
+                    div().mt_2().px_3().py_2().rounded_md()
+                        .bg(rgb(0xffefeb)).text_xs()
+                        .text_color(rgb(0xa14b32)).child(message),
+                )
+            })
             .child(
                 div()
                     .flex()
