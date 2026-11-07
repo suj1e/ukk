@@ -253,6 +253,19 @@ impl Workspace {
                         .child(message),
                 )
             })
+            .when_some(self.workspace_sync_error.clone(), |element, message| {
+                element.child(
+                    div()
+                        .mt_2()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(rgb(0xffefeb))
+                        .text_xs()
+                        .text_color(rgb(0xa14b32))
+                        .child(message),
+                )
+            })
             .child(
                 div()
                     .flex()
