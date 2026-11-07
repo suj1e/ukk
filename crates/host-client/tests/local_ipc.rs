@@ -9,7 +9,10 @@ use ukk_host_client::HostClient;
 
 #[test]
 fn end_to_end_local_snapshot() {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let dir = std::env::temp_dir().join(format!("ukk-host-ipc-{}-{n}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("host.sock");
