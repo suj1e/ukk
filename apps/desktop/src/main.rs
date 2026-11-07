@@ -390,23 +390,26 @@ impl Workspace {
                     .child(self.tab_button(cx, DetailTab::Runtime, "Runtime")),
             );
 
-        body = body.child(match selected {
-            None => div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .gap_3()
-                .text_color(rgb(MUTED))
-                .child("No active terminal snapshot")
-                .child(
-                    div()
-                        .text_sm()
-                        .child("Start herdr-core and an agent, then refresh."),
-                ),
-            Some(term) => self.terminal_detail(&term),
-        });
+        if let Some(term) = selected {
+            body = body.child(self.terminal_detail(&term));
+        } else {
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .text_color(rgb(MUTED))
+                    .child("No active terminal snapshot")
+                    .child(
+                        div()
+                            .text_sm()
+                            .child("Start herdr-core and an agent, then refresh."),
+                    ),
+            );
+        }
 
         body
     }
