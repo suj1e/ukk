@@ -107,8 +107,12 @@ pub(super) fn execute() -> AppResult<()> {
             }
             let database = ukk_store::default_database_path()?;
             // Hold the Host lifecycle lock across validation and replacement so
-            // a Host cannot start halfway through a restore.
+            // a Host cannot start halfway through a restore. On Windows the
+            // guard is a liveness probe with no value to bind.
+            #[cfg(unix)]
             let _guard = acquire_restore_guard()?;
+            #[cfg(not(unix))]
+            acquire_restore_guard()?;
             let report = restore_database(&database, Path::new(&source))?;
             println!("Restored: {}", report.database.display());
             println!("  source: {}", report.source.display());
