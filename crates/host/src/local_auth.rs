@@ -8,7 +8,7 @@
 
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use ukk_domain::new_id;
 use ukk_host_client::HostClient;
 
@@ -88,7 +88,7 @@ impl LocalAuth {
     }
 }
 
-fn unique_temp(target: &PathBuf) -> PathBuf {
+fn unique_temp(target: &Path) -> PathBuf {
     // Keep arbitrary non-UTF8 Unix filenames and Unicode Windows profiles.
     // Sibling filename guarantees same-filesystem rename.
     let mut name = target.as_os_str().to_os_string();
