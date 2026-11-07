@@ -2,9 +2,10 @@
 //!
 //! This bootstrap IPC is local only: Unix sockets on macOS/Linux, a private
 //! per-user Named Pipe on Windows. It is not the public remote protocol.
-//! A connection is opened per request with bounded reply size. Unix sockets
-//! have a read deadline; synchronous Windows pipe I/O still needs cancellation
-//! and a hard deadline before shipping as a production endpoint.
+//! A connection is opened per request with bounded request and reply sizes.
+//! Unix sockets set read/write deadlines; Windows Named Pipes use overlapped
+//! I/O with an explicit deadline and cancellation, so neither transport can
+//! block a UI thread indefinitely. Both transports verify the same user.
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -13,7 +14,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 #[cfg(any(unix, windows))]
-use std::io::{BufReader, Read, Write};
+use std::io::{Read, Write};
 use ukk_domain::DomainSnapshot;
 #[cfg(windows)]
 pub mod windows_pipe;
@@ -58,6 +59,34 @@ impl From<std::io::Error> for HostError {
 impl From<serde_json::Error> for HostError {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
+    }
+}
+
+/// Read one newline-terminated reply with a hard byte cap. A peer that never
+/// terminates the line is rejected instead of growing memory or blocking past
+/// the transport deadline.
+#[cfg(any(unix, windows))]
+fn read_bounded_line<R: Read>(reader: &mut R, max: usize) -> Result<Vec<u8>, HostError> {
+    let mut bytes = Vec::with_capacity(2048);
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = reader.read(&mut chunk)?;
+        if read == 0 {
+            return Err(HostError::Protocol(
+                "Host closed before full response".into(),
+            ));
+        }
+        if let Some(position) = chunk[..read].iter().position(|&byte| byte == b'\n') {
+            if bytes.len() + position > max {
+                return Err(HostError::Protocol("Host reply exceeded size cap".into()));
+            }
+            bytes.extend_from_slice(&chunk[..position]);
+            return Ok(bytes);
+        }
+        if bytes.len() + read > max {
+            return Err(HostError::Protocol("Host reply exceeded size cap".into()));
+        }
+        bytes.extend_from_slice(&chunk[..read]);
     }
 }
 
@@ -479,24 +508,7 @@ impl HostClient {
         )?;
         stream.write_all(b"\n")?;
         stream.flush()?;
-
-        let mut reader = BufReader::new(stream);
-        let mut bytes = Vec::with_capacity(2048);
-        loop {
-            let mut byte = [0u8; 1];
-            if reader.read(&mut byte)? == 0 {
-                return Err(HostError::Protocol(
-                    "Host closed before full response".into(),
-                ));
-            }
-            bytes.push(byte[0]);
-            if bytes.len() > MAX_REPLY_BYTES {
-                return Err(HostError::Protocol("Host reply exceeded size cap".into()));
-            }
-            if byte[0] == b'\n' {
-                break;
-            }
-        }
+        let bytes = read_bounded_line(&mut stream, MAX_REPLY_BYTES)?;
         let response: Value = serde_json::from_slice(&bytes)?;
         if response.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
             || response.get("id") != Some(&json!(1))
@@ -517,35 +529,19 @@ impl HostClient {
         &self,
         method: &str,
         params: Value,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<Value, HostError> {
-        // Named Pipe endpoint has an explicit same-user ACL; no TCP fallback.
-        // _timeout is not yet enforced on synchronous Win32 read; tracked in
-        // docs/WINDOWS_IPC.md. Keep RPC strictly read-only until reviewed.
+        // Named Pipe endpoint has an explicit same-user ACL and SID checks;
+        // no TCP fallback. Overlapped I/O enforces the deadline below.
         let mut stream = windows_pipe::open_client()?;
+        stream.set_read_timeout(timeout);
         serde_json::to_writer(
             &mut stream,
             &json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}),
         )?;
         stream.write_all(b"\n")?;
         stream.flush()?;
-        let mut reader = BufReader::new(stream);
-        let mut bytes = Vec::with_capacity(2048);
-        loop {
-            let mut byte = [0u8; 1];
-            if reader.read(&mut byte)? == 0 {
-                return Err(HostError::Protocol(
-                    "Host pipe closed before full response".into(),
-                ));
-            }
-            bytes.push(byte[0]);
-            if bytes.len() > MAX_REPLY_BYTES {
-                return Err(HostError::Protocol("Host reply exceeded size cap".into()));
-            }
-            if byte[0] == b'\n' {
-                break;
-            }
-        }
+        let bytes = read_bounded_line(&mut stream, MAX_REPLY_BYTES)?;
         let reply: Value = serde_json::from_slice(&bytes)?;
         if reply.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
             || reply.get("id") != Some(&json!(1))

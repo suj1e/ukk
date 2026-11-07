@@ -1,60 +1,148 @@
-# Windows local Host IPC — Named Pipe implementation
+# Windows local Host IPC — Named Pipe and cross-platform Host lifecycle
 
-> Windows is a first-class GPUI Desktop target alongside macOS and Linux. Source was committed on 2026-11-07; **not compiled or validated on a Windows machine yet**. Do not present this as production-ready authorization.
+> Updated 2026-11-08. Windows is a first-class GPUI Desktop target. Source is
+> committed and Rust core/Host CI run `42392340865` plus real herdr-core
+> acceptance run `42392340910` passed on Ubuntu, macOS and Windows at code
+> commit `9b28bce`. **Real-device validation and cross-user denial have not
+> been observed.** Do not present this as production-ready authorization.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  GPUI["GPUI Desktop<br/>same Rust UI on all 3 OS"] --> HC["ukk-host-client<br/>typed read-only RPC"]
-  HC -->|Windows: named pipe| WP["\\\\.\\pipe\\ukk-agent-host-SID<br/>User + SYSTEM DACL"]
-  HC -->|macOS/Linux: Unix socket| UX["~/.ukk/run/agent-host.sock<br/>mode 0600"]
-  WP --> H["ukk Host<br/>shared JSON-RPC dispatch"]
+  GPUI["GPUI Desktop<br/>same Rust UI on all 3 OS"] --> HC["ukk-host-client<br/>typed local RPC + SID/peer checks"]
+  HC -->|Windows: overlapped Named Pipe| WP["\\\\.\\pipe\\ukk-agent-host-SID<br/>user + SYSTEM DACL<br/>remote clients rejected"]
+  HC -->|macOS/Linux: Unix socket| UX["~/.ukk/run/agent-host.sock<br/>0600 in a 0700 directory<br/>SO_PEERCRED / getpeereid"]
+  WP --> H["ukk Host<br/>bounded JSON-RPC dispatcher"]
   UX --> H
   H --> B["events.subscribe broker"]
   B --> CORE["herdr-core via hc connect"]
 ```
 
-The screen/keyboard control plugin and Relay mobile transport are **not** using this local IPC endpoint yet. Windows Pipe is for local desktop UI ↔ Host only.
+The Host service is a **user-scoped lifecycle** (launchd agent, systemd
+`--user`, Windows logon task), independent of Desktop windows. It is not the
+Agent runtime: stopping/restarting/uninstalling it never signals herdr-core.
+See [Host lifecycle](HOST_LIFECYCLE.md).
+
+The screen/keyboard control plugin and Relay mobile transport are **not** using
+this local IPC endpoint. No TCP fallback exists.
 
 ## Files
 
-- `crates/host-client/src/windows_pipe.rs`: Win32 token SID lookup, protected pipe creation, accept, and client connection.
-- `crates/host-client/src/lib.rs`: Windows `HostClient` binding, same versioned `host.snapshot` and `host.wait` APIs.
-- `crates/host/src/main.rs`: Windows `serve` and `request` routes, OS-independent bounded JSON-RPC request dispatcher.
-- `crates/host/tests/windows_named_pipe.rs`: Windows-only subprocess + RPC tests with herdr-core deliberately absent.
-- `.github/workflows/rust-spike.yml`: Windows, macOS and Ubuntu Rust/test/Clippy matrix.
-- `.github/workflows/desktop-cross-platform.yml`: native GPUI checks across 3 OSes.
+- `crates/host-client/src/windows_pipe.rs`: Win32 token SID lookup, protected
+  pipe creation, overlapped `PipeStream` with per-operation read/write deadlines
+  and `CancelIoEx`, server/client SID verification, client connection.
+- `crates/host-client/src/lib.rs`: Windows and Unix `HostClient` bindings with
+  bounded request/reply framing and transport deadlines.
+- `crates/host/src/transport.rs`: shared bounded JSON-RPC connection handler,
+  concurrency/request quotas, Unix and Windows serve/request routes.
+- `crates/host/src/local_fs.rs`: Unix directory/socket permission verification,
+  lifecycle `flock`, stale-socket probe/removal.
+- `crates/host/src/peer.rs`: Linux/Android `SO_PEERCRED` and macOS/BSD
+  `getpeereid` same-user checks.
+- `crates/host/src/lifecycle.rs` + `crates/host/service/*`: explicit
+  install/uninstall/restart/status/cleanup and service templates.
+- `crates/host/tests/windows_named_pipe.rs`: Windows-only subprocess + RPC,
+  two-client and second-Host tests; deadline/SID unit tests live in
+  `windows_pipe.rs`.
+- `crates/host/tests/ipc_hardening.rs`: Unix framing, size, auth, quota,
+  connection-cap, path-permission and stale/live-socket tests.
+- `.github/workflows/rust-spike.yml`: Windows, macOS and Ubuntu matrix.
 
 ## Security invariants
 
-1. Pipe name is derived from the process token user SID: `\\.\pipe\ukk-agent-host-S-1-...`; **not** from an unsafe environment override. The name is not treated as an authentication credential.
-2. The server provides an explicit SDDL DACL: protected, only current user's SID + SYSTEM have full access. It refuses null/missing security descriptors. **Do not fall back to the Win32 default pipe ACL.**
-3. `PIPE_REJECT_REMOTE_CLIENTS` prohibits remote machines from connecting to the local Named Pipe.
-4. `FILE_FLAG_FIRST_PIPE_INSTANCE` is required for the first server pipe, reducing accidental pipe name collision/hijack.
-5. Client opens the Pipe with Windows `SECURITY_IDENTIFICATION` QoS rather than full impersonation rights.
-6. Every incoming line is capped at 64 KiB; outgoing RPC responses on the client are capped at 4 MiB. Only read-only methods are dispatched.
-7. The Host must run as the **interactive user**, not as LocalSystem or an elevated global Windows service. A higher-privilege service would require a new, independently audited boundary.
-8. Every handle and allocated descriptor is closed/freed through RAII, including error paths.
+1. Pipe name is derived from the process token user SID:
+   `\\.\pipe\ukk-agent-host-S-1-...`; **not** an environment override. The name
+   is namespacing, not authentication.
+2. The server supplies an explicit protected SDDL DACL: only the current user's
+   SID and SYSTEM have full access. It refuses null/missing security
+   descriptors. **No Win32 default pipe ACL fallback.**
+3. `PIPE_REJECT_REMOTE_CLIENTS` prohibits remote machines.
+4. `FILE_FLAG_FIRST_PIPE_INSTANCE` is required for the first server instance,
+   and it is created **before** the mutation capability is rotated or the
+   broker starts. A second Host cannot take over a live endpoint, invalidate
+   the live Host's token, or start competing broker work.
+5. Client opens with `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION`, never
+   full impersonation.
+6. **Server verifies the client process token SID** and **client verifies the
+   server process token SID**; both compare against the current user. Foreign
+   peers are refused in both directions, even if the DACL were permissive.
+7. Every read/write is an overlapped `ReadFile`/`WriteFile` with a bounded
+   timeout. On timeout the operation is cancelled with `CancelIoEx` and reaped
+   with `GetOverlappedResult`; no sync pipe call can block indefinitely. Accept
+   uses overlapped `ConnectNamedPipe` for the same reason.
+8. Quotas and frames are explicit: 32 concurrent clients, 256 requests per
+   connection, 64 KiB request line, 4 MiB reply, 60s idle read deadline, 10s
+   write deadline. Excess connections receive a bounded JSON-RPC error
+   (`-32029`) and are closed before any request is read.
+9. The Host must run as the **interactive user**, not LocalSystem or an elevated
+   global service. A higher-privilege service would require a new,
+   independently audited boundary.
+10. Every handle and allocated descriptor is closed/freed through RAII,
+    including error paths.
+
+### Unix equivalents
+
+- Default socket directory `~/.ukk/run` is forced to 0700; any `UKK_SOCKET`
+  directory must be a real directory owned by the Host uid with no group/other
+  permission bits. Symlinks and foreign files are refused.
+- Socket is 0600; type, uid and mode are verified after bind.
+- Peer uid must equal the Host effective uid (`SO_PEERCRED` on Linux/Android,
+  `getpeereid` on macOS/BSD); unsupported platforms fail closed.
+- Stale-socket recovery runs under an exclusive `flock`: a successful connect
+  probe means a live Host and the socket is never unlinked. Only
+  `ECONNREFUSED` counts as stale; ambiguous errors abort. Removal requires the
+  path to still be a Host-owned 0600 socket. `ukk-host cleanup` validates the
+  directory ownership/mode first and performs the same checks explicitly.
+- Read/write timeouts and quotas match the Windows limits.
 
 ### Threats not yet addressed for production
 
-- The Windows client path has a finite busy-connect retry (3 seconds), but synchronous Pipe **reads do not yet have enforceable deadlines/cancellation**. The Host's `host.wait` is capped at 10s, but a compromised/malfunctioning endpoint could still block a client thread.
-- No per-app Windows code-signature identity validation or cross-integrity-level policy yet. Same-user processes share access in the current read-only model.
-- Multiple local clients can connect; per-client quotas, bounded worker concurrency and robust handle cancellation are not yet implemented.
-- Named Pipe ACL has not yet been tested using a *different user account*.
-- The first-instance flag is not a substitute for comprehensive peer validation. It protects Host startup but not a client that connects before the legitimate Host begins listening.
-- Agent mutation and screen control must not be enabled on this interface until the above risk review and explicit per-device/app permissions exist.
+- **Different-user denial has not been executed in CI.** Windows DACL + SID
+  code and Unix mode + peer-uid code are source-committed and unit/integration
+  tested within one user; cross-account denial remains NOT VERIFIED. Runbook:
+  [HOST_LIFECYCLE.md#different-user-denial-not-verified--runbook](HOST_LIFECYCLE.md#different-user-denial-not-verified--runbook).
+- A malicious process running as the **same user** shares the token identity;
+  there is no Windows executable-signature identity or cross-integrity-level
+  policy yet. Same-user code is inside the current trust domain.
+- The Windows mutation token file relies on the profile ACL (no explicit DACL
+  hardening yet); Unix uses 0600 inside the 0700 run directory.
+- The DACL includes SYSTEM. The SID check rejects SYSTEM *clients* of a
+  user-owned Host, but the Host itself must never run as SYSTEM.
+- `install`/`uninstall`/`restart` have not been run against real service
+  managers in this change; only template/source tests exist.
+- Windows CI ran the Windows-only tests successfully at `a40e3a3`, but this is
+  not real-device evidence and does not prove cross-user denial.
+- Agent mutation and screen control must not be enabled on this interface until
+  the above risk review and explicit per-device/app permissions exist.
+
+## Lifecycle commands
+
+```text
+ukk-host install      # explicit; never auto-installed by `serve`
+ukk-host uninstall    # removes the user service; herdr-core Agents keep running
+ukk-host restart      # restarts the Host endpoint only
+ukk-host status       # service + endpoint + permissions + stale diagnosis
+ukk-host cleanup      # Unix stale-socket recovery, only after no live Host
+```
+
+Artifact locations and restart semantics are documented in
+[HOST_LIFECYCLE.md](HOST_LIFECYCLE.md). `serve` never writes a plist/unit/task.
 
 ## Build and run on Windows
 
-Install a Rust MSVC toolchain and a working `hc.exe` from herdr-core. From a fresh ukk checkout in PowerShell:
+Install a Rust MSVC toolchain and a working `hc.exe` from herdr-core. From a
+fresh ukk checkout in PowerShell:
 
 ```powershell
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 
-# In terminal 1:
+# Explicit current-user service (optional):
+cargo run -p ukk-host -- install
+cargo run -p ukk-host -- status
+
+# Or run in the foreground in terminal 1:
 cargo run -p ukk-host -- serve
 
 # In terminal 2:
@@ -65,21 +153,41 @@ cargo run -p ukk-host -- request host.snapshot
 cargo run --manifest-path apps/desktop/Cargo.toml
 ```
 
-The Host background broker reconnects to `hc connect`; the Desktop subscribes through `host.wait`. No custom `UKK_SOCKET` is used on Windows. For macOS/Linux, `UKK_SOCKET` retains its Unix-socket override behavior.
+The Host background broker reconnects to `hc connect`; the Desktop subscribes
+through `host.wait`. No custom `UKK_SOCKET` is used on Windows. For macOS/Linux,
+`UKK_SOCKET` remains an explicit developer override and its directory is still
+required to be user-private.
 
-If you run the tests without hc, `host.ping` should still succeed, and the broker snapshot will show `connected: false`. That is expected for a missing runtime, not evidence of live Agent integration.
+If you run the tests without hc, `host.ping` should still succeed, and the
+broker snapshot will show `connected: false`. That is expected for a missing
+runtime, not evidence of live Agent integration.
 
 ## Verification gates
 
 - [x] Windows SID/DACL Named Pipe server and read-only client source committed.
-- [x] Windows-only Host subprocess + Named Pipe RPC test source committed.
-- [x] macOS/Linux shared JSON-RPC request dispatcher preserved.
-- [ ] Windows CI builds and runs `cargo test --workspace` and Clippy without errors.
+- [x] Server/client SID verification and overlapped deadline/cancellation
+      source committed.
+- [x] Unix 0700/0600 verification, peer-uid checks, stale-socket lifecycle
+      recovery and quotas committed.
+- [x] Explicit install/uninstall/restart/status/cleanup commands and templates
+      committed; templates covered by unit tests on every OS.
+- [x] macOS local evidence: framing/auth/quota/connection limits, permission
+      rejection, SIGTERM → stale socket → restart, live-socket refusal, client
+      deadline and reply cap (`cargo test -p ukk-host -p ukk-host-client`).
+- [x] macOS real herdr-core 0.1.18 connectivity: Host broker reports
+      `connected: true`, `terminal.list` succeeds, stale-socket recovery and
+      cleanup verified; no Agent was signalled.
+- [x] Windows CI builds and runs `cargo test --workspace` and Clippy
+      (including `windows_named_pipe.rs`, second-Host token preservation and
+      the overlapped deadline unit tests): run `42392340865` at `9b28bce`.
+- [x] Linux CI runs the Unix hardening tests: run `42392340865` at `9b28bce`.
+- [x] Real herdr-core acceptance (`doctor`/`list`/`watch`, Agent survival) on
+      Ubuntu/macOS/Windows: run `42392340910` at `9b28bce`.
+- [ ] Real `install`/`uninstall`/`restart` on macOS, Linux and Windows.
+- [ ] Different-user access denied on all three platforms.
 - [ ] GPUI UI builds and launches on Windows (not just source present).
-- [ ] Real herdr-core on Windows: two live terminals, correct status and child hierarchy.
-- [ ] Different-user access denied, spoofed pipe endpoint, permission/token changes, restart and multi-client concurrency tests.
-- [ ] Enforceable timeouts/cancellation and resource limits for malicious or dead clients.
-- [ ] Verify macOS/Linux regression tests remain green.
-- [ ] Document Windows user process autostart and signing/installer.
+- [ ] Real herdr-core on Windows: child hierarchy, `serve` broker
+      `connected: true`, and Host service restart leaving Agents alive.
 
-See [platform support](PLATFORM_SUPPORT.md), [live event stream](LIVE_EVENTS.md), and [security](SECURITY.md).
+See [Host lifecycle](HOST_LIFECYCLE.md), [platform support](PLATFORM_SUPPORT.md),
+[live event stream](LIVE_EVENTS.md), and [security](SECURITY.md).

@@ -2,7 +2,12 @@
 //! mutations and developer CLI are separate modules.
 mod broker;
 mod cli;
+mod lifecycle;
 mod local_auth;
+#[cfg(unix)]
+mod local_fs;
+#[cfg(unix)]
+mod peer;
 mod rpc;
 mod transport;
 mod workspace_rpc;
@@ -29,8 +34,6 @@ use transport::{request, serve};
 use transport::{request_windows, serve_windows};
 use ukk_domain::{PaneContent, SplitAxis};
 use ukk_hc_client::HcClient;
-#[cfg(windows)]
-use ukk_host_client::windows_pipe;
 use ukk_store::Store;
 
 type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
