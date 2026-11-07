@@ -125,7 +125,11 @@ impl Workspace {
                     "ratio":ratio,"expected_revision":revision
                 }),
             ),
-            PaneAction::TabAdd { pane_id, title, content } => (
+            PaneAction::TabAdd {
+                pane_id,
+                title,
+                content,
+            } => (
                 "workspace.tab.add",
                 json!({
                     "session_id":session_id,"pane_id":pane_id,
@@ -139,7 +143,11 @@ impl Workspace {
                     "tab_id":tab_id,"expected_revision":revision
                 }),
             ),
-            PaneAction::TabReorder { group_id, tab_id, direction } => (
+            PaneAction::TabReorder {
+                group_id,
+                tab_id,
+                direction,
+            } => (
                 "workspace.tab.reorder",
                 json!({
                     "session_id":session_id,"group_id":group_id,
