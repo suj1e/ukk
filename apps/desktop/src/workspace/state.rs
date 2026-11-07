@@ -122,6 +122,14 @@ impl Workspace {
                 })
                 .map(|session| session.id.clone());
         }
+        // Shared layout updates may remove groups or individual tabs.
+        // Keep only local focus entries that still exist in the new tree.
+        self.tab_focus.retain(|(session_id, group_id), tab_id| {
+            domain.layouts.iter()
+                .find(|layout| layout.session_id == *session_id)
+                .and_then(|layout| tabs::find_tab_group(&layout.root, group_id))
+                .is_some_and(|entries| entries.iter().any(|tab| tab.id == *tab_id))
+        });
         self.domain = domain;
     }
 
