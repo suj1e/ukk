@@ -103,3 +103,61 @@ fn windows_host_pipe_allows_read_only_local_snapshot() {
     drop(guard);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn windows_second_host_is_rejected_while_first_is_live() {
+    let root = std::env::temp_dir().join(format!("ukk-win-live-{}", new_id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let db = root.join("workspace.sqlite3");
+    drop(Store::open(&db).unwrap());
+    let host_environment = |command: &mut Command| {
+        command
+            .arg("serve")
+            .env("UKK_HC_BIN", "__ukk_hc_not_installed_for_win_test__")
+            .env("UKK_DB_PATH", &db);
+    };
+    let mut first = Command::new(env!("CARGO_BIN_EXE_ukk-host"));
+    host_environment(&mut first);
+    let first = first
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("start first Windows Host");
+    let mut guard = ChildGuard(first);
+    let client = HostClient::from_env();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if let Some(code) = guard.0.try_wait().expect("check first Host") {
+            panic!("first Windows Host exited early: {code}");
+        }
+        if client.ping().unwrap_or(false) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first Windows Host did not start"
+        );
+        thread::sleep(Duration::from_millis(80));
+    }
+
+    // FILE_FLAG_FIRST_PIPE_INSTANCE must make a second Host fail, never
+    // silently share or replace the live endpoint.
+    let mut second = Command::new(env!("CARGO_BIN_EXE_ukk-host"));
+    host_environment(&mut second);
+    let second = second
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start second Windows Host");
+    let output = second.wait_with_output().expect("wait for second Host");
+    assert!(
+        !output.status.success(),
+        "a second Windows Host must be rejected while the first is live"
+    );
+    assert!(
+        client.ping().unwrap_or(false),
+        "the live Host pipe must survive the rejected second Host"
+    );
+    drop(guard);
+    std::fs::remove_dir_all(root).unwrap();
+}
