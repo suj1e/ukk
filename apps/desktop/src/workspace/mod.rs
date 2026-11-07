@@ -2,9 +2,9 @@
 //! herdr-core processes and SQLite data are owned outside this window.
 
 use crate::theme::*;
-use std::collections::HashMap;
 use gpui::{div, prelude::*, px, rgb, Context, Render, Window};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::time::Duration;
 use ukk_domain::{new_id, DomainSnapshot, PaneContent, PaneNode, PaneTab, Session, SplitAxis};
 use ukk_host_client::{HostClient, HostSnapshot, LiveHostState, Terminal, WorkspaceUpdate};
