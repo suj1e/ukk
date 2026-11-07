@@ -147,6 +147,12 @@ pub fn create_server_pipe(name: &str, first_instance: bool) -> io::Result<File> 
     {
         return Err(io::Error::last_os_error());
     }
+    if descriptor.is_null() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Windows returned a null security descriptor",
+        ));
+    }
     let descriptor = LocalDescriptor(descriptor);
     let attrs = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
