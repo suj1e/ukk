@@ -267,7 +267,7 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 (BSD-3-Clause),
 * low-order/non-contributory X25519 rejection for both the pinned Host key and
   the device key predicate;
 * approval after challenge expiry, typed `confirm` gate, pending-until-ack
-  commit, tampered/oversized ack, expired pending approval;
+  commit, tampered/oversized/wrong-device ack, expired pending approval;
 * tampered and oversized handshake frames and oversized success frames;
 * approval scope-escalation denial, `device.manage` rejection, grant TTL
   bounds and client-side grant expiry;
