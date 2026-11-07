@@ -127,6 +127,100 @@ impl PaneNode {
         Ok(updated)
     }
 
+    /// Move one view from a tab group into another Pane in a single
+    /// immutable layout edit. The moved tab's ID and AgentRun reference are
+    /// retained, so this operation never starts/stops an Agent or PTY.
+    ///
+    /// The source group must retain a visible Pane: moving one tab out of a
+    /// two-tab group collapses the source to its remaining legacy Leaf. A
+    /// single-tab source is rejected rather than leaving an empty Pane.
+    pub fn move_tab(
+        &self,
+        source_group_id: &str,
+        tab_id: &str,
+        destination_pane_id: &str,
+    ) -> Result<Self, LayoutError> {
+        if source_group_id == destination_pane_id {
+            return Err(LayoutError::SameTabGroup);
+        }
+        self.validate()?;
+        let mut moved: Option<PaneTab> = None;
+        let without_source = rewrite_target(self, source_group_id, &|node| {
+            let PaneNode::Tabs { id, tabs } = node else {
+                return Err(LayoutError::NotTabGroup);
+            };
+            if tabs.len() <= 1 {
+                return Err(LayoutError::LastPane);
+            }
+            let index = tabs
+                .iter()
+                .position(|tab| tab.id == tab_id)
+                .ok_or(LayoutError::TabNotFound)?;
+            let mut remaining = tabs.clone();
+            // Write the moved entry into a RefCell-free local lookup after
+            // reconstructing the immutable source. The source is never
+            // persisted independently of the destination.
+            remaining.remove(index);
+            if remaining.len() == 1 {
+                let only = remaining.remove(0);
+                Ok(PaneNode::Leaf {
+                    id: only.id,
+                    content: only.content,
+                })
+            } else {
+                Ok(PaneNode::Tabs {
+                    id: id.clone(),
+                    tabs: remaining,
+                })
+            }
+        })?
+        .ok_or(LayoutError::PaneNotFound)?;
+
+        // Extract from original source (rather than storing mutable state
+        // in the edit closure). This makes operation atomic and retry-safe.
+        fn find_group<'a>(node: &'a PaneNode, id: &str) -> Option<&'a [PaneTab]> {
+            match node {
+                PaneNode::Tabs { id: group_id, tabs } if group_id == id => Some(tabs),
+                PaneNode::Split { first, second, .. } => {
+                    find_group(first, id).or_else(|| find_group(second, id))
+                }
+                _ => None,
+            }
+        }
+        if let Some(group) = find_group(self, source_group_id) {
+            moved = group.iter().find(|tab| tab.id == tab_id).cloned();
+        }
+        let moved = moved.ok_or(LayoutError::TabNotFound)?;
+
+        let updated = rewrite_target(&without_source, destination_pane_id, &|node| {
+            match node {
+                PaneNode::Leaf { id, content } => Ok(PaneNode::Tabs {
+                    id: new_id(),
+                    tabs: vec![
+                        PaneTab {
+                            id: id.clone(),
+                            title: default_title(content).to_owned(),
+                            content: content.clone(),
+                        },
+                        moved.clone(),
+                    ],
+                }),
+                PaneNode::Tabs { id, tabs } => {
+                    let mut tabs = tabs.clone();
+                    tabs.push(moved.clone());
+                    Ok(PaneNode::Tabs {
+                        id: id.clone(),
+                        tabs,
+                    })
+                }
+                PaneNode::Split { .. } => Err(LayoutError::NotTabGroup),
+            }
+        })?
+        .ok_or(LayoutError::PaneNotFound)?;
+        updated.validate()?;
+        Ok(updated)
+    }
+
     /// A single-step ordering change, persisted with the Session layout CAS.
     /// Active tab is deliberately not part of this transaction.
     pub fn reorder_tab(
