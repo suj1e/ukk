@@ -52,9 +52,7 @@ impl Broker {
         let broker = Arc::clone(self);
         thread::spawn(move || loop {
             let client = HcClient::default();
-            let result = client.watch(|message| {
-                broker.apply(&message).map_err(HcError::Protocol)
-            });
+            let result = client.watch(|message| broker.apply(&message).map_err(HcError::Protocol));
             broker.mark_offline(
                 result
                     .err()
@@ -155,9 +153,15 @@ fn replace_snapshot(state: &mut State, data: &Value) -> Result<(), String> {
 }
 
 fn apply_notification(state: &mut State, notification: &Value) -> Result<bool, String> {
-    let method = notification.get("method").and_then(Value::as_str).ok_or("missing method")?;
+    let method = notification
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or("missing method")?;
     let params = notification.get("params").ok_or("missing params")?;
-    let seq = params.get("seq").and_then(Value::as_u64).ok_or("missing seq")?;
+    let seq = params
+        .get("seq")
+        .and_then(Value::as_u64)
+        .ok_or("missing seq")?;
     match method {
         "missed" => {
             // herdr-core provides a fresh authoritative snapshot on missed.
@@ -178,15 +182,24 @@ fn apply_notification(state: &mut State, notification: &Value) -> Result<bool, S
                 return Ok(false); // exact duplicate on the same stream
             }
             if seq != last.saturating_add(1) {
-                return Err(format!("hc sequence mismatch: expected {}, received {seq}", last.saturating_add(1)));
+                return Err(format!(
+                    "hc sequence mismatch: expected {}, received {seq}",
+                    last.saturating_add(1)
+                ));
             }
-            let event_kind = params.get("type").and_then(Value::as_str).ok_or("missing event type")?;
+            let event_kind = params
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or("missing event type")?;
             if event_kind == "doc" {
                 // Document events do not necessarily identify a terminal.
                 state.hc_seq = Some(seq);
                 return Ok(false);
             }
-            let address = params.get("terminal").and_then(Value::as_str).ok_or("missing terminal address")?;
+            let address = params
+                .get("terminal")
+                .and_then(Value::as_str)
+                .ok_or("missing terminal address")?;
             let data = params.get("data").unwrap_or(&Value::Null);
             let changed = apply_terminal_delta(&mut state.terminals, event_kind, address, data)?;
             state.hc_seq = Some(seq);
@@ -196,14 +209,21 @@ fn apply_notification(state: &mut State, notification: &Value) -> Result<bool, S
     }
 }
 
-fn apply_terminal_delta(terminals: &mut Vec<Value>, kind: &str, address: &str, data: &Value) -> Result<bool, String> {
+fn apply_terminal_delta(
+    terminals: &mut Vec<Value>,
+    kind: &str,
+    address: &str,
+    data: &Value,
+) -> Result<bool, String> {
     let existing = terminals
         .iter()
         .position(|item| item.get("address").and_then(Value::as_str) == Some(address));
     match kind {
         "created" | "restarted" => {
             let mut record = data.clone();
-            let object = record.as_object_mut().ok_or("created/restarted data must be object")?;
+            let object = record
+                .as_object_mut()
+                .ok_or("created/restarted data must be object")?;
             object.insert("address".into(), Value::String(address.to_owned()));
             if let Some(index) = existing {
                 terminals[index] = record;
@@ -221,17 +241,29 @@ fn apply_terminal_delta(terminals: &mut Vec<Value>, kind: &str, address: &str, d
             }
         }
         "doc" => Ok(false), // doc state belongs to a different ukk model.
-        "lost" | "finished" | "keep" | "status" | "turn" | "title" | "labels" | "size" | "foreground" => {
-            let index = existing.ok_or_else(|| format!("hc {kind} event for unknown terminal {address}"))?;
-            let record = terminals[index].as_object_mut().ok_or("terminal record is not object")?;
+        "lost" | "finished" | "keep" | "status" | "turn" | "title" | "labels" | "size"
+        | "foreground" => {
+            let index = existing
+                .ok_or_else(|| format!("hc {kind} event for unknown terminal {address}"))?;
+            let record = terminals[index]
+                .as_object_mut()
+                .ok_or("terminal record is not object")?;
             match kind {
                 "lost" => {
-                    patch_keys(record, data, &["reason", "exit_code", "signal", "finished_ms"])?;
+                    patch_keys(
+                        record,
+                        data,
+                        &["reason", "exit_code", "signal", "finished_ms"],
+                    )?;
                     record.insert("pid".into(), Value::Null);
                     record.insert("foreground".into(), Value::Null);
                 }
                 "finished" => {
-                    patch_keys(record, data, &["reason", "exit_code", "signal", "finished_ms"])?;
+                    patch_keys(
+                        record,
+                        data,
+                        &["reason", "exit_code", "signal", "finished_ms"],
+                    )?;
                     record.insert("state".into(), json!("finished"));
                     record.insert("foreground".into(), Value::Null);
                     record.insert("status".into(), Value::Null);
@@ -242,7 +274,9 @@ fn apply_terminal_delta(terminals: &mut Vec<Value>, kind: &str, address: &str, d
                 "title" => patch_keys(record, data, &["title"])?,
                 "labels" => patch_keys(record, data, &["labels"])?,
                 "size" => patch_keys(record, data, &["cols", "rows"])?,
-                "foreground" => { record.insert("foreground".into(), data.clone()); },
+                "foreground" => {
+                    record.insert("foreground".into(), data.clone());
+                }
                 _ => unreachable!(),
             }
             Ok(true)
@@ -251,7 +285,11 @@ fn apply_terminal_delta(terminals: &mut Vec<Value>, kind: &str, address: &str, d
     }
 }
 
-fn patch_keys(target: &mut Map<String, Value>, source: &Value, keys: &[&str]) -> Result<(), String> {
+fn patch_keys(
+    target: &mut Map<String, Value>,
+    source: &Value,
+    keys: &[&str],
+) -> Result<(), String> {
     let object = source.as_object().ok_or("hc event data must be object")?;
     for key in keys {
         if let Some(value) = object.get(*key) {
@@ -281,7 +319,14 @@ mod tests {
     fn keeps_agent_state_from_source_events() {
         let broker = Broker::new();
         broker.apply(&snapshot(5)).unwrap();
-        broker.apply(&event(6, "status", "t3", json!({"status":{"state":"blocked"},"records":{},"reported":true}))).unwrap();
+        broker
+            .apply(&event(
+                6,
+                "status",
+                "t3",
+                json!({"status":{"state":"blocked"},"records":{},"reported":true}),
+            ))
+            .unwrap();
         let state = broker.snapshot();
         assert_eq!(state["terminals"][0]["status"]["state"], "blocked");
         assert_eq!(state["revision"], 2);
@@ -293,8 +338,15 @@ mod tests {
     fn creates_and_removes_child_agent_dynamically() {
         let broker = Broker::new();
         broker.apply(&snapshot(1)).unwrap();
-        broker.apply(&event(2, "created", "t4", json!({"address":"t4","parent":"t3","state":"live",
-            "cwd":"/repo","argv":["claude"]}))).unwrap();
+        broker
+            .apply(&event(
+                2,
+                "created",
+                "t4",
+                json!({"address":"t4","parent":"t3","state":"live",
+            "cwd":"/repo","argv":["claude"]}),
+            ))
+            .unwrap();
         assert_eq!(broker.snapshot()["terminals"][1]["parent"], "t3");
         broker.apply(&event(3, "removed", "t4", json!({}))).unwrap();
         assert_eq!(broker.snapshot()["terminals"].as_array().unwrap().len(), 1);
@@ -314,7 +366,9 @@ mod tests {
     fn gap_requires_new_subscription() {
         let broker = Broker::new();
         broker.apply(&snapshot(10)).unwrap();
-        let error = broker.apply(&event(12, "removed", "t3", json!({}))).unwrap_err();
+        let error = broker
+            .apply(&event(12, "removed", "t3", json!({})))
+            .unwrap_err();
         assert!(error.contains("sequence mismatch"));
         assert_eq!(broker.snapshot()["terminals"].as_array().unwrap().len(), 1);
         assert_eq!(broker.snapshot()["hc_seq"], 10);
@@ -362,7 +416,9 @@ mod tests {
     fn heartbeat_does_not_increment_revision() {
         let broker = Broker::new();
         broker.apply(&snapshot(5)).unwrap();
-        broker.apply(&json!({"kind":"notification","data":{"method":"heartbeat","params":{"seq":5}}})).unwrap();
+        broker
+            .apply(&json!({"kind":"notification","data":{"method":"heartbeat","params":{"seq":5}}}))
+            .unwrap();
         assert_eq!(broker.snapshot()["revision"], 1);
     }
 
@@ -380,7 +436,9 @@ mod tests {
     fn failed_event_does_not_falsely_publish_revision() {
         let broker = Broker::new();
         broker.apply(&snapshot(2)).unwrap();
-        assert!(broker.apply(&event(3, "unsupported", "t3", json!({}))).is_err());
+        assert!(broker
+            .apply(&event(3, "unsupported", "t3", json!({})))
+            .is_err());
         assert_eq!(broker.snapshot()["revision"], 1);
     }
 }
