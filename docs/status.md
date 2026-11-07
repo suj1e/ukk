@@ -1,6 +1,6 @@
 # ukk — Implementation status
 
-> **Snapshot:** 2026-11-08, approximately 03:05 UTC. Baseline is `main` at `8102761` (Q0, H1, D2, R2, P1, I1, S1, D3, S2 and capture/packaging slices merged; R1 PRs #25/#27 open). This is a source/CI inventory, **not** a claim of on-device acceptance. Refresh this document after material PRs land.
+> **Snapshot:** 2026-11-08, approximately 03:30 UTC. Baseline is `main` at `feb4edc` (all current code PRs merged: Q0, H1, D2, R2, P1, I1, S1, D3, S2, R1, packaging and capture slices). This is a source/CI inventory, **not** a claim of on-device acceptance. Refresh this document after material PRs land.
 >
 > **中文速览：** GPUI 多窗口/持久化布局已有基础；Agent 实际交互、真机验收、插件、远程配对、SwiftUI iOS 和会话内悬浮远控尚未完成。见 [可认领任务与依赖](roadmap.md)。
 
@@ -19,7 +19,8 @@ Canonical constraints: [AGENTS.md](../AGENTS.md), [Product](PRODUCT.md), [Archit
 
 | Area | Source on main | Validation boundary |
 | --- | --- | --- |
-| herdr-core adapter | `crates/hc-client` JSON-RPC bridge; terminal list and `events.subscribe` parsing | Mock transport tests deterministic on three OSes; real `hc 0.1.18` `doctor`/`list`/`watch` verified on macOS and in three-OS CI. Launch/attach/send/interrupt lifecycles remain outstanding (R1) |
+| herdr-core adapter | `crates/hc-client` typed v0.1.18 client: plain probes plus framed attach/backpressure, bounded handshake/write/send idempotency — [PR #25](https://github.com/suj1e/ukk/pull/25) | Mock/three-OS CI green; real typed macOS tests passed launch/attach/detach/reconnect/interrupt/stop/remove. Windows/Linux typed real-daemon runs **NOT VERIFIED** |
+| Host Agent runtime | New `crates/host/src/{runtime,runtime_api,runtime_auth}.rs`: typed observe/send/interrupt/stop/detach/archive, separate default-off agent-control capability, preflight auth, atomic idempotency, audit — [PR #27](https://github.com/suj1e/ukk/pull/27) | Three-OS CI green. Real E2E on macOS: observe, unauthorized denial (-32043), send (`echo` observed), local detach (0 calls), stop killed only the test terminal, audit contained no token. No Desktop wiring or agent_run_id→store resolution |
 | Host lifecycle / IPC hardening | `crates/host/src/{lifecycle,local_fs,peer,transport}.rs`, launchd/systemd/Scheduled Task templates, overlapped Windows pipe I/O, verified stale-socket recovery — [PR #16](https://github.com/suj1e/ukk/pull/16) | Root, Desktop and real-hc CI green on macOS/Ubuntu/Windows; macOS SIGTERM→stale→restart recovery verified with a live hc terminal. Real service install/uninstall and different-user denial remain **NOT VERIFIED** (runbook in `docs/HOST_LIFECYCLE.md`) |
 | Desktop keyboard / focus | `keymap.rs`, `navigation.rs`, `pane_focus.rs`, `focus_store.rs`; local per-device focus, CAS conflict UX, a11y roles — [PR #17](https://github.com/suj1e/ukk/pull/17) | Desktop CI green on three OSes with 39 unit tests; real window/screen-reader acceptance **NOT VERIFIED** |
 | Structured Agent adapters | New `crates/agent-adapters` v1 contract, Codex app-server v2 and Claude stream-json fixtures, merge/replay/redaction — [PR #18](https://github.com/suj1e/ukk/pull/18) | Fixture and merge tests green on three OSes; no live provider run or R1 wiring |
@@ -54,9 +55,10 @@ The Host has a **narrow local capability-protected mutation allowlist** for Sess
 - **Q1 slice (merged as `7461a39`, [PR #29](https://github.com/suj1e/ukk/pull/29)):** unsigned release artifacts built on macOS/Windows/Linux, deterministic archives with SHA-256 manifests and `--version` build identity. CI artifacts downloaded; the macOS archive verified and both binaries ran with the embedded commit. No signing, notarization, installer or updater.
 - **S2 (merged as `8102761`, [PR #28](https://github.com/suj1e/ukk/pull/28)):** QR invite v1, Noise pairing with typed human confirmation, scoped grants, revocation/rotation and ack-completed pairing. Security review found no blocker; confirmation typing, low-order X25519 rejection, frame bounds and ack completion were fixed before merge. No relay networking/OS key store; docs gate any WAN listener on proof-of-possession.
 - **M1 spike (merged as `b2292d7`, [PR #31](https://github.com/suj1e/ukk/pull/31)):** schema-validated `screen.view` plugin manifest plus a real macOS ScreenCaptureKit single-frame helper with bounded output paths. Control, audio, media transport, iOS overlay and Windows/Linux adapters are explicitly absent; real capture is **NOT VERIFIED** without Screen Recording permission.
-- **Open:** R1 [hc-client #25](https://github.com/suj1e/ukk/pull/25) and stacked [Host runtime #27](https://github.com/suj1e/ukk/pull/27) (deep review found four hc-client and four Host-runtime majors; fixes in progress). No other code PR is open.
+- **R1 (merged as `ea56e63` + `feb4edc`, [PR #25](https://github.com/suj1e/ukk/pull/25) / [PR #27](https://github.com/suj1e/ukk/pull/27)):** typed hc-client with bounded framed attach and separate default-off Host agent-control capability. Deep reviews found four hc-client and four Host-runtime majors (registration/write/hello bounds, send/idempotency races, preflight/detach); all fixed with tests. Real macOS E2E: observe, unauthorized denial, send with output verification, zero-call detach, stop, token-free audit. No Desktop wiring; Windows/Linux typed real-daemon runs **NOT VERIFIED**.
+- **Open:** no code PRs at this snapshot. Remaining work is integration/release: P1/S1 Host wiring and persistence, relay/pairing integration, full Remote Screen media/control, and Q1 signing/installers/E2E.
 - **Q0 launch smoke (merged as `b974fca`, [PR #22](https://github.com/suj1e/ukk/pull/22)):** macOS `CGWindowList` and Linux X11/`xdotool` jobs prove that the native Desktop owns a real mapped layer-0 window and that terminating it leaves `ukk-host serve` alive. This is the first automated live-window evidence; real mouse/keyboard/a11y and a Windows interactive desktop remain **NOT VERIFIED**.
-- **Still NOT VERIFIED:** real native-window interaction/accessibility on each OS, real launchd/systemd/Scheduled Task installation, different-user denial, live Codex/Claude provider runs, and real-hc launch/attach/send/interrupt (R1).
+- **Still NOT VERIFIED:** real native-window interaction/accessibility on each OS, real launchd/systemd/Scheduled Task installation, different-user denial, live Codex/Claude provider runs, Windows/Linux typed real-daemon runs, and Desktop Agent-run wiring.
 - CI builds and tests **do not by themselves demonstrate live mouse, screen-reader, service-install or iPhone use**; the new launch-smoke workflow is the first automated window-creation check.
 
 ## Open product gaps
@@ -65,7 +67,7 @@ The Host has a **narrow local capability-protected mutation allowlist** for Sess
 | --- | --- | --- |
 | P0 | Automated launch smoke landed (#22, macOS/Linux); real mouse/keyboard/screen-reader and Windows interactive-desktop acceptance remain | `Q0` |
 | P0 | Keyboard/a11y/focus landed (#17); real VoiceOver/Narrator/Orca and physical restart acceptance remain | `D2` |
-| P0 | Verify real `hc` APIs and attach stream; user-authorized launch/send/interrupt with explicit provenance and lifetimes | `R1` |
+| P0 | hc-client + Host runtime control landed (#25/#27); Desktop Agent-run wiring, agent_run_id→store binding, Windows/Linux typed real-daemon acceptance remain | `R1`, `D3` |
 | P0 | Read-only Files/Diff/Activity landed (#24); live conversation, structured turns and terminal attach/input remain R1/R2 | `R2`, `D3` |
 | P0 | Host lifecycle/IPC landed (#16); real launchd/systemd/Scheduled Task install and different-user denial remain | `H1` |
 | P1 | Plugin API/broker merged (#20); Host RPC/GPUI slot wiring, durable grants/audit and OS sandbox remain | `P1` |
@@ -91,4 +93,4 @@ The Host has a **narrow local capability-protected mutation allowlist** for Sess
 4. Source-only tasks must pass the root Rustfmt/tests/strict Clippy gate when affected. Desktop changes must pass native format, check, tests and strict Clippy on macOS/Windows/Linux. Real OS UI/system permissions require separate explicit acceptance evidence.
 5. **One integration owner** updates this status and roadmap after merges to avoid multiple agents overwriting progress. Mark `source / CI / native` independently. Update platform matrix and design docs in the feature PR when appropriate.
 
-**Next wave:** merge `R1` after review fixes, then Host/P1 wiring, protocol persistence, relay/pairing integration and the full Remote Screen media/control work. See [roadmap](roadmap.md) for precise ownership and dependencies.
+**Next wave:** `P1`/`S1` Host/GPUI transport wiring and persistence, `S2` relay + iPhone integration, `M1` control/media adapters, `D3` live conversation/terminal wiring, and `Q1` signing/installers/backup/E2E. See [roadmap](roadmap.md) for precise ownership and dependencies.
