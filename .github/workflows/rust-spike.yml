@@ -12,6 +12,10 @@ on:
       - 'crates/**'
       - '.github/workflows/rust-spike.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     strategy:
@@ -26,7 +30,9 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
       - name: Run unit and mock protocol tests
         run: cargo test --workspace
       - name: Run Clippy

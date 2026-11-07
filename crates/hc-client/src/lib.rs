@@ -58,7 +58,9 @@ impl Default for HcClient {
 
 impl HcClient {
     pub fn new(binary: impl Into<OsString>) -> Self {
-        Self { binary: binary.into() }
+        Self {
+            binary: binary.into(),
+        }
     }
 
     fn spawn(&self) -> Result<Child, HcError> {
@@ -115,21 +117,27 @@ impl HcClient {
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
             if reader.read_line(&mut line)? == 0 {
-                return Err(HcError::Protocol("hc closed before subscription snapshot".into()));
+                return Err(HcError::Protocol(
+                    "hc closed before subscription snapshot".into(),
+                ));
             }
             let snapshot = parse_reply(&line, 1)?;
             emit(json!({"kind":"snapshot","data":snapshot}))?;
             loop {
                 line.clear();
                 if reader.read_line(&mut line)? == 0 {
-                    return Err(HcError::Protocol("hc notification stream disconnected".into()));
+                    return Err(HcError::Protocol(
+                        "hc notification stream disconnected".into(),
+                    ));
                 }
                 let value: Value = serde_json::from_str(&line)?;
                 if value.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
                     return Err(HcError::Protocol("invalid JSON-RPC notification".into()));
                 }
                 if value.get("id").is_some() {
-                    return Err(HcError::Protocol("unexpected response on notification stream".into()));
+                    return Err(HcError::Protocol(
+                        "unexpected response on notification stream".into(),
+                    ));
                 }
                 if !matches!(
                     value.get("method").and_then(Value::as_str),
@@ -208,7 +216,10 @@ mod tests {
 
     #[test]
     fn rejects_non_json_rpc() {
-        assert!(matches!(parse_reply(r#"{"id":1,"result":{}}"#, 1), Err(HcError::Protocol(_))));
+        assert!(matches!(
+            parse_reply(r#"{"id":1,"result":{}}"#, 1),
+            Err(HcError::Protocol(_))
+        ));
     }
 
     #[test]

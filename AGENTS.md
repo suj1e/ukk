@@ -30,6 +30,14 @@ Read [docs/OVERVIEW.zh-CN.md](docs/OVERVIEW.zh-CN.md), [docs/ARCHITECTURE.md](do
 - Current local Host RPC `workspace.snapshot` is **read-only**. Do not add new mutation methods before local permissions and peer validation are designed.
 - Run `cargo test --workspace` including SQLite reopen, CAS conflicts and cross-Session Agent reference tests. See [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md).
 
+## Code quality is part of feature completion
+
+- Read [Engineering Standards](docs/ENGINEERING.md). Use a topic branch and PR with actual CI evidence rather than committing unverified feature stubs directly to `main`.
+- Keep `main.rs` entrypoints small; put GPUI state, actions, panes, navigation and runtime inspector in focused modules. Keep SQLite migrations, records, layouts and snapshots separate.
+- Run Rustfmt, tests and Clippy in the root workspace; format and `cargo check` the independent GPUI workspace on macOS/Windows/Linux.
+- Review any module growing beyond ~300 lines for multiple responsibilities; refactor by ownership, not arbitrary file size. Preserve API contracts and process-lifetime guarantees.
+- Distinguish **source committed** from **CI passing** and **real device verified**. Never claim the latter without matching evidence.
+
 ## Working practices
 
 - Verify upstream APIs, versions, licenses and schemas before adding dependencies.

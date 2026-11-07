@@ -3,15 +3,15 @@
 //! Real herdr-core and native macOS remain separate acceptance tests.
 #![cfg(unix)]
 
+use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use ukk_domain::new_id;
 use ukk_host_client::{HostClient, LiveHostState};
 use ukk_store::Store;
-use serde_json::json;
-use ukk_domain::new_id;
 
 struct Fixture {
     child: Child,
@@ -31,10 +31,8 @@ fn host_tracks_live_agent_spawn_and_status_through_socket() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let directory = std::env::temp_dir().join(format!(
-        "ukk-broker-e2e-{}-{unique}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("ukk-broker-e2e-{}-{unique}", std::process::id()));
     fs::create_dir(&directory).unwrap();
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
     let socket = directory.join("agent.sock");
@@ -109,7 +107,9 @@ time.sleep(3)
         }
     };
     assert_eq!(initial.snapshot.terminals[0].address, "t3");
-    let workspace = client.workspace_snapshot().expect("read persisted Session from same Host");
+    let workspace = client
+        .workspace_snapshot()
+        .expect("read persisted Session from same Host");
     assert_eq!(workspace.spaces[0].id, space.id);
     assert_eq!(workspace.sessions[0].id, session.id);
     assert_eq!(workspace.layouts[0].root.leaves().len(), 1);
@@ -121,41 +121,79 @@ time.sleep(3)
         "space_id":space.id.clone(),
         "title":"Created from Desktop"
     });
-    let created = client.local_workspace_mutation("workspace.session.create", params.clone())
+    let created = client
+        .local_workspace_mutation("workspace.session.create", params.clone())
         .expect("create a Session over authenticated Host IPC");
     let session_id = created["id"].as_str().unwrap().to_owned();
-    let repeated = client.local_workspace_mutation("workspace.session.create", params)
+    let repeated = client
+        .local_workspace_mutation("workspace.session.create", params)
         .expect("retry must be idempotent");
     assert_eq!(repeated["id"], created["id"]);
     let fresh = client.workspace_snapshot().unwrap();
     assert_eq!(fresh.sessions.len(), 2);
-    let root = fresh.layouts.iter().find(|l| l.session_id == session_id).unwrap();
+    let root = fresh
+        .layouts
+        .iter()
+        .find(|l| l.session_id == session_id)
+        .unwrap();
     let first_pane = root.root.id().to_owned();
 
-    let split = client.local_workspace_mutation("workspace.pane.split", json!({
-        "session_id":session_id, "pane_id":first_pane, "axis":"horizontal",
-        "content":{"type":"diff"}, "expected_revision":0
-    })).unwrap();
+    let split = client
+        .local_workspace_mutation(
+            "workspace.pane.split",
+            json!({
+                "session_id":session_id, "pane_id":first_pane, "axis":"horizontal",
+                "content":{"type":"diff"}, "expected_revision":0
+            }),
+        )
+        .unwrap();
     assert_eq!(split["revision"], 1);
     let split_id = split["root"]["id"].as_str().unwrap().to_owned();
 
-    let resized = client.local_workspace_mutation("workspace.pane.resize", json!({
-        "session_id":session_id,"split_id":split_id,"ratio":0.7,"expected_revision":1
-    })).unwrap();
+    let resized = client
+        .local_workspace_mutation(
+            "workspace.pane.resize",
+            json!({
+                "session_id":session_id,"split_id":split_id,"ratio":0.7,"expected_revision":1
+            }),
+        )
+        .unwrap();
     assert_eq!(resized["revision"], 2);
     let second_id = resized["root"]["second"]["id"].as_str().unwrap().to_owned();
 
-    let stale = client.local_workspace_mutation("workspace.pane.close", json!({
-        "session_id":session_id,"pane_id":second_id,"expected_revision":1
-    }));
-    assert!(stale.is_err(), "stale revision must not overwrite another view");
+    let stale = client.local_workspace_mutation(
+        "workspace.pane.close",
+        json!({
+            "session_id":session_id,"pane_id":second_id,"expected_revision":1
+        }),
+    );
+    assert!(
+        stale.is_err(),
+        "stale revision must not overwrite another view"
+    );
 
-    let closed = client.local_workspace_mutation("workspace.pane.close", json!({
-        "session_id":session_id,"pane_id":second_id,"expected_revision":2
-    })).unwrap();
+    let closed = client
+        .local_workspace_mutation(
+            "workspace.pane.close",
+            json!({
+                "session_id":session_id,"pane_id":second_id,"expected_revision":2
+            }),
+        )
+        .unwrap();
     assert_eq!(closed["revision"], 3);
-    assert_eq!(client.workspace_snapshot().unwrap().layouts.iter()
-        .find(|l| l.session_id == session_id).unwrap().root.leaves().len(), 1);
+    assert_eq!(
+        client
+            .workspace_snapshot()
+            .unwrap()
+            .layouts
+            .iter()
+            .find(|l| l.session_id == session_id)
+            .unwrap()
+            .root
+            .leaves()
+            .len(),
+        1
+    );
 
     let spawned = client
         .wait_for_change(&initial.host_epoch, initial.revision)
