@@ -1,6 +1,10 @@
 //! Database open, permissions and versioned migrations.
 use super::*;
-use std::{env, fs, path::{Path, PathBuf}, time::Duration};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// Local-only configuration. The folder is created by the Host process, not
 /// by the Desktop UI, so closing the window cannot remove persisted metadata.
@@ -16,8 +20,8 @@ pub fn default_database_path() -> Result<PathBuf> {
     }
     #[cfg(not(windows))]
     {
-        let home = env::var_os("HOME")
-            .ok_or_else(|| StoreError::Invalid("HOME is not set".into()))?;
+        let home =
+            env::var_os("HOME").ok_or_else(|| StoreError::Invalid("HOME is not set".into()))?;
         Ok(PathBuf::from(home)
             .join(".ukk")
             .join("data")
@@ -73,7 +77,9 @@ impl Store {
     }
 
     fn migrate(&mut self) -> Result<()> {
-        let version: i64 = self.conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let version: i64 = self
+            .conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version > 1 {
             return Err(StoreError::UnsupportedVersion(version));
         }
