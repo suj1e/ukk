@@ -121,7 +121,7 @@ impl Workspace {
                         div()
                             .flex_1()
                             .text_sm()
-                            .font_semibold()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(INK))
                             .child(display_name),
                     ),
@@ -168,7 +168,7 @@ impl Workspace {
             .child(
                 div()
                     .text_xs()
-                    .font_semibold()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(MUTED))
                     .mb_3()
                     .child("SPACES"),
@@ -182,12 +182,12 @@ impl Workspace {
                     .py_3()
                     .rounded_lg()
                     .bg(rgb(SURFACE))
-                    .child(div().text_color(rgb(ACCENT)).font_semibold().child("⌘"))
+                    .child(div().text_color(rgb(ACCENT)).font_weight(gpui::FontWeight::SEMIBOLD).child("⌘"))
                     .child(
                         div()
                             .flex_1()
                             .text_sm()
-                            .font_semibold()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(INK))
                             .child("Local machine"),
                     ),
@@ -196,7 +196,7 @@ impl Workspace {
                 div()
                     .mt_4()
                     .text_xs()
-                    .font_semibold()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(MUTED))
                     .child("PROJECT SPACES"),
             )
@@ -211,7 +211,7 @@ impl Workspace {
                     .child(
                         div()
                             .text_xs()
-                            .font_semibold()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(MUTED))
                             .child("SESSIONS"),
                     )
@@ -258,7 +258,7 @@ impl Workspace {
                     .child(
                         div()
                             .text_xs()
-                            .font_semibold()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(MUTED))
                             .child("AGENTS & TERMINALS"),
                     )
@@ -271,6 +271,7 @@ impl Workspace {
             )
             .child(
                 div()
+                    .id("agent-tree-scroll")
                     .flex_1()
                     .flex()
                     .flex_col()
