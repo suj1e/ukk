@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::error::Error;
 use std::fmt;
+#[cfg(unix)]
 use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
