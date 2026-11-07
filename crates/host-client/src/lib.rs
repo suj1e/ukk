@@ -2,7 +2,9 @@
 //!
 //! This bootstrap IPC is local only: Unix sockets on macOS/Linux, a private
 //! per-user Named Pipe on Windows. It is not the public remote protocol.
-//! A connection is opened for every request and is bounded by time and size.
+//! A connection is opened per request with bounded reply size. Unix sockets
+//! have a read deadline; synchronous Windows pipe I/O still needs cancellation
+//! and a hard deadline before shipping as a production endpoint.
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -360,6 +362,8 @@ impl HostClient {
     #[cfg(windows)]
     fn request_with(&self, method: &str, params: Value, _timeout: Duration) -> Result<Value, HostError> {
         // Named Pipe endpoint has an explicit same-user ACL; no TCP fallback.
+        // _timeout is not yet enforced on synchronous Win32 read; tracked in
+        // docs/WINDOWS_IPC.md. Keep RPC strictly read-only until reviewed.
         let mut stream = windows_pipe::open_client()?;
         serde_json::to_writer(
             &mut stream,
