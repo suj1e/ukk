@@ -133,6 +133,12 @@ cargo run -p ukk-host -- workspace-dump
 
 详见 [Workspace Persistence / SQLite 开发说明](docs/WORKSPACE_PERSISTENCE.md)。源码已提交，但三系统编译与实际 GPUI 运行尚未确认通过。
 
+## Workspace 自动同步（Spike 05）
+
+Host 已增加基于 SQLite v2 变更版本的 `workspace.state` / `workspace.wait` 只读接口。GPUI 会自动观察其他窗口或 CLI 对 Space、Session、Pane 布局的修改；herdr-core Agent 事件与 Workspace 元数据分别同步，互不拥有对方的生命周期。此功能在 `feat/workspace-live-sync` 开发分支中，尚待三端 CI 与真实窗口验收。
+
+详细协议与验证步骤：[Workspace Live Sync](docs/WORKSPACE_LIVE_SYNC.md)。
+
 ## Documentation
 
 | Document | Contents |
@@ -140,7 +146,7 @@ cargo run -p ukk-host -- workspace-dump
 | [中文版总览](docs/OVERVIEW.zh-CN.md) | 产品方向、中文架构图、对象关系 |
 | [Product Requirements](docs/PRODUCT.md) | 完整功能矩阵、用户场景和体验原则 |
 | [Architecture](docs/ARCHITECTURE.md) | 端到端架构、组件边界和部署 |
-| [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md) | SQLite Space/Session/AgentRun、布局版本与开发运行命令 |
+| [Workspace Live Sync](docs/WORKSPACE_LIVE_SYNC.md) | SQLite 跨进程版本和 GPUI 元数据自动同步 |\n| [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md) | SQLite Space/Session/AgentRun、布局版本与开发运行命令 |
 | [Domain Model](docs/DOMAIN_MODEL.md) | Spaces / Sessions / AgentRuns / Panes |
 | [Plugin System](docs/PLUGINS.md) | 插件生命周期、能力代理、UI 槽位 |
 | [Pairing](docs/PAIRING.md) | QR 扫码、设备授权与密钥 |
