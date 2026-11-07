@@ -215,9 +215,22 @@ fn schema_v1_upgrades_without_losing_sessions() {
         .unwrap();
     drop(original);
 
+    // Two readers opening a legacy DB simultaneously must share one
+    // successful v2 migration rather than racing CREATE TABLE/TRIGGER.
+    let parallel_path = path.clone();
+    let second = std::thread::spawn(move || {
+        let store = Store::open(&parallel_path).unwrap();
+        store.workspace_cursor().unwrap()
+    });
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.workspace_revision().unwrap(), 0);
+    let cursor = upgraded.workspace_cursor().unwrap();
+    assert_eq!(cursor.1, 0);
     assert_eq!(upgraded.snapshot().unwrap().sessions[0].id, session.id);
+    assert_eq!(second.join().unwrap(), cursor);
     drop(upgraded);
+    // Reopening should retain the same database incarnation.
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(reopened.workspace_cursor().unwrap(), cursor);
+    drop(reopened);
     fs::remove_dir_all(dir).unwrap();
 }
