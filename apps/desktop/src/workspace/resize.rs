@@ -20,14 +20,8 @@ fn drag_ratio(
     axis: SplitAxis,
 ) -> Option<f32> {
     let (offset, size) = match axis {
-        SplitAxis::Horizontal => (
-            position.x - bounds.left(),
-            bounds.right() - bounds.left(),
-        ),
-        SplitAxis::Vertical => (
-            position.y - bounds.top(),
-            bounds.bottom() - bounds.top(),
-        ),
+        SplitAxis::Horizontal => (position.x - bounds.left(), bounds.right() - bounds.left()),
+        SplitAxis::Vertical => (position.y - bounds.top(), bounds.bottom() - bounds.top()),
     };
     // The GPUI pixel ratio is dimensionless f32.
     if size <= px(0.0) {
@@ -89,9 +83,7 @@ impl Workspace {
             return;
         }
         let preview = self.split_drag_preview.take().expect("checked above");
-        if !self.mutation_busy
-            && self.selected_session.as_deref() == Some(&preview.session_id)
-        {
+        if !self.mutation_busy && self.selected_session.as_deref() == Some(&preview.session_id) {
             self.pane_action(
                 PaneAction::Resize {
                     split_id: preview.split_id,
