@@ -1,0 +1,18 @@
+{
+  "fixture_version": 1,
+  "provider": "claude_stream_json",
+  "wire_protocol": "stream-json",
+  "captured_at": "2026-11-08",
+  "capture_method": "hand-authored from documented fields; not a live capture",
+  "sources": [
+    "https://code.claude.com/docs/en/headless.md",
+    "https://code.claude.com/docs/en/agent-sdk/typescript.md",
+    "https://code.claude.com/docs/en/agent-sdk/streaming-output.md"
+  ],
+  "files": {
+    "turn.jsonl": "system init, assistant text/tool_use, user tool_result and result",
+    "partial.jsonl": "include-partial-messages stream_event deltas followed by the authoritative assistant message",
+    "progress.jsonl": "api_retry, tool_progress and permission_denied",
+    "unsupported.jsonl": "unknown top-level type, unknown system subtype and control_request"
+  }
+}

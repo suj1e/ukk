@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","uuid":"sys_progress","session_id":"sess_fixture","cwd":"/repo","model":"claude-sonnet-4-5","permissionMode":"default","tools":["Bash"],"mcp_servers":[]}
+{"type":"system","subtype":"api_retry","uuid":"retry_1","session_id":"sess_fixture","attempt":1,"max_retries":3,"retry_delay_ms":1000,"error_status":429,"error":"rate_limit"}
+{"type":"tool_progress","uuid":"tp_1","session_id":"sess_fixture","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":30,"heartbeat":true}
+{"type":"system","subtype":"permission_denied","uuid":"deny_1","session_id":"sess_fixture","tool_name":"Bash","tool_use_id":"toolu_denied","decision_reason_type":"rule","decision_reason":"denied by settings","message":"Permission to use Bash has been denied."}
