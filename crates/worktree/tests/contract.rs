@@ -390,18 +390,19 @@ fn conflicts_are_reported_separately_from_staged_changes() {
 fn project_root_scopes_status_and_diff_to_its_subdirectory() {
     let repo = TempRepo::new("scoped");
     repo.write("root.txt", "root\n");
-    repo.write("sub/inner.txt", "inner\n");
+    // A bracket directory also proves the project-root pathspec is literal.
+    repo.write("sub [x]/inner.txt", "inner\n");
     repo.commit("base");
     repo.write("root.txt", "root changed\n");
-    repo.write("sub/inner.txt", "inner changed\n");
+    repo.write("sub [x]/inner.txt", "inner changed\n");
 
-    let sub = repo.path.join("sub");
+    let sub = repo.path.join("sub [x]");
     let worktree = Worktree::open(&sub).unwrap();
     assert_eq!(worktree.project_root(), sub.as_path());
     let status = worktree.status().unwrap();
     assert_eq!(status.entries.len(), 1);
     // Paths stay repository-relative so per-file diff requests are valid.
-    assert_eq!(status.entries[0].path.display(), "sub/inner.txt");
+    assert_eq!(status.entries[0].path.display(), "sub [x]/inner.txt");
 
     let diff = worktree.diff(DiffScope::Head).unwrap();
     assert!(diff.text.contains("inner changed"));
