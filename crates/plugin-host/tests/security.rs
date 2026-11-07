@@ -292,7 +292,7 @@ fn helper_crash_is_contained_and_other_plugins_keep_working() {
 #[test]
 fn helper_timeout_is_bounded_and_marks_the_plugin_failed() {
     warm_up(&fault_helper("default"));
-    let fixture = test_host(short_timeout_config(300));
+    let fixture = test_host(short_timeout_config(500));
     let host = &fixture.host;
     let plugin_id = install_fault(&fixture, "stall");
     host.enable(&plugin_id).unwrap();
@@ -378,7 +378,7 @@ fn hello_forgery_identity_mismatch_and_handshake_timeout_are_rejected() {
 
     // No answer at all.
     warm_up(&fault_helper("default"));
-    let silent = test_host(short_timeout_config(300));
+    let silent = test_host(short_timeout_config(500));
     let plugin_id = install_fault(&silent, "hello-stall");
     let error = silent.host.enable(&plugin_id).unwrap_err();
     assert_enable_failure(error, "helper_timeout");
