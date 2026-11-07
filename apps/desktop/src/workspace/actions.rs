@@ -57,6 +57,10 @@ impl Workspace {
                             view.selected_session =
                                 value.get("id").and_then(Value::as_str).map(str::to_owned);
                             view.selected = None;
+                            view.focus_touched = true;
+                            view.local_focus
+                                .set_selected_session(view.selected_session.as_deref());
+                            view.persist_local_focus(cx);
                         }
                         if let Some(Ok(update)) = fresh {
                             view.apply_workspace_update(update, cx);

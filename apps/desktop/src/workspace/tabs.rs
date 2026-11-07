@@ -68,6 +68,9 @@ impl Workspace {
                 let tab_id = tab.id.clone();
                 let group = group_id_owned.clone();
                 let session = current_session.clone();
+                let key_session = current_session.clone();
+                let key_group = group_id_owned.clone();
+                let key_tab = tab.id.clone();
                 div()
                     .id(format!("tab-{group}-{tab_id}"))
                     .role(Role::Tab)
@@ -97,6 +100,13 @@ impl Workspace {
                         // steal focus after switching Workspace context.
                         if this.selected_session.as_deref() == Some(&session) {
                             this.focus_tab(&group, &tab_id, cx);
+                        }
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            && this.selected_session.as_deref() == Some(&key_session)
+                        {
+                            this.focus_tab(&key_group, &key_tab, cx);
                         }
                     }))
                     .on_drag(
