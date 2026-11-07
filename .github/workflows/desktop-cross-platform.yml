@@ -8,6 +8,7 @@ on:
       - 'crates/host-client/**'
       - 'crates/domain/**'
       - 'crates/store/**'
+      - 'crates/worktree/**'
       - '.github/workflows/desktop-cross-platform.yml'
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - 'crates/host-client/**'
       - 'crates/domain/**'
       - 'crates/store/**'
+      - 'crates/worktree/**'
       - '.github/workflows/desktop-cross-platform.yml'
 
 concurrency:

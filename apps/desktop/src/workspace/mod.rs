@@ -18,12 +18,16 @@ mod navigation;
 mod pane_focus;
 mod panes;
 mod render;
+mod repository;
+mod repository_load;
+mod repository_view;
 mod resize;
 mod sidebar;
 mod splits;
 mod state;
 mod tabs;
 mod toolbar;
+mod unsupported_surface;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DetailTab {
@@ -141,6 +145,8 @@ pub(crate) struct Workspace {
     workspace_epoch: String,
     workspace_revision: i64,
     workspace_sync_error: Option<String>,
+    /// Read-only Files/Diff/Activity inspection for the selected Session.
+    repository: repository::RepositorySurfaces,
 }
 
 impl Workspace {
@@ -182,6 +188,7 @@ impl Workspace {
             workspace_epoch: String::new(),
             workspace_revision: -1,
             workspace_sync_error: None,
+            repository: repository::RepositorySurfaces::default(),
         };
         view.watch_updates(cx);
         view.watch_workspace(cx);

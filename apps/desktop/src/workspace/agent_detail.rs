@@ -208,7 +208,7 @@ impl Workspace {
                     .bg(rgb(0xeef0f8))
                     .text_color(rgb(0x666b85))
                     .text_sm()
-                    .child("Coming next: persistent Sessions, structured Agent turns, Diff and multi-pane views. This prototype deliberately does not fabricate these."),
+                    .child("Agent conversation and live terminal attach are not connected yet (R1/R2). Files, Diff and Activity inspect the local working tree; this prototype deliberately does not fabricate runtime data."),
             )
     }
 
