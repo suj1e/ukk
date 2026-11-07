@@ -1,6 +1,8 @@
 //! Explicit CLI commands, not a public remote API.
 use super::runtime_auth::AgentControlAuth;
 use super::*;
+use std::path::Path;
+use ukk_store::backup::{backup_database, inspect_database, restore_database, DatabaseHealth};
 
 pub(super) fn execute() -> AppResult<()> {
     let command = env::args().nth(1).unwrap_or_else(|| "help".to_owned());
@@ -65,6 +67,66 @@ pub(super) fn execute() -> AppResult<()> {
         "workspace-dump" => {
             let snapshot = Store::open_default()?.snapshot()?;
             println!("{}", serde_json::to_string_pretty(&snapshot)?);
+            Ok(())
+        }
+        "backup" => {
+            let mut args = env::args().skip(2);
+            let destination = args.next().ok_or("backup <path> [--force]")?;
+            let mut force = false;
+            for argument in args {
+                match argument.as_str() {
+                    "--force" => force = true,
+                    other => return Err(format!("unknown backup option: {other}").into()),
+                }
+            }
+            let database = ukk_store::default_database_path()?;
+            let report = backup_database(&database, Path::new(&destination), force)?;
+            println!("Backup written: {}", report.destination.display());
+            println!("  source: {}", report.source.display());
+            println!("  schema: v{}", report.schema_version);
+            println!("  bytes: {}", report.bytes);
+            if report.overwritten {
+                println!("  replaced an existing destination (--force)");
+            }
+            println!("Snapshot verified with PRAGMA integrity_check; mode 0600 on Unix.");
+            Ok(())
+        }
+        "restore" => {
+            let mut args = env::args().skip(2);
+            let source = args.next().ok_or("restore <path>")?;
+            if args.next().is_some() {
+                return Err("restore takes exactly one path".into());
+            }
+            let database = ukk_store::default_database_path()?;
+            // Hold the Host lifecycle lock across validation and replacement so
+            // a Host cannot start halfway through a restore.
+            let _guard = acquire_restore_guard()?;
+            let report = restore_database(&database, Path::new(&source))?;
+            println!("Restored: {}", report.database.display());
+            println!("  source: {}", report.source.display());
+            println!("  schema: v{}", report.schema_version);
+            println!("  bytes: {}", report.bytes);
+            match &report.safety_backup {
+                Some(path) => {
+                    println!("  previous database backup: {}", path.display());
+                    println!(
+                        "  previous backup verified: {}",
+                        if report.safety_backup_verified {
+                            "yes"
+                        } else {
+                            "raw copy"
+                        }
+                    );
+                }
+                None => println!("  previous database: none (new database installed)"),
+            }
+            println!("The Host migrates an older schema on its next open.");
+            Ok(())
+        }
+        "db-doctor" => {
+            let database = ukk_store::default_database_path()?;
+            let health = inspect_database(&database);
+            print_database_health(&health);
             Ok(())
         }
         "space-create" => {
@@ -178,6 +240,115 @@ pub(super) fn execute() -> AppResult<()> {
     }
 }
 
+#[cfg(unix)]
+fn acquire_restore_guard() -> AppResult<Option<local_fs::HostLock>> {
+    let socket = transport::socket_path()?;
+    let directory = socket.parent().ok_or("invalid Host socket path")?;
+    let default_location = env::var_os("UKK_SOCKET").is_none();
+    if !directory.exists() && !default_location {
+        // A missing explicit socket directory cannot contain a live Host.
+        return Ok(None);
+    }
+    local_fs::secure_socket_directory(directory, default_location).map_err(
+        |error| -> Box<dyn Error + Send + Sync> {
+            format!("Host endpoint check failed: {error}").into()
+        },
+    )?;
+    // The Host holds this exclusive lock for its whole serving lifetime. If we
+    // acquire it, no Host can start until the restore has finished.
+    let lock = local_fs::HostLock::acquire(directory).map_err(
+        |error| -> Box<dyn Error + Send + Sync> {
+            format!("another ukk Host appears to be running; stop it before restore ({error})")
+                .into()
+        },
+    )?;
+    Ok(Some(lock))
+}
+
+#[cfg(windows)]
+fn acquire_restore_guard() -> AppResult<()> {
+    match ukk_host_client::windows_pipe::open_client() {
+        Ok(_) => Err("another ukk Host is running; stop it before restore".into()),
+        Err(_) => Ok(()),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn acquire_restore_guard() -> AppResult<()> {
+    Ok(())
+}
+
+fn print_database_health(health: &DatabaseHealth) {
+    println!("ukk workspace database");
+    println!("  path: {}", health.path.display());
+    if !health.exists {
+        println!("  state: missing (the Host creates it on next start)");
+        println!("  guidance: after creating workspace data, run `ukk-host backup <path>`.");
+        return;
+    }
+    println!(
+        "  state: {}",
+        if health.is_symlink {
+            "symlink (refused)"
+        } else if health.is_regular {
+            "regular file"
+        } else {
+            "not a regular file (refused)"
+        }
+    );
+    println!("  bytes: {}", health.bytes);
+    #[cfg(unix)]
+    if let Some(mode) = health.unix_mode {
+        println!("  mode: {mode:04o}");
+    }
+    match health.schema_version {
+        Some(version) => println!(
+            "  schema: v{version} ({})",
+            if health.supported_schema {
+                "supported"
+            } else {
+                "unsupported"
+            }
+        ),
+        None => println!("  schema: unknown"),
+    }
+    match &health.integrity {
+        Some(result) => println!("  integrity: {result}"),
+        None => println!("  integrity: unavailable"),
+    }
+    match &health.journal_mode {
+        Some(mode) => println!("  journal mode: {mode}"),
+        None => println!("  journal mode: unknown"),
+    }
+    println!(
+        "  sidecars: wal={} bytes, shm={} bytes, journal={} bytes",
+        health.wal_bytes, health.shm_bytes, health.journal_bytes
+    );
+    if let Some(error) = &health.open_error {
+        println!("  problem: {error}");
+    }
+    if health.open_error.is_some() || health.integrity.as_deref() != Some("ok") {
+        println!("  recovery: restore a verified backup with `ukk-host restore <path>`.");
+        println!(
+            "            Restore backs up the current file automatically before replacing it."
+        );
+    } else if !health.supported_schema {
+        println!(
+            "  recovery: this Host does not support the schema; upgrade the Host, do not downgrade."
+        );
+    } else {
+        println!("  backup: `ukk-host backup <path>` is safe while the Host is running.");
+    }
+    if health.wal_bytes > 0 {
+        println!(
+            "  note: WAL contains committed frames not yet checkpointed; a backup includes them."
+        );
+    }
+    if health.journal_bytes > 0 {
+        println!("  note: a rollback journal is present; an interrupted write may be pending.");
+    }
+}
+
 fn print_help() {
     println!(
         r#"ukk-host — Agent runtime is read-only via this local RPC
@@ -188,6 +359,10 @@ Commands:
   schema               Print hc OpenRPC schema
   watch                Watch hc event notifications
   workspace-dump       Dump persisted Space/Session/Pane JSON
+Database safety (Host metadata only; never prints rows):
+  backup <path> [--force]  Consistent verified snapshot; refuses overwrite unless forced
+  restore <path>       Stop the Host first; auto-backs up current DB; atomic replace
+  db-doctor            Path, schema, integrity, WAL/journal state and backup guidance
   space-create         <title> <project_root>
   session-create       <space_id> <title>
   session-archive      <session_id> (never stops Agent)

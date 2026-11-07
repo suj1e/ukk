@@ -8,6 +8,12 @@ description = "SQLite-backed durable ukk workspace metadata, not herdr-core runt
 [dependencies]
 ukk-domain = { path = "../domain" }
 ukk-protocol = { path = "../protocol" }
-rusqlite = { version = "0.41.1", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "backup"] }
 serde_json = "1"
 uuid = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
