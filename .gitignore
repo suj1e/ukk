@@ -1,0 +1,10 @@
+/target/
+.DS_Store
+*.log
+*.swp
+.env
+.env.*
+!.env.example
+.ukk/
+.idea/
+.vscode/
