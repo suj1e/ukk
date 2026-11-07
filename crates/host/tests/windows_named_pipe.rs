@@ -10,6 +10,16 @@ use ukk_domain::new_id;
 use ukk_host_client::HostClient;
 use ukk_store::Store;
 
+/// The Named Pipe name is per-user, so Host tests in this binary must not run
+/// concurrently (the first-instance flag correctly refuses a second Host).
+static HOST_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial_host_test() -> std::sync::MutexGuard<'static, ()> {
+    HOST_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
@@ -20,6 +30,7 @@ impl Drop for ChildGuard {
 
 #[test]
 fn windows_host_pipe_allows_read_only_local_snapshot() {
+    let _serial = serial_host_test();
     // On a clean CI runner there is no preexisting ukk-host process.
     // The first-instance flag ensures an existing pipe cannot be hijacked.
     let root = std::env::temp_dir().join(format!("ukk-win-ipc-{}", new_id()));
@@ -106,6 +117,7 @@ fn windows_host_pipe_allows_read_only_local_snapshot() {
 
 #[test]
 fn windows_second_host_is_rejected_while_first_is_live() {
+    let _serial = serial_host_test();
     let root = std::env::temp_dir().join(format!("ukk-win-live-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();
     let db = root.join("workspace.sqlite3");

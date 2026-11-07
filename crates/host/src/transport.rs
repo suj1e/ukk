@@ -174,6 +174,14 @@ fn serve_one<S: Read + Write>(
             Err(error) if is_timeout(&error) => {
                 return Err("Host client read deadline elapsed; closing connection".into());
             }
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                // Normal client disconnect (including Windows ERROR_BROKEN_PIPE).
+                return if pending.is_empty() {
+                    Ok(())
+                } else {
+                    Err("Host request not line terminated before disconnect".into())
+                };
+            }
             Err(error) => return Err(error.into()),
         };
         pending.extend_from_slice(&chunk[..read]);
