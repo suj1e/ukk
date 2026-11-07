@@ -142,7 +142,6 @@ impl Core {
             RelayMessage::Register {
                 host_id,
                 generation,
-                resume_session,
                 ..
             } => {
                 if generation != from_generation {
@@ -151,12 +150,6 @@ impl Core {
                 }
                 if self.revoked_hosts.contains(&host_id) {
                     self.error(from, RelayErrorCode::Revoked);
-                    return Ok(());
-                }
-                if resume_session.is_some() {
-                    // Resume is not part of envelope v1: refuse rather than
-                    // guess which session the caller meant.
-                    self.error(from, RelayErrorCode::UnknownRoute);
                     return Ok(());
                 }
                 if self.registrations.contains_key(&host_id) {
@@ -183,15 +176,10 @@ impl Core {
             RelayMessage::Connect {
                 host_id,
                 generation,
-                resume_session,
                 ..
             } => {
                 if generation != from_generation {
                     self.error(from, RelayErrorCode::Malformed);
-                    return Ok(());
-                }
-                if resume_session.is_some() {
-                    self.error(from, RelayErrorCode::UnknownRoute);
                     return Ok(());
                 }
                 let Some(registration) = self.registrations.get(&host_id).cloned() else {
@@ -505,7 +493,7 @@ fn route_phone(
     phone_link: &mut Link,
     phone: &mut RelayDriver,
 ) -> SessionId {
-    let connect = phone.begin(phone_link.generation()).unwrap();
+    let connect = phone.begin(&*phone_link).unwrap();
     phone_link.send(connect).unwrap();
     let session = phone_link.recv();
     let RelayEvent::SessionOpened { session_id } = phone.handle(session).unwrap() else {
@@ -522,7 +510,7 @@ fn route_phone(
 }
 
 fn register_host(host_link: &mut Link, host: &mut RelayDriver) {
-    let register = host.begin(host_link.generation()).unwrap();
+    let register = host.begin(&*host_link).unwrap();
     host_link.send(register).unwrap();
     let registered = host_link.recv();
     assert!(matches!(
@@ -640,7 +628,7 @@ fn duplicate_registration_fails_closed_and_keeps_the_first_connection() {
 
     let mut second_link = hub.link();
     let mut second = RelayDriver::host(host_id());
-    let register = second.begin(second_link.generation()).unwrap();
+    let register = second.begin(&second_link).unwrap();
     second_link.send(register).unwrap();
     let error = second_link.recv();
     assert_eq!(
@@ -660,13 +648,13 @@ fn duplicate_registration_fails_closed_and_keeps_the_first_connection() {
 }
 
 #[test]
-fn offline_unknown_route_and_resume_fail_closed() {
+fn offline_unknown_route_and_resume_field_fail_closed() {
     let hub = Hub::new();
 
     // No Host registered yet -> typed NotRegistered and a closed phone driver.
     let mut phone_link = hub.link();
     let mut phone = RelayDriver::phone(host_id());
-    let connect = phone.begin(phone_link.generation()).unwrap();
+    let connect = phone.begin(&phone_link).unwrap();
     phone_link.send(connect).unwrap();
     let error = phone_link.recv();
     assert_eq!(
@@ -678,27 +666,15 @@ fn offline_unknown_route_and_resume_fail_closed() {
     );
     assert_eq!(phone.handle(error), Err(RelayError::NotRegistered));
 
-    // Resume is not implemented in envelope v1: refuse it.
-    let mut resumed_link = hub.link();
+    // Resume is not part of envelope v1: a frame carrying it is rejected as
+    // an unknown field (and the driver closes) before the relay sees it.
+    let resumed_link = hub.link();
     let mut resumed = RelayDriver::phone(host_id());
-    resumed.begin(resumed_link.generation()).unwrap();
-    resumed_link
-        .send(RelayMessage::Connect {
-            v: SIGNALLING_VERSION,
-            host_id: host_id(),
-            generation: resumed_link.generation(),
-            resume_session: Some(SessionId::parse("sess-00000000000000ff").unwrap()),
-        })
-        .unwrap();
-    let error = resumed_link.recv();
-    assert_eq!(
-        error,
-        RelayMessage::Error {
-            v: SIGNALLING_VERSION,
-            code: RelayErrorCode::UnknownRoute,
-        }
-    );
-    assert_eq!(resumed.handle(error), Err(RelayError::UnknownRoute));
+    resumed.begin(&resumed_link).unwrap();
+    let resume = br#"{"type":"connect","body":{"v":1,"host_id":"host-1","generation":1,"resume_session":"sess-00000000000000ff"}}"#;
+    assert_eq!(RelayMessage::decode(resume), Err(RelayError::Malformed));
+    assert_eq!(resumed.handle_frame(resume), Err(RelayError::Malformed));
+    assert_eq!(resumed.state(), &RelayState::Closed);
 
     // A frame for a session the relay does not know is refused.
     let mut host_link = hub.link();
@@ -743,6 +719,11 @@ fn reconnect_advances_generation_and_old_routes_are_not_resumable() {
         RelayEvent::Frame { .. }
     ));
 
+    // A generation already used by this driver is never reusable; a reconnect
+    // must start a fresh driver with the higher generation.
+    assert_eq!(host.begin(&host_link), Err(RelayError::AlreadyConnected));
+    assert_eq!(host.state(), &RelayState::Closed);
+
     // Host link drops: the phone sees a typed offline close.
     host_link.disconnect();
     let close = phone_link.recv();
@@ -758,10 +739,6 @@ fn reconnect_advances_generation_and_old_routes_are_not_resumable() {
     // Reconnect with a strictly higher generation.
     host_link.reconnect();
     assert_eq!(host_link.generation(), 2);
-    // A generation already used by this driver is never reusable; a reconnect
-    // must start a fresh driver with the higher generation.
-    assert_eq!(host.begin(1), Err(RelayError::AlreadyConnected));
-    assert_eq!(host.state(), &RelayState::Closed);
     let mut restarted_host = RelayDriver::host(host_id());
     register_host(&mut host_link, &mut restarted_host);
 
@@ -885,7 +862,7 @@ fn revocation_and_session_close_fail_closed() {
     // A revoked Host cannot register again with the same relay.
     let mut retry_link = hub.link();
     let mut retry = RelayDriver::host(host_id());
-    let register = retry.begin(retry_link.generation()).unwrap();
+    let register = retry.begin(&retry_link).unwrap();
     retry_link.send(register).unwrap();
     let error = retry_link.recv();
     assert_eq!(

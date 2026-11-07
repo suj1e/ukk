@@ -225,15 +225,18 @@ Adapters must enforce:
 * A relay reconnect is a new pairing attempt at a strictly higher generation.
   Started or completed invitations are never replayed, and state never
   crosses a generation boundary.
-* Resume is **not implemented** in envelope v1. A `register`/`connect` that
-  asks to resume a session is refused (`unknown_route`) rather than guessed.
+* Resume is **not part of** envelope v1. `register`/`connect` carry no resume
+  field; a frame that adds one is rejected as an unknown field (`malformed`)
+  before the driver or relay acts, rather than guessed.
 
 ### ukk-internal signalling envelope v1
 
 This envelope is **ukk-internal**. It is deliberately not the alma-relay wire
 protocol and no interoperability is claimed. One JSON object per frame,
-`{"type":"…","body":{"v":1,…}}`; unknown fields, wrong types and trailing
-input are rejected. Session ids are relay-assigned
+`{"type":"…","body":{"v":1,…}}`; only that single-object form is accepted
+(the serde adjacent-tagging array form is rejected), and unknown fields, wrong
+types and trailing input are rejected. The encoded payload length is checked
+before base64 decoding. Session ids are relay-assigned
 `[A-Za-z0-9_-]{16,128}`.
 
 | Type | Direction | Purpose |
@@ -328,7 +331,7 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 (BSD-3-Clause),
 
 ## What the tests prove
 
-`crates/remote/tests` (75 tests including unit tests):
+`crates/remote/tests` (77 tests including unit tests):
 
 * invite round-trip, strict unknown/missing field rejection, oversized and
   trailing input, unsafe relay schemes, secret redaction and zeroize-on-demand;
@@ -351,9 +354,12 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 (BSD-3-Clause),
   scopes and fingerprinted device binding;
 * the in-memory mock relay (`tests/relay.rs`): outbound Host registration only,
   phone routing, a full Noise pairing exchange carried as bounded opaque
-  frames, duplicate registration, offline/unknown-route/resume refusal,
-  reconnect generation advancement, oversized frame/payload rejection,
-  bounded-queue overflow, session close and revocation. The mock is synchronous and deterministic; it
+  frames, duplicate registration, offline/unknown-route, resume-field rejection,
+  reconnect generation advancement, oversized frame/encoded-payload
+  rejection, bounded-queue overflow, session close and revocation. Driver unit
+  tests also cover wrong Host, a second `route` while routed, close with a
+  wrong session id, lower-generation `begin`, `NotRouted`, malformed/array-form
+  frame closure and typed relay refusals. The mock is synchronous and deterministic; it
   opens no socket and makes no external call.
 
 **NOT VERIFIED:** real alma-relay interoperability (no WSS, TLS, relay

@@ -70,7 +70,8 @@ pub use keys::{
 pub use relay::{
     CloseReason, OpaqueFrame, RelayDriver, RelayError, RelayErrorCode, RelayEvent, RelayMessage,
     RelayRole, RelayState, SessionId, MAX_SESSION_ID_BYTES, MAX_SIGNALLING_FRAME_BYTES,
-    MAX_SIGNALLING_PAYLOAD_BYTES, MIN_SESSION_ID_BYTES, SIGNALLING_VERSION,
+    MAX_SIGNALLING_PAYLOAD_BYTES, MAX_SIGNALLING_PAYLOAD_ENCODED_BYTES, MIN_SESSION_ID_BYTES,
+    SIGNALLING_VERSION,
 };
 pub use transport::RelayConnection;
 pub use trust::{

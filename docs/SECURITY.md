@@ -158,9 +158,9 @@ record in [PAIRING.md](PAIRING.md).
 | --- | --- |
 | Outbound only | The Host sends `register`; there is no inbound listener, port forwarding or TCP fallback, and the relay never dials the Host |
 | Reconnect generation | Monotonic `generation()`; the driver refuses a reused/stale generation and resets all state on a higher one. State never crosses a connection generation |
-| Bounds | Encoded envelope ≤ 8192 bytes, opaque pairing payload ≤ 4096 bytes, session id `[A-Za-z0-9_-]{16,128}`; oversize rejected before parse/buffer. Per-peer queues must be bounded; the mock relay caps 64 undrained frames and disconnects the peer on overflow |
+| Bounds | Encoded envelope ≤ 8192 bytes, opaque pairing payload ≤ 4096 bytes (encoded length prechecked before base64 decode), session id `[A-Za-z0-9_-]{16,128}`. Only the single JSON-object frame form is accepted. Per-peer queues must be bounded; the mock relay caps 64 undrained frames and disconnects the peer on overflow |
 | Fail closed | Duplicate registration, unknown route, offline peer, oversized frame, stale generation, wrong Host, out-of-order message, session close and revocation all produce a typed error and close the driver |
-| Resume | Not implemented in v1; `register`/`connect` with `resume_session` is refused (`unknown_route`) rather than guessed |
+| Resume | Not part of v1: no resume field exists, and a frame carrying one is rejected as malformed before the relay/driver acts |
 | Relay authority | The relay only routes ciphertext and typed control; it cannot grant scopes, authenticate a device or alter pairing state |
 | Test evidence | Synchronous in-memory mock relay (`tests/relay.rs`); no socket, TLS, relay process or external call |
 

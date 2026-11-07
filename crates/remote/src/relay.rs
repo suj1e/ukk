@@ -48,8 +48,9 @@
 //! * Session ids are relay-assigned `[A-Za-z0-9_-]{16,128}`.
 //! * Any unexpected message, stale generation, wrong Host, duplicate
 //!   registration, unknown route or oversized frame closes the driver. State
-//!   never survives a reconnect generation, and resume is not implemented:
-//!   a resume attempt is refused rather than guessed.
+//!   never survives a reconnect generation. Resume is not part of v1, so a
+//!   frame carrying resume state is rejected as an unknown field rather than
+//!   guessed.
 //!
 //! ## Scope
 //!
@@ -61,6 +62,7 @@
 use crate::encoding::encode;
 use crate::error::MAX_PAIRING_FRAME_BYTES;
 use crate::invite::HostId;
+use crate::transport::RelayConnection;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::de::Error as _;
@@ -76,6 +78,19 @@ pub const MAX_SIGNALLING_FRAME_BYTES: usize = 8192;
 
 /// Hard bound on the opaque pairing payload carried by one `frame` message.
 pub const MAX_SIGNALLING_PAYLOAD_BYTES: usize = MAX_PAIRING_FRAME_BYTES;
+
+/// Exact maximum length of the canonical unpadded base64url encoding of one
+/// payload, checked before allocating the decode buffer.
+pub const MAX_SIGNALLING_PAYLOAD_ENCODED_BYTES: usize = encoded_len(MAX_SIGNALLING_PAYLOAD_BYTES);
+
+const fn encoded_len(bytes: usize) -> usize {
+    let full = bytes / 3 * 4;
+    match bytes % 3 {
+        0 => full,
+        1 => full + 2,
+        _ => full + 3,
+    }
+}
 
 /// Minimum accepted relay session id length.
 pub const MIN_SESSION_ID_BYTES: usize = 16;
@@ -124,6 +139,8 @@ pub enum RelayError {
     HostMismatch,
     /// The driver's state has no routed session.
     NotRouted,
+    /// The relay returned a typed refusal with no more specific local variant.
+    RelayRefused(RelayErrorCode),
 }
 
 impl fmt::Display for RelayError {
@@ -162,6 +179,9 @@ impl fmt::Display for RelayError {
             ),
             Self::HostMismatch => formatter.write_str("relay message names another Host"),
             Self::NotRouted => formatter.write_str("relay driver has no routed session"),
+            Self::RelayRefused(code) => {
+                write!(formatter, "relay refused the request: {code}")
+            }
         }
     }
 }
@@ -183,6 +203,23 @@ pub enum RelayErrorCode {
     Offline,
 }
 
+impl fmt::Display for RelayErrorCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::DuplicateRegistration => "duplicate_registration",
+            Self::UnknownRoute => "unknown_route",
+            Self::NotRegistered => "not_registered",
+            Self::SessionClosed => "session_closed",
+            Self::Revoked => "revoked",
+            Self::FrameTooLarge => "frame_too_large",
+            Self::Malformed => "malformed",
+            Self::UnsupportedVersion => "unsupported_version",
+            Self::Offline => "offline",
+        };
+        formatter.write_str(name)
+    }
+}
+
 impl RelayErrorCode {
     fn into_error(self) -> RelayError {
         match self {
@@ -195,7 +232,7 @@ impl RelayErrorCode {
                 max: MAX_SIGNALLING_FRAME_BYTES,
             },
             Self::Malformed => RelayError::Malformed,
-            Self::UnsupportedVersion => RelayError::UnsupportedVersion { found: 0 },
+            Self::UnsupportedVersion => RelayError::RelayRefused(Self::UnsupportedVersion),
             Self::Offline => RelayError::Offline,
         }
     }
@@ -307,6 +344,11 @@ impl Serialize for OpaqueFrame {
 impl<'de> Deserialize<'de> for OpaqueFrame {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = String::deserialize(deserializer)?;
+        if value.len() > MAX_SIGNALLING_PAYLOAD_ENCODED_BYTES {
+            return Err(D::Error::custom(
+                "encoded frame exceeds the signalling payload bound",
+            ));
+        }
         let decoded = URL_SAFE_NO_PAD
             .decode(&value)
             .map_err(|_| D::Error::custom("frame must be canonical unpadded base64url"))?;
@@ -336,8 +378,6 @@ pub enum RelayMessage {
         v: u8,
         host_id: HostId,
         generation: u64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        resume_session: Option<SessionId>,
     },
     /// relay → Host: registration accepted.
     Registered {
@@ -350,8 +390,6 @@ pub enum RelayMessage {
         v: u8,
         host_id: HostId,
         generation: u64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        resume_session: Option<SessionId>,
     },
     /// relay → phone: route established.
     Session {
@@ -413,12 +451,18 @@ impl RelayMessage {
         Ok(encoded)
     }
 
-    /// Decodes one envelope. Oversized input is rejected **before** parsing.
+    /// Decodes one envelope. Oversized input is rejected **before** parsing,
+    /// and the frame must be a single JSON object: serde's adjacent tagging
+    /// would otherwise also accept the two-element array form.
     pub fn decode(bytes: &[u8]) -> Result<Self, RelayError> {
         if bytes.len() > MAX_SIGNALLING_FRAME_BYTES {
             return Err(RelayError::FrameTooLarge {
                 max: MAX_SIGNALLING_FRAME_BYTES,
             });
+        }
+        match bytes.iter().find(|byte| !byte.is_ascii_whitespace()) {
+            Some(b'{') => {}
+            _ => return Err(RelayError::Malformed),
         }
         let message: Self = serde_json::from_slice(bytes).map_err(|_| RelayError::Malformed)?;
         if message.version() != SIGNALLING_VERSION {
@@ -524,10 +568,15 @@ impl RelayDriver {
 
     /// Starts a connection at the adapter's current generation.
     ///
-    /// Generation `0` is not connected. A generation that was already used for
-    /// this driver (including a closed one) is refused; an adapter must
-    /// reconnect with a strictly larger generation.
-    pub fn begin(&mut self, generation: u64) -> Result<RelayMessage, RelayError> {
+    /// The generation is read from [`RelayConnection::generation`], never
+    /// supplied by the caller. Generation `0` is not connected. A generation
+    /// that was already used for this driver (including a closed one) is
+    /// refused; an adapter must reconnect with a strictly larger generation.
+    pub fn begin<C: RelayConnection + ?Sized>(
+        &mut self,
+        connection: &C,
+    ) -> Result<RelayMessage, RelayError> {
+        let generation = connection.generation();
         if generation == 0 {
             self.state = RelayState::Closed;
             return Err(RelayError::Offline);
@@ -551,7 +600,6 @@ impl RelayDriver {
                     v: SIGNALLING_VERSION,
                     host_id: self.host_id.clone(),
                     generation,
-                    resume_session: None,
                 })
             }
             RelayRole::Phone => {
@@ -560,7 +608,6 @@ impl RelayDriver {
                     v: SIGNALLING_VERSION,
                     host_id: self.host_id.clone(),
                     generation,
-                    resume_session: None,
                 })
             }
         }
@@ -759,12 +806,83 @@ impl fmt::Debug for RelayDriver {
 mod tests {
     use super::*;
 
+    struct StubConnection {
+        generation: u64,
+    }
+
+    impl StubConnection {
+        fn new(generation: u64) -> Self {
+            Self { generation }
+        }
+    }
+
+    impl RelayConnection for StubConnection {
+        type Error = RelayError;
+
+        fn generation(&self) -> u64 {
+            self.generation
+        }
+
+        fn send_frame(&mut self, _frame: &[u8]) -> Result<(), Self::Error> {
+            Err(RelayError::Offline)
+        }
+
+        fn recv_frame(&mut self, _max_bytes: usize) -> Result<Vec<u8>, Self::Error> {
+            Err(RelayError::Offline)
+        }
+    }
+
     fn host_id() -> HostId {
         HostId::new("host-1").unwrap()
     }
 
+    fn other_host_id() -> HostId {
+        HostId::new("host-2").unwrap()
+    }
+
     fn session() -> SessionId {
         SessionId::parse("sess-0000000000000001").unwrap()
+    }
+
+    fn other_session() -> SessionId {
+        SessionId::parse("sess-0000000000000002").unwrap()
+    }
+
+    fn started_host(generation: u64) -> RelayDriver {
+        let mut host = RelayDriver::host(host_id());
+        host.begin(&StubConnection::new(generation)).unwrap();
+        host.handle(RelayMessage::Registered {
+            v: SIGNALLING_VERSION,
+            host_id: host_id(),
+            generation,
+        })
+        .unwrap();
+        host
+    }
+
+    fn routed_host(generation: u64) -> RelayDriver {
+        let mut host = started_host(generation);
+        host.handle(RelayMessage::Route {
+            v: SIGNALLING_VERSION,
+            generation,
+            session_id: session(),
+        })
+        .unwrap();
+        host
+    }
+
+    fn routed_phone(generation: u64) -> RelayDriver {
+        let mut phone = RelayDriver::phone(host_id());
+        phone.begin(&StubConnection::new(generation)).unwrap();
+        phone
+            .handle(RelayMessage::Session {
+                v: SIGNALLING_VERSION,
+                host_id: host_id(),
+                generation,
+                session_id: session(),
+            })
+            .unwrap();
+        phone
     }
 
     #[test]
@@ -773,7 +891,6 @@ mod tests {
             v: SIGNALLING_VERSION,
             host_id: host_id(),
             generation: 3,
-            resume_session: None,
         };
         let encoded = message.encode().unwrap();
         assert_eq!(RelayMessage::decode(&encoded).unwrap(), message);
@@ -795,6 +912,22 @@ mod tests {
         let mut trailing = encoded.clone();
         trailing.push(b'x');
         assert_eq!(RelayMessage::decode(&trailing), Err(RelayError::Malformed));
+
+        // Adjacent tagging has a second array representation; v1 accepts only
+        // the single JSON-object form.
+        let array = r#"["register",{"v":1,"host_id":"host-1","generation":3}]"#;
+        assert_eq!(
+            RelayMessage::decode(array.as_bytes()),
+            Err(RelayError::Malformed)
+        );
+
+        // Resume is not part of v1. A frame that tries to carry it is an
+        // unknown field, not an accepted message the test double must reject.
+        let resume = r#"{"type":"register","body":{"v":1,"host_id":"host-1","generation":1,"resume_session":"sess-0000000000000001"}}"#;
+        assert_eq!(
+            RelayMessage::decode(resume.as_bytes()),
+            Err(RelayError::Malformed)
+        );
 
         let mut value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         value["body"]["v"] = serde_json::json!(2);
@@ -832,6 +965,20 @@ mod tests {
             RelayMessage::decode(raw.to_string().as_bytes()),
             Err(RelayError::Malformed)
         );
+
+        // The encoded length is checked before base64 decoding.
+        let overlong = serde_json::json!({
+            "type": "frame",
+            "body": {
+                "v": 1,
+                "session_id": session().as_str(),
+                "frame": "A".repeat(MAX_SIGNALLING_PAYLOAD_ENCODED_BYTES + 1),
+            }
+        });
+        assert_eq!(
+            RelayMessage::decode(overlong.to_string().as_bytes()),
+            Err(RelayError::Malformed)
+        );
     }
 
     #[test]
@@ -864,12 +1011,11 @@ mod tests {
     fn host_driver_happy_path_routes_bounded_frames() {
         let mut host = RelayDriver::host(host_id());
         assert_eq!(
-            host.begin(1).unwrap(),
+            host.begin(&StubConnection::new(1)).unwrap(),
             RelayMessage::Register {
                 v: 1,
                 host_id: host_id(),
                 generation: 1,
-                resume_session: None,
             }
         );
         assert_eq!(
@@ -908,16 +1054,33 @@ mod tests {
     #[test]
     fn driver_fails_closed_on_out_of_order_and_stale_generation() {
         let mut host = RelayDriver::host(host_id());
-        assert_eq!(host.begin(0), Err(RelayError::Offline));
+        assert_eq!(
+            host.begin(&StubConnection::new(0)),
+            Err(RelayError::Offline)
+        );
         assert_eq!(host.state(), &RelayState::Closed);
 
         let mut host = RelayDriver::host(host_id());
-        host.begin(2).unwrap();
-        assert_eq!(host.begin(2), Err(RelayError::AlreadyConnected));
+        host.begin(&StubConnection::new(2)).unwrap();
+        assert_eq!(
+            host.begin(&StubConnection::new(2)),
+            Err(RelayError::AlreadyConnected)
+        );
         assert_eq!(host.state(), &RelayState::Closed);
 
+        // Lower generations are rejected once a higher one was accepted.
+        let mut host = RelayDriver::host(host_id());
+        host.begin(&StubConnection::new(2)).unwrap();
+        assert_eq!(
+            host.begin(&StubConnection::new(1)),
+            Err(RelayError::GenerationMismatch {
+                expected: 2,
+                found: 1
+            })
+        );
+
         let mut phone = RelayDriver::phone(host_id());
-        phone.begin(4).unwrap();
+        phone.begin(&StubConnection::new(4)).unwrap();
         assert_eq!(
             phone.handle(RelayMessage::Session {
                 v: 1,
@@ -931,5 +1094,109 @@ mod tests {
             })
         );
         assert_eq!(phone.state(), &RelayState::Closed);
+    }
+
+    #[test]
+    fn driver_rejects_wrong_host_second_route_wrong_close_and_not_routed() {
+        // Wrong Host in the registration reply.
+        let mut host = RelayDriver::host(host_id());
+        host.begin(&StubConnection::new(1)).unwrap();
+        assert_eq!(
+            host.handle(RelayMessage::Registered {
+                v: 1,
+                host_id: other_host_id(),
+                generation: 1,
+            }),
+            Err(RelayError::HostMismatch)
+        );
+        assert_eq!(host.state(), &RelayState::Closed);
+
+        // A second route while already routed is a protocol error.
+        let mut host = routed_host(1);
+        assert_eq!(
+            host.handle(RelayMessage::Route {
+                v: 1,
+                generation: 1,
+                session_id: other_session(),
+            }),
+            Err(RelayError::UnexpectedMessage)
+        );
+        assert_eq!(host.state(), &RelayState::Closed);
+
+        // Close for a different session id never touches the active route.
+        let mut host = routed_host(1);
+        assert_eq!(
+            host.handle(RelayMessage::Close {
+                v: 1,
+                session_id: other_session(),
+                reason: CloseReason::Revoked,
+            }),
+            Err(RelayError::UnknownRoute)
+        );
+        assert_eq!(host.state(), &RelayState::Closed);
+
+        // Wrong Host on the phone session reply.
+        let mut phone = RelayDriver::phone(host_id());
+        phone.begin(&StubConnection::new(1)).unwrap();
+        assert_eq!(
+            phone.handle(RelayMessage::Session {
+                v: 1,
+                host_id: other_host_id(),
+                generation: 1,
+                session_id: session(),
+            }),
+            Err(RelayError::HostMismatch)
+        );
+        assert_eq!(phone.state(), &RelayState::Closed);
+
+        // Wrong close id on the phone route.
+        let mut phone = routed_phone(1);
+        assert_eq!(
+            phone.handle(RelayMessage::Close {
+                v: 1,
+                session_id: other_session(),
+                reason: CloseReason::Offline,
+            }),
+            Err(RelayError::UnknownRoute)
+        );
+        assert_eq!(phone.state(), &RelayState::Closed);
+
+        // Frames and closes require an active route.
+        let mut host = RelayDriver::host(host_id());
+        assert_eq!(
+            host.payload_frame(b"before route"),
+            Err(RelayError::NotRouted)
+        );
+        assert_eq!(
+            host.close_frame(CloseReason::Revoked),
+            Err(RelayError::NotRouted)
+        );
+    }
+
+    #[test]
+    fn malformed_frames_close_the_driver_and_relay_refusals_are_typed() {
+        let mut host = RelayDriver::host(host_id());
+        host.begin(&StubConnection::new(1)).unwrap();
+        assert_eq!(host.handle_frame(b"{"), Err(RelayError::Malformed));
+        assert_eq!(host.state(), &RelayState::Closed);
+
+        let mut host = RelayDriver::host(host_id());
+        host.begin(&StubConnection::new(1)).unwrap();
+        assert_eq!(
+            host.handle_frame(br#"["registered",{"v":1,"host_id":"host-1","generation":1}]"#),
+            Err(RelayError::Malformed)
+        );
+        assert_eq!(host.state(), &RelayState::Closed);
+
+        let mut host = RelayDriver::host(host_id());
+        host.begin(&StubConnection::new(1)).unwrap();
+        assert_eq!(
+            host.handle(RelayMessage::Error {
+                v: 1,
+                code: RelayErrorCode::UnsupportedVersion,
+            }),
+            Err(RelayError::RelayRefused(RelayErrorCode::UnsupportedVersion))
+        );
+        assert_eq!(host.state(), &RelayState::Closed);
     }
 }
