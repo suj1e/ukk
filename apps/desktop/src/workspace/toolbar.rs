@@ -74,7 +74,11 @@ impl Workspace {
                             .cursor_pointer()
                             .hover(|style| style.bg(rgb(SURFACE)))
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
-                            .child(if is_loading { "Refreshing…" } else { "↻  Refresh" }),
+                            .child(if is_loading {
+                                "Refreshing…"
+                            } else {
+                                "↻  Refresh"
+                            }),
                     ),
             )
     }
