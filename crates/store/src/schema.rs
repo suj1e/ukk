@@ -80,13 +80,14 @@ impl Store {
         let version: i64 = self
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(StoreError::UnsupportedVersion(version));
         }
-        if version == 1 {
+        if version == 2 {
             return Ok(());
         }
-        let tx = self.conn.transaction()?;
+        if version == 0 {
+            let tx = self.conn.transaction()?;
         tx.execute_batch(
             r#"
             CREATE TABLE spaces (
@@ -123,7 +124,41 @@ impl Store {
             PRAGMA user_version = 1;
             "#,
         )?;
-        tx.commit()?;
+            tx.commit()?;
+        }
+        // v2: a durable, monotonic revision for Spaces, Sessions, AgentRuns
+        // and persisted pane layouts. Triggers catch writes from *every*
+        // connection, including an independent CLI process.
+        if version < 2 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE workspace_revision (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    revision INTEGER NOT NULL CHECK(revision >= 0)
+                );
+                INSERT INTO workspace_revision(id, revision) VALUES(1, 0);",
+            )?;
+            for table in ["spaces", "sessions", "agent_runs", "session_layouts"] {
+                for (operation, suffix) in [
+                    ("INSERT", "insert"),
+                    ("UPDATE", "update"),
+                    ("DELETE", "delete"),
+                ] {
+                    // All identifiers are static source literals; never
+                    // interpolate untrusted SQL identifiers here.
+                    tx.execute_batch(&format!(
+                        "CREATE TRIGGER ukk_rev_{table}_{suffix}
+                         AFTER {operation} ON {table}
+                         BEGIN
+                            UPDATE workspace_revision
+                            SET revision = revision + 1 WHERE id=1;
+                         END;"
+                    ))?;
+                }
+            }
+            tx.execute_batch("PRAGMA user_version = 2;")?;
+            tx.commit()?;
+        }
         Ok(())
     }
 }
