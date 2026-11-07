@@ -144,24 +144,20 @@ impl PaneNode {
             return Err(LayoutError::SameTabGroup);
         }
         self.validate()?;
-        let moved = self.leaves()
-            .into_iter()
-            .find(|(id, _)| *id == tab_id)
-            .and_then(|_| {
-                // Require exact source membership even when tab IDs are valid
-                // somewhere else in this Session.
-                fn find<'a>(node: &'a PaneNode, group: &str) -> Option<&'a [PaneTab]> {
-                    match node {
-                        PaneNode::Tabs { id, tabs } if id == group => Some(tabs),
-                        PaneNode::Split { first, second, .. } =>
-                            find(first, group).or_else(|| find(second, group)),
-                        _ => None,
-                    }
+        fn find_group<'a>(node: &'a PaneNode, group: &str) -> Option<&'a [PaneTab]> {
+            match node {
+                PaneNode::Tabs { id, tabs } if id == group => Some(tabs),
+                PaneNode::Split { first, second, .. } => {
+                    find_group(first, group).or_else(|| find_group(second, group))
                 }
-                find(self, source_group_id)
-                    .and_then(|tabs| tabs.iter().find(|tab| tab.id == tab_id))
-                    .cloned()
-            })
+                _ => None,
+            }
+        }
+        let moved = find_group(self, source_group_id)
+            .ok_or(LayoutError::PaneNotFound)?
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .cloned()
             .ok_or(LayoutError::TabNotFound)?;
         let without_source = rewrite_target(self, source_group_id, &|node| {
             let PaneNode::Tabs { id, tabs } = node else {
@@ -428,9 +424,9 @@ mod tests {
         let split = root
             .split_leaf(root.id(), crate::SplitAxis::Vertical, 0.5, PaneContent::Files)
             .unwrap();
-        let dest = split.leaves()[1].0;
-        let tab_id = root.leaves()[0].0;
-        assert_eq!(split.move_tab(root.id(), tab_id, dest).unwrap_err(), LayoutError::LastPane);
+        let dest = split.leaves()[1].0.to_owned();
+        let tab_id = root.leaves()[0].0.to_owned();
+        assert_eq!(split.move_tab(root.id(), &tab_id, &dest).unwrap_err(), LayoutError::LastPane);
         assert_eq!(split.leaves().len(), 2);
     }
 
