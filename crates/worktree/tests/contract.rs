@@ -375,6 +375,8 @@ fn non_utf8_paths_round_trip_through_status_and_diff() {
     let name = b"caf\xe9.txt".to_vec();
     let path = repo.path.join(std::ffi::OsString::from_vec(name.clone()));
     fs::write(&path, "invalid utf-8 name\n").expect("write non-utf8 fixture");
+    repo.commit("track non-utf8 name");
+    fs::write(&path, "invalid utf-8 name changed\n").expect("modify non-utf8 fixture");
 
     let worktree = repo.worktree();
     let status = worktree.status().unwrap();
@@ -388,7 +390,7 @@ fn non_utf8_paths_round_trip_through_status_and_diff() {
     let diff = worktree
         .diff(DiffScope::UnstagedFile(entry.path.clone()))
         .unwrap();
-    assert!(diff.text.contains("invalid utf-8 name"));
+    assert!(diff.text.contains("invalid utf-8 name changed"));
     // Display never panics even though the raw bytes are not UTF-8.
     assert!(entry.path.display().contains('\u{fffd}'));
 }
