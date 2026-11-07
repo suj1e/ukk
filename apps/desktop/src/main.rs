@@ -171,10 +171,14 @@ impl Workspace {
             )
     }
 
-    fn terminal_row(&self, terminal: &Terminal, cx: &mut Context<Self>) -> impl IntoElement {
+    fn terminal_row(&self, terminal: &Terminal, depth: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.selected.as_deref() == Some(terminal.address.as_str());
         let address = terminal.address.clone();
-        let display_name = terminal.display_name().to_owned();
+        let display_name = if depth > 0 {
+            format!("↳ {}", terminal.display_name())
+        } else {
+            terminal.display_name().to_owned()
+        };
         let status = if self.online {
             terminal.state_label().to_owned()
         } else {
@@ -238,7 +242,7 @@ impl Workspace {
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let entries = self.snapshot.terminals.clone();
+        let entries: Vec<(Terminal, usize)> = self.snapshot.hierarchy().into_iter().map(|(t, depth)| (t.clone(), depth)).collect();
         div()
             .flex()
             .flex_col()
@@ -305,7 +309,7 @@ impl Workspace {
                     .flex_col()
                     .gap_1()
                     .overflow_y_scroll()
-                    .children(entries.iter().map(|term| self.terminal_row(term, cx))),
+                    .children(entries.iter().map(|(term, depth)| self.terminal_row(term, *depth, cx))),
             )
             .child(
                 div()
