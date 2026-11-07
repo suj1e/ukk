@@ -15,6 +15,12 @@ Read [docs/OVERVIEW.zh-CN.md](docs/OVERVIEW.zh-CN.md), [docs/ARCHITECTURE.md](do
 9. Relay carries control/signalling, not raw video frames; screen media uses independent low-latency transport.
 10. Prefer typed structured Agent events; never infer approvals/tool execution from arbitrary terminal output.
 
+## Active delivery scope
+
+- Desktop: **macOS, Windows and Linux are all first-class GPUI targets**, with one shared UI codebase and OS-specific Host transports.
+- Mobile: **SwiftUI iOS / iPadOS** stays in active scope for QR pairing, session access, approvals and floating Remote Screen.
+- **Android, Web and TUI are deferred.** Do not scaffold their applications or schedule their implementation unless explicitly requested. Keep protocol and domain boundaries extensible.
+
 ## Working practices
 
 - Verify upstream APIs, versions, licenses and schemas before adding dependencies.
