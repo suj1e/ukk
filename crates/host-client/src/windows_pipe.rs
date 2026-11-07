@@ -160,7 +160,7 @@ pub fn create_server_pipe(name: &str, first_instance: bool) -> io::Result<File> 
     if unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
             sddl.as_ptr(),
-            SDDL_REVISION_1 as u32,
+            SDDL_REVISION_1,
             &mut descriptor,
             null_mut(),
         )
