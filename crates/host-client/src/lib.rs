@@ -7,6 +7,7 @@
 //! and a hard deadline before shipping as a production endpoint.
 
 use serde_json::{json, Value};
+use ukk_domain::DomainSnapshot;
 use std::collections::{HashMap, HashSet};
 #[cfg(unix)]
 use std::env;
@@ -293,6 +294,13 @@ impl HostClient {
 
     pub fn host_snapshot(&self) -> Result<LiveHostState, HostError> {
         LiveHostState::from_result(&self.request("host.snapshot")?)
+    }
+
+    /// Durable user-created Spaces / Sessions / AgentRun bindings / pane trees.
+    /// No herdr-core process state or chat content is fabricated here.
+    pub fn workspace_snapshot(&self) -> Result<DomainSnapshot, HostError> {
+        let value = self.request("workspace.snapshot")?;
+        Ok(serde_json::from_value(value)?)
     }
 
     /// Long-poll the Host broker. A return with the same epoch/revision means
