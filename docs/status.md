@@ -1,6 +1,6 @@
 # ukk — Implementation status
 
-> **Snapshot:** 2026-11-07, approximately 15:37 UTC. Baseline is `main` at `17fa080d97f9ba59634f1eaca1a0a92250b354c1`. This is a source/CI inventory, **not** a claim of on-device acceptance. Refresh this document after material PRs land.
+> **Snapshot:** 2026-11-08, approximately 00:30 UTC. Baseline is `main` at `8ea714d` plus the Q0 transport-fixture fix ([PR #14](https://github.com/suj1e/ukk/pull/14)). This is a source/CI inventory, **not** a claim of on-device acceptance. Refresh this document after material PRs land.
 >
 > **中文速览：** GPUI 多窗口/持久化布局已有基础；Agent 实际交互、真机验收、插件、远程配对、SwiftUI iOS 和会话内悬浮远控尚未完成。见 [可认领任务与依赖](roadmap.md)。
 
@@ -19,30 +19,32 @@ Canonical constraints: [AGENTS.md](../AGENTS.md), [Product](PRODUCT.md), [Archit
 
 | Area | Source on main | Validation boundary |
 | --- | --- | --- |
-| herdr-core adapter | `crates/hc-client` JSON-RPC bridge; terminal list and `events.subscribe` parsing | Mock tests exist; **real herdr-core compatibility and lifecycle acceptance remain outstanding** |
+| herdr-core adapter | `crates/hc-client` JSON-RPC bridge; terminal list and `events.subscribe` parsing | Mock transport tests are deterministic on three OSes; real `hc 0.1.18` `doctor`/`list`/`watch` verified on macOS. Launch/attach/send/interrupt lifecycles remain outstanding (R1) |
 | Host event broker | `crates/host/src/broker.rs`; reconnect, missed/gap recovery; `host.snapshot`/`host.wait`; read-only observation | Source and integration tests; no durable remote event replay |
-| Desktop Host transport | Shared local client; Unix socket on macOS/Linux and SID-scoped Windows Named Pipe | Code and cross-platform CI, but no completed real-user Windows ACL/blocked-I/O acceptance |
+| Desktop Host transport | Shared local client; Unix socket on macOS/Linux and SID-scoped Windows Named Pipe | Code and cross-platform CI, but no completed real-user Windows ACL/blocked-I/O acceptance. macOS SIGTERM leaves a stale socket and blocks restart (reproduced; H1) |
 | Durable metadata | `ukk-domain` + `ukk-store` SQLite Spaces/Sessions/AgentRuns, pane layouts, CAS and migrations | SQLite unit/integration coverage; no three-OS real GUI persistence acceptance |
 | Cross-window metadata | SQLite v2 DB epoch/revisions, `workspace.state`/`workspace.wait`, GPUI reconciliation — [PR #8](https://github.com/suj1e/ukk/pull/8) | CI-verified on PR; no recorded dual real-window smoke |
 | Native layout | Split/close/resize, horizontal/vertical drag with single CAS commit — [PR #9](https://github.com/suj1e/ukk/pull/9) | PR CI green; real mouse/nested layout acceptance pending |
-| Native tabs | `PaneNode::Tabs`, persistent membership/order, per-window focus, add/close/reorder — [PR #11](https://github.com/suj1e/ukk/pull/11) | PR CI green; cross-Pane drag and accessibility were deferred |
+| Native tabs | `PaneNode::Tabs`, persistent membership/order, per-window focus, add/close/reorder — [PR #11](https://github.com/suj1e/ukk/pull/11); cross-Pane move with one CAS — [PR #12](https://github.com/suj1e/ukk/pull/12) | PR CI green; real mouse and keyboard/accessibility acceptance deferred to Q0/D2 |
+| Deterministic hc test transport | Compiled `mock_hc` fixture via `CARGO_BIN_EXE_mock_hc`; no runtime script creation — [PR #14](https://github.com/suj1e/ukk/pull/14) | Root CI green on macOS/Ubuntu/Windows; eliminates the ETXTBSY flake |
 | Code organization | Small entrypoints; Desktop `workspace/*`, Host transport/RPC/broker, Domain and SQLite modules — [PR #7](https://github.com/suj1e/ukk/pull/7) | Three-OS CI for that PR; process and UI runtime acceptance pending |
 
 The Host has a **narrow local capability-protected mutation allowlist** for Session creation and Pane/Tab layout edits. This is *not* general Agent command authorization, remote device trust, or a complete identity/security review. Some older docs/issues describe these implemented pieces as pending; this status supersedes outdated progress claims, not their remaining acceptance requirements.
 
 ## In-flight / observed CI
 
-- **[PR #12 — cross-Pane Tab move](https://github.com/suj1e/ukk/pull/12)**: **open Draft**, head `c5be43b798aca4b489e377c512fbe030fd8ee782` at observation. Implements `PaneNode::move_tab`, local capability-protected `workspace.tab.move`, one SQLite CAS and GPUI Leaf/Tabs drop targets. **Not merged**. Real mouse, nested-target, stale-revision, keyboard and accessibility acceptance remain open. See the PR branch's [TAB_TRANSFER.md](https://github.com/suj1e/ukk/blob/feat/cross-pane-tab-move/docs/TAB_TRANSFER.md).
-- **PR #12 core/Host CI:** 3/3 macOS/Ubuntu/Windows passed for [run 42387121345](https://github.com/suj1e/ukk/actions/runs/42387121345). Its Desktop [run 42387121401](https://github.com/suj1e/ukk/actions/runs/42387121401) was **in progress** when checked; recheck before any merge.
-- **Latest observed main CI** for `17fa080`: [Desktop run 42385779703](https://github.com/suj1e/ukk/actions/runs/42385779703) succeeded on all three OSes; [root run 42385779740](https://github.com/suj1e/ukk/actions/runs/42385779740) **failed on Ubuntu**, while macOS/Windows passed. Failure: `crates/hc-client/tests/mock_protocol.rs::watches_snapshot_event_and_missed` expected `HcError::Protocol` on mock EOF. Cause is **unverified**; do not label fixed merely because a later PR branch passed.
+- **[PR #14 — deterministic hc mock transport](https://github.com/suj1e/ukk/pull/14)**: merged Q0 fix. The recurring Ubuntu failure was **`ETXTBSY` (ExecutableFileBusy)**: the test wrote a Python mock executable and immediately exec'd it while parallel test threads could inherit the still-open write descriptor. Replaced with a Cargo-built fixture binary (`CARGO_BIN_EXE_mock_hc`), removed the Python dependency and enabled the test on Windows. Root CI **6/6 green** (push + PR runs, macOS/Ubuntu/Windows).
+- **[PR #12 — cross-Pane Tab move](https://github.com/suj1e/ukk/pull/12)**: **merged** as `4499a02`. Implements `PaneNode::move_tab`, local capability-protected `workspace.tab.move`, one SQLite CAS and GPUI Leaf/Tabs drop targets. Core/Host and Desktop CI passed on all three OSes. Real mouse, nested-target, stale-revision, keyboard and accessibility acceptance remain open under D2/Q0.
+- **Latest observed root CI for the Q0 fix (head `f1f1850`)**: [push run 42389783352](https://github.com/suj1e/ukk/actions/runs/42389783352) and [PR run 42389787914](https://github.com/suj1e/ukk/actions/runs/42389787914) both passed macOS/Ubuntu/Windows. The previous `main` Ubuntu failure was the same ETXTBSY test-fixture race, not a protocol regression.
+- **Real macOS runtime evidence (2026-11-08)**: herdr-core `0.1.18` (signed release, checksum-verified) with two live terminals; `ukk-host doctor` reported 2 terminals, `list` returned both, `watch` emitted snapshot + `created` + `foreground` events. Stopping the Host left both hc terminals live. Restarting the Host failed with `Address already in use` because the stale Unix socket was retained — reproduced for H1.
 - CI builds and tests **do not open native windows**. None of these checkmarks demonstrate live drag, accessibility, launch-agent workflows, Windows different-user access denial or iPhone use.
 
 ## Open product gaps
 
 | Priority | Gap / current boundary | Task IDs in roadmap |
 | --- | --- | --- |
-| P0 | Stabilize `main` CI, reproduce Linux mock EOF behavior; real macOS/Windows/Linux GPUI, Host and SQLite smoke evidence | `Q0` |
-| P0 | Review/finish Draft #12; add tab keyboard navigation, accessible focus, restart-local focus persistence and correct CAS error UX | `D1`, `D2` |
+| P0 | Real macOS/Windows/Linux GPUI, Host and SQLite smoke evidence; Windows/Linux real-hc runs | `Q0` |
+| P0 | Cross-Pane move merged (#12); add tab keyboard navigation, accessible focus, restart-local focus persistence and correct CAS error UX | `D2` |
 | P0 | Verify real `hc` APIs and attach stream; user-authorized launch/send/interrupt with explicit provenance and lifetimes | `R1` |
 | P0 | Actual conversation/terminal/structured turn content, git diff/files/activity with truthful unsupported-state UX | `R2`, `D3` |
 | P0 | Host startup/restart/user-service lifecycle; Windows named-pipe security/deadline and Linux Wayland/X11 validation | `H1` |

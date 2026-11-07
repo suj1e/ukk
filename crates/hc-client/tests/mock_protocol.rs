@@ -1,90 +1,25 @@
 //! A black-box test of the hc connect JSON-line transport without requiring
-//! the real daemon in CI. Real herdr-core integration remains a Mac test.
-#![cfg(unix)]
+//! the real daemon in CI.
+//!
+//! The mock is a compiled fixture binary (`CARGO_BIN_EXE_mock_hc`), not a
+//! script written at runtime. Writing an executable and exec'ing it from
+//! parallel test threads is racy on Linux: another thread's `fork` can
+//! inherit the still-open write descriptor and the kernel reports
+//! `ETXTBSY` (ExecutableFileBusy). Cargo builds this fixture once, so the
+//! test observes only transport behaviour.
+//!
+//! Real herdr-core integration remains a manual platform acceptance test.
 
 use serde_json::{json, Value};
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static NEXT_MOCK_ID: AtomicU64 = AtomicU64::new(0);
-use std::time::{SystemTime, UNIX_EPOCH};
 use ukk_hc_client::{HcClient, HcError};
 
-struct MockHc {
-    dir: PathBuf,
-    binary: PathBuf,
-}
-
-impl MockHc {
-    fn new() -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let sequence = NEXT_MOCK_ID.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "ukk-hc-mock-{}-{unique}-{sequence}",
-            std::process::id()
-        ));
-        fs::create_dir(&dir).expect("create isolated mock directory");
-        let binary = dir.join("mock-hc");
-        fs::write(
-            &binary,
-            r#"#!/usr/bin/env python3
-import json
-import sys
-
-if sys.argv[1:] != ["connect"]:
-    sys.exit(2)
-
-request = json.loads(sys.stdin.readline())
-assert request["jsonrpc"] == "2.0"
-assert request["id"] == 1
-
-if request["method"] == "terminal.list":
-    print(json.dumps({
-        "jsonrpc": "2.0", "id": 1,
-        "result": {"terminals": [
-            {"address": "t3", "name": "codex", "argv":["codex"], "cwd":"/work", "state":"live", "labels":{}, "created_ms":1, "screen":"exact", "cols":80, "rows":24},
-            {"address": "t4", "name": "claude", "argv":["claude"], "cwd":"/work", "state":"live", "labels":{}, "created_ms":2, "screen":"exact", "cols":80, "rows":24}
-        ], "hidden_finished": 0, "machines":[]}
-    }), flush=True)
-elif request["method"] == "events.subscribe":
-    print(json.dumps({"jsonrpc": "2.0", "id": 1,
-        "result": {"seq": 10, "terminals": []}}), flush=True)
-    print(json.dumps({"jsonrpc": "2.0", "method": "event",
-        "params": {"seq": 11, "type": "created",
-                   "terminal": "t3", "data": {"id": "t3"}}}), flush=True)
-    print(json.dumps({"jsonrpc": "2.0", "method": "missed",
-        "params": {"seq": 18, "terminals": []}}), flush=True)
-else:
-    print(json.dumps({"jsonrpc": "2.0", "id": 1,
-        "error": {"code": -32601, "message": "not found"}}), flush=True)
-"#,
-        )
-        .expect("write mock executable");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
-        Self { dir, binary }
-    }
-
-    fn client(&self) -> HcClient {
-        HcClient::new(self.binary.as_os_str())
-    }
-}
-
-impl Drop for MockHc {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.dir);
-    }
+fn mock_client() -> HcClient {
+    HcClient::new(env!("CARGO_BIN_EXE_mock_hc"))
 }
 
 #[test]
 fn lists_multiple_terminals_through_hc_connect() {
-    let mock = MockHc::new();
-    let result = mock
-        .client()
+    let result = mock_client()
         .call("terminal.list", json!({}))
         .expect("real JSON-RPC round-trip to mock hc");
     assert_eq!(result["terminals"].as_array().unwrap().len(), 2);
@@ -93,17 +28,35 @@ fn lists_multiple_terminals_through_hc_connect() {
 
 #[test]
 fn watches_snapshot_event_and_missed() {
-    let mock = MockHc::new();
     let mut received: Vec<Value> = Vec::new();
-    let final_result = mock.client().watch(|message| {
+    let final_result = mock_client().watch(|message| {
         received.push(message);
         Ok(())
     });
     // A finite mock closes stdout. A live core should stream indefinitely.
-    assert!(matches!(final_result, Err(HcError::Protocol(_))));
+    assert!(
+        matches!(final_result, Err(HcError::Protocol(_))),
+        "unexpected notification-stream termination: {final_result:?}; received: {received:?}"
+    );
     assert_eq!(received.len(), 3);
     assert_eq!(received[0]["kind"], "snapshot");
     assert_eq!(received[0]["data"]["seq"], 10);
     assert_eq!(received[1]["data"]["method"], "event");
     assert_eq!(received[2]["data"]["method"], "missed");
+}
+
+/// Repeated subscriptions used to be the flaky path. Keep several sequential
+/// and concurrent streams in the suite so a future fixture regression is
+/// caught on every platform rather than only on Linux.
+#[test]
+fn repeated_watch_streams_terminate_deterministically() {
+    for _ in 0..8 {
+        let mut watched = 0_usize;
+        let result = mock_client().watch(|_| {
+            watched += 1;
+            Ok(())
+        });
+        assert!(matches!(result, Err(HcError::Protocol(_))));
+        assert_eq!(watched, 3);
+    }
 }
