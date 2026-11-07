@@ -78,9 +78,9 @@ impl Store {
 
     fn migrate(&mut self) -> Result<()> {
         // Most opens are reads on an up-to-date database: no writer lock.
-        let version: i64 = self.conn.pragma_query_value(
-            None, "user_version", |row| row.get(0)
-        )?;
+        let version: i64 = self
+            .conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version > 2 {
             return Err(StoreError::UnsupportedVersion(version));
         }
@@ -90,12 +90,10 @@ impl Store {
         // Upgrade under one IMMEDIATE transaction. A second process waiting
         // to migrate rechecks the version *after* acquiring the writer lock,
         // so it never tries to recreate tables already installed by another.
-        let tx = self.conn.transaction_with_behavior(
-            rusqlite::TransactionBehavior::Immediate
-        )?;
-        let version: i64 = tx.pragma_query_value(
-            None, "user_version", |row| row.get(0)
-        )?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version > 2 {
             return Err(StoreError::UnsupportedVersion(version));
         }
