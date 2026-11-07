@@ -17,7 +17,7 @@ macOS, Windows and Linux are **all first-class Desktop targets**, not a Mac-only
 
 The platform validation track runs throughout Milestones 0–4:
 - Three-OS GPUI and Rust CI is configured; results require verification.
-- Windows Named Pipe local Host IPC is mandatory before claiming Windows runtime support.
+- Windows Named Pipe local Host IPC source is committed. Windows runtime support still requires successful Windows CI, real hc tests, ACL/peer validation and bounded I/O.
 - Linux Wayland/X11 (and host systemd user-session) needs real runtime testing.
 - Remote Screen will use separate OS-specific capture/input adapters, never separate Agent UI products.
 
@@ -28,6 +28,14 @@ See [platform matrix](PLATFORM_SUPPORT.md) and [Issue #4](https://github.com/suj
 **Active product targets:** one GPUI Desktop codebase for **macOS / Windows / Linux** and a native **SwiftUI iOS / iPadOS** companion. Core multi-Agent, persistent Sessions, plugin platform, QR pairing, Relay and floating Remote Screen remain in scope. Windows Named Pipe and Linux desktop verification are first-class deliverables, not post-launch aspirations.
 
 **Deferred, not canceled:** Android native, Web UI and TUI. They stay as future protocol clients in architectural planning, but have **no current implementation milestone, project skeleton or required CI gate**. Reconsider them after the Desktop + iOS experience is validated.
+
+### Cross-platform IPC progress
+
+- Windows Named Pipe source, current-user SID DACL and host-client integration: committed (pending tests).
+- Local read-only Host RPC remains shared across macOS/Linux Unix socket and Windows Named Pipe.
+- **Not complete:** Windows CI/real runtime validation, cross-user ACL denial, hard read deadlines and final Host service lifecycle.
+
+See [Windows IPC runbook](WINDOWS_IPC.md).
 
 ## Milestone 0 — Source and interface feasibility
 
