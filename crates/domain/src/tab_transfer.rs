@@ -1,4 +1,4 @@
-            PaneNode::Split { .. } => Err(LayoutError::NotTabGroup),//! Atomic cross-Pane transfers. This module preserves tab IDs and all
+//! Atomic cross-Pane transfers. This module preserves tab IDs and all
 //! AgentRun associations without mutating process state or shared tab focus.
 use crate::tabs::{default_title, rewrite_target};
 use crate::{new_id, LayoutError, PaneNode, PaneTab};
@@ -48,9 +48,8 @@ impl PaneNode {
                 .position(|tab| tab.id == tab_id)
                 .ok_or(LayoutError::TabNotFound)?;
             let mut remaining = tabs.clone();
-            // Write the moved entry into a RefCell-free local lookup after
-            // reconstructing the immutable source. The source is never
-            // persisted independently of the destination.
+            // The original source and destination remain unchanged until
+            // the complete new tree passes validation and the Host CAS.
             remaining.remove(index);
             if remaining.len() == 1 {
                 let only = remaining.remove(0);
@@ -87,6 +86,7 @@ impl PaneNode {
                     tabs,
                 })
             }
+            PaneNode::Split { .. } => Err(LayoutError::NotTabGroup),
         })?
         .ok_or(LayoutError::PaneNotFound)?;
         updated.validate()?;
