@@ -1,4 +1,5 @@
 //! Explicit CLI commands, not a public remote API.
+use super::runtime_auth::AgentControlAuth;
 use super::*;
 
 pub(super) fn execute() -> AppResult<()> {
@@ -31,6 +32,36 @@ pub(super) fn execute() -> AppResult<()> {
                 Ok(())
             })
             .map_err(Into::into),
+        "agent-control-enable" => {
+            let path = AgentControlAuth::default_path();
+            match AgentControlAuth::provision(&path) {
+                Ok(path) => {
+                    println!("Agent control capability created at {}", path.display());
+                    println!("Mutating runtime RPC now requires this token; view close never stops an Agent.");
+                    Ok(())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(format!(
+                    "agent-control capability already exists at {}; remove it deliberately with agent-control-disable",
+                    path.display()
+                )
+                .into()),
+                Err(error) => Err(error.into()),
+            }
+        }
+        "agent-control-disable" => {
+            AgentControlAuth::remove(AgentControlAuth::default_path())?;
+            println!("Agent control capability removed; runtime mutations are disabled.");
+            Ok(())
+        }
+        "agent-control-status" => {
+            let auth = AgentControlAuth::from_env();
+            println!("enabled: {}", auth.is_enabled());
+            println!("path: {}", auth.path().display());
+            if let Some(problem) = auth.problem() {
+                println!("problem: {problem}");
+            }
+            Ok(())
+        }
         "workspace-dump" => {
             let snapshot = Store::open_default()?.snapshot()?;
             println!("{}", serde_json::to_string_pretty(&snapshot)?);
@@ -163,6 +194,9 @@ Commands:
   agent-bind           <session_id> <core_id> <address> <adapter> [parent_id]
   pane-split           <session_id> <pane_id> <horizontal|vertical> <surface> [agent_run_id]
   pane-close           <session_id> <pane_id> (never stops Agent)
+  agent-control-enable Create the separate agent-control token (mutations only)
+  agent-control-disable Remove that token; runtime mutations become disabled
+  agent-control-status Show whether agent control is enabled
   serve                Start private local Unix socket / Named Pipe
   request [method]     Read local Host RPC (default host.ping)
 Lifecycle (explicit; `serve` never installs anything):
@@ -174,6 +208,10 @@ Lifecycle (explicit; `serve` never installs anything):
 Local-only RPC metadata editing:
   workspace.session.create; workspace.pane.split/close/resize
   Requires rotated per-Host capability; never enables Agent commands.
+Runtime control (separate capability file, disabled until created):
+  runtime.observe/attach/send/interrupt/stop/detach/archive-finished
+  Mutations require request_id, intent=user and the agent-control token;
+  closing a view or detaching never stops a herdr-core process.
 Environment:
   UKK_HC_BIN, UKK_DB_PATH; UKK_SOCKET on macOS/Linux only"#
     );

@@ -194,6 +194,51 @@ Unknown scope strings fail to deserialize rather than widening a grant.
 Handshake scopes are advisory UI state only; authorization re-reads the live
 registry.
 
+## Agent runtime control capability
+
+Terminal input, interrupt, stop and runtime archive are **not** workspace
+metadata edits. They are gated by a separate capability that is disabled until
+an operator creates its own token file:
+
+- Default path: next to the local Host socket with extension
+  `.agent-control` (for example `~/.ukk/run/agent-host.agent-control`), or
+  `UKK_AGENT_CONTROL_TOKEN_FILE`. Windows uses
+  `%LOCALAPPDATA%\ukk\run\agent-host.agent-control`; an override may point
+  elsewhere but the Host still requires a regular file.
+- The file must be a regular file (no symlinks), ASCII, at least 60
+  characters, and mode `0600` on Unix. Any other state leaves control
+  disabled with a typed reason.
+- `ukk-host agent-control-enable` creates it explicitly and refuses to
+  overwrite an existing token; `agent-control-disable` removes it.
+- The rotated workspace metadata token in `local_auth.rs` is never accepted
+  for control. RPC calls carry the control value in a distinct `control`
+  field; an `auth` value is ignored for `runtime.*`.
+
+New `runtime.*` RPC methods require `request_id`, `intent: "user"` and the
+capability for every mutation. `request_id` is the idempotency key; a
+concurrent duplicate gets a typed "in flight" error instead of executing
+twice, and a reused id with different content is rejected. The Host keeps at
+most 256 completed ids and fails closed when that bound is reached instead of
+silently evicting an id that might still be retried. `intent: "user"` is a UI
+convention asserted by the caller, not cryptographic proof; the capability is
+the actual control boundary. The Host verifies the binding's `core_id`
+against the connected herdr-core identity before acting. Successful and
+denied control attempts are written to a JSONL audit file
+(`UKK_AGENT_CONTROL_AUDIT`, default beside the token) containing the request
+id, action, core id, terminal address, intent and outcome — never the token or
+terminal contents.
+
+Local-only threat model: the capability is same-user, same-host defense in
+depth, not remote authentication and not a boundary against a process that can
+already read the user's profile. herdr-core itself has no per-client
+permission model; anyone who reaches its socket has the account's shell
+access. Remote pairing and device authorization remain separate gates.
+
+Closing a Pane/Tab/Session/window, detaching a framed view or calling
+`runtime.detach` is local and performs **zero** runtime calls. There is no
+code path from view close to `terminal.kill` or `terminal.rm`.
+
+
 ## Credential management
 
 Use macOS Keychain / iOS Keychain. Host identity and pairing material must never be committed to git or logged. Rotate session keys independently of device trust. Persist only public identities/metadata in SQLite; protect sensitive local data with OS file permissions and storage design review.
