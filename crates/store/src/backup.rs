@@ -1115,6 +1115,7 @@ mod tests {
             );
         }
 
+        drop(connection);
         fs::remove_dir_all(directory).unwrap();
     }
 
