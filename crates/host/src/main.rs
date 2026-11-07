@@ -1,8 +1,9 @@
-//! Local, read-only integration spike: GPUI -> ukk Host -> herdr-core.
+//! Local-first Host: read-only herdr-core integration plus explicitly
+//! authorized SQLite Workspace/Session/Pane metadata edits.
 //!
 //! The prototype uses a private Unix-domain socket on macOS/Linux and an
 //! ACL-protected Named Pipe on Windows. It exposes no public network server,
-//! remote pairing, agent mutation or plugin execution. The in-memory event
+//! remote pairing, Agent execution mutation or plugin execution. The in-memory event
 //! broker is not yet a durable, authenticated cross-device event service.
 
 mod broker;
@@ -171,7 +172,7 @@ fn execute() -> AppResult<()> {
 
 fn print_help() {
     println!(
-        "ukk-host (read-only integration spike)\n\
+        "ukk-host (local metadata actions; Agent runtime read-only)\n\
         Commands:\n\
           doctor             Test hc connect + terminal.list\n\
           list               Print hc terminal snapshot\n\
@@ -186,7 +187,8 @@ fn print_help() {
           pane-close         Close view: <session_id> <pane_id> (never stops Agent)\n\
           serve              Start local IPC (Unix socket / Windows Named Pipe)\n\
           request [method]   Query local Host RPC (default host.ping)\n\
-        Supported Host RPC methods: host.ping, terminal.list, host.snapshot, host.wait\n\
+        Host RPC: host.ping, terminal.list, host.snapshot, host.wait, workspace.snapshot,\n\\
+        workspace.session.create, workspace.pane.split/close/resize (local capability only)\n\
         Environment: UKK_HC_BIN, UKK_DB_PATH; UKK_SOCKET only on macOS/Linux"
     );
 }
@@ -317,7 +319,7 @@ fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> Value {
     match req["method"].as_str().unwrap_or_default() {
         "host.ping" => json!({
             "jsonrpc":"2.0","id":id,
-            "result":{"status":"ok","protocol":"ukk-local-spike-1","read_only":true}
+            "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":true,"workspace_edits":"local-capability-only"}
         }),
         method @ (
             "workspace.session.create"
@@ -425,14 +427,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ping_is_read_only() {
+    fn ping_describes_capability_boundary() {
         let broker = Broker::new();
         let auth = LocalAuth::test();
         let response = handle_request(&json!({
             "jsonrpc":"2.0","id":19,"method":"host.ping","params":{}
         }), &broker, &auth);
         assert_eq!(response["id"], 19);
-        assert_eq!(response["result"]["read_only"], true);
+        assert_eq!(response["result"]["agent_runtime_read_only"], true);
+        assert_eq!(response["result"]["workspace_edits"], "local-capability-only");
     }
 
     #[test]
