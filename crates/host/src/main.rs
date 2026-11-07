@@ -11,7 +11,7 @@ use broker::Broker;
 use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::sync::Arc;
 #[cfg(windows)]
 use ukk_host_client::windows_pipe;
