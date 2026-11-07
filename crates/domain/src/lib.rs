@@ -195,6 +195,40 @@ impl PaneNode {
         Ok(updated)
     }
 
+    /// Adjust the split identified by its own ID, without touching the child
+    /// Pane IDs, the displayed AgentRun, or the underlying terminal.
+    pub fn resize_split(&self, target: &str, ratio: f32) -> Result<Self, LayoutError> {
+        if !ratio.is_finite() || !(0.15..=0.85).contains(&ratio) {
+            return Err(LayoutError::InvalidRatio);
+        }
+        fn replace(node: &PaneNode, target: &str, ratio: f32) -> Option<PaneNode> {
+            match node {
+                PaneNode::Leaf { .. } => None,
+                PaneNode::Split { id, axis, ratio: old_ratio, first, second } => {
+                    if id == target {
+                        return Some(PaneNode::Split {
+                            id: id.clone(), axis: *axis, ratio,
+                            first: first.clone(), second: second.clone(),
+                        });
+                    }
+                    if let Some(updated) = replace(first, target, ratio) {
+                        return Some(PaneNode::Split {
+                            id: id.clone(), axis: *axis, ratio: *old_ratio,
+                            first: Box::new(updated), second: second.clone(),
+                        });
+                    }
+                    replace(second, target, ratio).map(|updated| PaneNode::Split {
+                        id: id.clone(), axis: *axis, ratio: *old_ratio,
+                        first: first.clone(), second: Box::new(updated),
+                    })
+                }
+            }
+        }
+        let next = replace(self, target, ratio).ok_or(LayoutError::PaneNotFound)?;
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Close a view and collapse its parent split. The final leaf is retained.
     pub fn close_leaf(&self, target: &str) -> Result<Self, LayoutError> {
         fn remove(node: &PaneNode, target: &str) -> Option<PaneNode> {
@@ -290,6 +324,21 @@ mod tests {
         assert_eq!(collapsed, original);
         assert_eq!(collapsed.leaves()[0].0, original_id);
         assert_eq!(original.leaves().len(), 1);
+    }
+
+    #[test]
+    fn resize_preserves_child_identity_and_rejects_invalid_targets() {
+        let first = PaneNode::leaf(PaneContent::Activity);
+        let split = first
+            .split_leaf(first.id(), SplitAxis::Horizontal, 0.5, PaneContent::Diff)
+            .unwrap();
+        let ids_before: Vec<String> = split.leaves().iter().map(|(id, _)| (*id).to_owned()).collect();
+        let resized = split.resize_split(split.id(), 0.65).unwrap();
+        let ids_after: Vec<String> = resized.leaves().iter().map(|(id, _)| (*id).to_owned()).collect();
+        assert_eq!(ids_before, ids_after);
+        assert!(matches!(&resized, PaneNode::Split { ratio, .. } if (*ratio - 0.65).abs() < f32::EPSILON));
+        assert_eq!(split.resize_split("missing", 0.6).unwrap_err(), LayoutError::PaneNotFound);
+        assert_eq!(split.resize_split(split.id(), f32::NAN).unwrap_err(), LayoutError::InvalidRatio);
     }
 
     #[test]
