@@ -6,8 +6,8 @@
 
 - **Spike 01:** Rust `hc connect` JSON-RPC client, read-only Host socket, mock tests — committed; Mac validation pending.
 - **Spike 02:** new GPUI shell, typed Host IPC client, dynamic Agent tree — committed; macOS compile and screenshot pending.
-- **Spike 03:** live `events.subscribe` broker, sequence gap/`missed` recovery, process-local revisioned Host snapshots/long-poll, automatic GPUI update; unit and integration test source — committed; CI/macOS validation pending.
-- **Still not started:** persistent ukk-domain Session/AgentRun data model, multiple independent native panes, structured Agent adapters, plugin runtime, QR pairing, iOS UI, Remote Screen.
+- **Spike 04:** domain crate + SQLite durable Spaces/Sessions/AgentRun bindings, versioned split-pane layouts, Host read-only workspace snapshot, local CLI layout commands and GPUI session navigator — source committed; CI/native runtime pending.\n- **Spike 03:** live `events.subscribe` broker, sequence gap/`missed` recovery, process-local revisioned Host snapshots/long-poll, automatic GPUI update; unit and integration test source — committed; CI/macOS validation pending.
+- **Still not started:** draggable native pane layout and tab management, structured Agent adapters, plugin runtime, QR pairing, iOS UI, Remote Screen. Persisted Session/AgentRun and static split rendering now have initial source.
 
 This progress is a **technical vertical slice**, not completion of the full milestone gates below. See [Live Runtime Sync](LIVE_EVENTS.md).
 
