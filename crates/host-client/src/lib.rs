@@ -7,14 +7,14 @@
 //! and a hard deadline before shipping as a production endpoint.
 
 use serde_json::{json, Value};
-use ukk_domain::DomainSnapshot;
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::fs;
 use std::error::Error;
 use std::fmt;
+use std::fs;
 #[cfg(any(unix, windows))]
 use std::io::{BufReader, Read, Write};
+use ukk_domain::DomainSnapshot;
 #[cfg(windows)]
 pub mod windows_pipe;
 use std::path::PathBuf;
@@ -50,11 +50,15 @@ impl fmt::Display for HostError {
 impl Error for HostError {}
 
 impl From<std::io::Error> for HostError {
-    fn from(error: std::io::Error) -> Self { Self::Io(error) }
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
 }
 
 impl From<serde_json::Error> for HostError {
-    fn from(error: serde_json::Error) -> Self { Self::Json(error) }
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(error)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,7 +130,12 @@ impl HostSnapshot {
             .terminals
             .iter()
             .enumerate()
-            .filter(|(_, terminal)| terminal.parent.as_deref().is_none_or(|p| !known.contains(p)))
+            .filter(|(_, terminal)| {
+                terminal
+                    .parent
+                    .as_deref()
+                    .is_none_or(|p| !known.contains(p))
+            })
             .map(|(index, _)| index);
         let seeds = roots.chain(0..self.terminals.len());
         let mut seen = HashSet::new();
@@ -158,7 +167,9 @@ impl HostSnapshot {
         let rows = result
             .get("terminals")
             .and_then(Value::as_array)
-            .ok_or_else(|| HostError::Protocol("terminal.list result missing terminals array".into()))?;
+            .ok_or_else(|| {
+                HostError::Protocol("terminal.list result missing terminals array".into())
+            })?;
 
         let mut terminals = Vec::with_capacity(rows.len());
         for row in rows {
@@ -176,11 +187,15 @@ impl HostSnapshot {
             let argv = row
                 .get("argv")
                 .and_then(Value::as_array)
-                .ok_or_else(|| HostError::Protocol(format!("terminal {address} missing argv array")))?
+                .ok_or_else(|| {
+                    HostError::Protocol(format!("terminal {address} missing argv array"))
+                })?
                 .iter()
                 .map(|entry| entry.as_str().map(str::to_owned))
                 .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| HostError::Protocol(format!("terminal {address} has invalid argv")))?;
+                .ok_or_else(|| {
+                    HostError::Protocol(format!("terminal {address} has invalid argv"))
+                })?;
 
             terminals.push(Terminal {
                 address,
@@ -247,7 +262,10 @@ impl LiveHostState {
                 .get("connected")
                 .and_then(Value::as_bool)
                 .ok_or_else(|| HostError::Protocol("missing connected flag".into()))?,
-            message: value.get("message").and_then(Value::as_str).map(str::to_owned),
+            message: value
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             snapshot: HostSnapshot::from_result(value)?,
         })
     }
@@ -272,9 +290,14 @@ impl HostClient {
     pub fn from_env() -> Self {
         let path = env::var_os("UKK_SOCKET")
             .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| {
-                PathBuf::from(home).join(".ukk").join("run").join("agent-host.sock")
-            }))
+            .or_else(|| {
+                env::var_os("HOME").map(|home| {
+                    PathBuf::from(home)
+                        .join(".ukk")
+                        .join("run")
+                        .join("agent-host.sock")
+                })
+            })
             .unwrap_or_else(|| PathBuf::from("/nonexistent/ukk/agent-host.sock"));
         Self::new(path)
     }
@@ -304,7 +327,9 @@ impl HostClient {
         let token = fs::read_to_string(self.mutation_token_path())?;
         let token = token.trim();
         if token.len() < 60 || !token.is_ascii() {
-            return Err(HostError::Protocol("invalid local Host mutation credential".into()));
+            return Err(HostError::Protocol(
+                "invalid local Host mutation credential".into(),
+            ));
         }
         Ok(token.to_owned())
     }
@@ -319,10 +344,14 @@ impl HostClient {
     ) -> Result<Value, HostError> {
         if !matches!(
             method,
-            "workspace.session.create" | "workspace.pane.split"
-                | "workspace.pane.close" | "workspace.pane.resize"
+            "workspace.session.create"
+                | "workspace.pane.split"
+                | "workspace.pane.close"
+                | "workspace.pane.resize"
         ) {
-            return Err(HostError::Protocol("method is not an allowed local workspace mutation".into()));
+            return Err(HostError::Protocol(
+                "method is not an allowed local workspace mutation".into(),
+            ));
         }
         let object = params.as_object_mut().ok_or_else(|| {
             HostError::Protocol("workspace mutation params must be an object".into())
@@ -375,7 +404,12 @@ impl HostClient {
     }
 
     #[cfg(unix)]
-    fn request_with(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, HostError> {
+    fn request_with(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, HostError> {
         let mut stream = UnixStream::connect(&self.path)?;
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(TIMEOUT))?;
@@ -391,7 +425,9 @@ impl HostClient {
         loop {
             let mut byte = [0u8; 1];
             if reader.read(&mut byte)? == 0 {
-                return Err(HostError::Protocol("Host closed before full response".into()));
+                return Err(HostError::Protocol(
+                    "Host closed before full response".into(),
+                ));
             }
             bytes.push(byte[0]);
             if bytes.len() > MAX_REPLY_BYTES {
@@ -410,13 +446,19 @@ impl HostClient {
         if let Some(error) = response.get("error") {
             return Err(HostError::Remote(error.clone()));
         }
-        response.get("result").cloned().ok_or_else(|| {
-            HostError::Protocol("Host reply missing result".into())
-        })
+        response
+            .get("result")
+            .cloned()
+            .ok_or_else(|| HostError::Protocol("Host reply missing result".into()))
     }
 
     #[cfg(windows)]
-    fn request_with(&self, method: &str, params: Value, _timeout: Duration) -> Result<Value, HostError> {
+    fn request_with(
+        &self,
+        method: &str,
+        params: Value,
+        _timeout: Duration,
+    ) -> Result<Value, HostError> {
         // Named Pipe endpoint has an explicit same-user ACL; no TCP fallback.
         // _timeout is not yet enforced on synchronous Win32 read; tracked in
         // docs/WINDOWS_IPC.md. Keep RPC strictly read-only until reviewed.
@@ -432,7 +474,9 @@ impl HostClient {
         loop {
             let mut byte = [0u8; 1];
             if reader.read(&mut byte)? == 0 {
-                return Err(HostError::Protocol("Host pipe closed before full response".into()));
+                return Err(HostError::Protocol(
+                    "Host pipe closed before full response".into(),
+                ));
             }
             bytes.push(byte[0]);
             if bytes.len() > MAX_REPLY_BYTES {
@@ -451,13 +495,19 @@ impl HostClient {
         if let Some(error) = reply.get("error") {
             return Err(HostError::Remote(error.clone()));
         }
-        reply.get("result").cloned().ok_or_else(|| {
-            HostError::Protocol("Host reply missing result".into())
-        })
+        reply
+            .get("result")
+            .cloned()
+            .ok_or_else(|| HostError::Protocol("Host reply missing result".into()))
     }
 
     #[cfg(not(any(unix, windows)))]
-    fn request_with(&self, _method: &str, _params: Value, _timeout: Duration) -> Result<Value, HostError> {
+    fn request_with(
+        &self,
+        _method: &str,
+        _params: Value,
+        _timeout: Duration,
+    ) -> Result<Value, HostError> {
         Err(HostError::UnsupportedPlatform)
     }
 }
@@ -518,7 +568,10 @@ mod tests {
     #[test]
     fn rejects_invalid_snapshot_schema() {
         let mut result = valid_result();
-        result["terminals"][0].as_object_mut().unwrap().remove("address");
+        result["terminals"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("address");
         assert!(HostSnapshot::from_result(&result).is_err());
     }
 
@@ -581,7 +634,9 @@ mod tests {
 
     #[test]
     fn prefers_explicit_name_to_terminal_title() {
-        let first = &HostSnapshot::from_result(&valid_result()).unwrap().terminals[0];
+        let first = &HostSnapshot::from_result(&valid_result())
+            .unwrap()
+            .terminals[0];
         assert_eq!(first.display_name(), "codex");
     }
 }
