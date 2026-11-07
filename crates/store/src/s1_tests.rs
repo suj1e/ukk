@@ -519,15 +519,18 @@ fn idempotency_concurrent_begin_admits_exactly_one_execution() {
     let fingerprint = sample_fingerprint();
     let principal = Principal::Device(DeviceId::new("device-1").unwrap());
     let barrier = Arc::new(Barrier::new(2));
+    // Open both connections before starting the race. Concurrently opening the
+    // same SQLite file is a Windows sharing-violation path, not the property
+    // under test; the barrier below still exercises concurrent transactions.
+    let first = Store::open(&path).unwrap();
+    let second = Store::open(&path).unwrap();
     let mut handles = Vec::new();
-    for _ in 0..2 {
-        let path = path.clone();
+    for mut store in [first, second] {
         let key = key.clone();
         let fingerprint = fingerprint.clone();
         let principal = principal.clone();
         let barrier = Arc::clone(&barrier);
         handles.push(thread::spawn(move || {
-            let mut store = Store::open(&path).unwrap();
             barrier.wait();
             store.begin_idempotent_command(Plane::Remote, &principal, &key, &fingerprint, 1_000)
         }));

@@ -34,6 +34,34 @@ pub fn default_database_path() -> Result<PathBuf> {
     }
 }
 
+fn open_connection(path: &Path) -> Result<Connection> {
+    let mut attempt = 0;
+    loop {
+        match Connection::open(path) {
+            Ok(conn) => return Ok(conn),
+            Err(error) if attempt + 1 < SQLITE_RETRY_ATTEMPTS && is_retryable_sqlite(&error) => {
+                attempt += 1;
+                retry_delay(attempt);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn configure_connection(conn: &Connection) -> Result<()> {
+    let mut attempt = 0;
+    loop {
+        match conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;") {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt + 1 < SQLITE_RETRY_ATTEMPTS && is_retryable_sqlite(&error) => {
+                attempt += 1;
+                retry_delay(attempt);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 impl Store {
     pub fn open_default() -> Result<Self> {
         let path = default_database_path()?;
@@ -73,9 +101,9 @@ impl Store {
                 .mode(0o600)
                 .open(path)?;
         }
-        let conn = Connection::open(path)?;
+        let conn = open_connection(path)?;
         conn.busy_timeout(Duration::from_secs(3))?;
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+        configure_connection(&conn)?;
         let mut store = Self { conn, limits };
         store.migrate()?;
         Ok(store)

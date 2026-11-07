@@ -120,6 +120,32 @@ impl From<IdempotencyError> for StoreError {
 
 pub type Result<T, E = StoreError> = std::result::Result<T, E>;
 
+/// Number of attempts for transient SQLite open/lock contention. The normal
+/// path succeeds on the first attempt; retries only cover Windows sharing
+/// violations and `SQLITE_BUSY`/`SQLITE_LOCKED` beyond the busy timeout.
+pub(crate) const SQLITE_RETRY_ATTEMPTS: usize = 5;
+
+pub(crate) fn is_retryable_sqlite(error: &rusqlite::Error) -> bool {
+    match error {
+        rusqlite::Error::SqliteFailure(code, message) => {
+            matches!(
+                code.code,
+                rusqlite::ErrorCode::CannotOpen
+                    | rusqlite::ErrorCode::DatabaseBusy
+                    | rusqlite::ErrorCode::DatabaseLocked
+            ) || message.as_deref().is_some_and(|message| {
+                message.contains("used by another process")
+                    || message.contains("cannot access the file")
+            })
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn retry_delay(attempt: usize) {
+    std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
+}
+
 pub struct Store {
     conn: Connection,
     limits: ukk_protocol::Limits,
