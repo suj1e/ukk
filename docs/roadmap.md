@@ -110,6 +110,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** versioned typed command/event envelopes, server-side scopes, device identity/grants, monotonic per-stream cursor, snapshot/replay on gaps, idempotency keys and result classification. **Never** use ephemeral `hc_seq` or Host `host_epoch` as a durable cross-device cursor. Bound payload sizes, queues and retention; forbid blind replay of approvals or pointer input.
 - **Exit:** mock two-client reconnect/revocation/duplication/dropped-ACK/out-of-order/gap tests; security review and migration strategy; local IPC remains distinct from WAN protocol.
 - **Dependency:** H1 authorization boundary; can build protocol crate and contract tests in parallel with R1/R2.
+- **Status (2026-11-08):** crate merged as `e0eff7f` (PR #23) with 30 integration tests and three-OS CI. Security review found no blocker; live revocation, snapshot inbox resume and in-flight idempotency were fixed before merge. Host transport/SQLite wiring and S2 pairing/E2EE remain.
 
 ### S2 — QR pairing, device trust, Relay integration
 
@@ -126,6 +127,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** build Workspace/Space/Session/Agent navigation, chat-first Session screen, live/offline indicators, approvals only where explicitly supported, trusted-device UI and QR scan presentation. Use deterministic mock data clearly labelled as fixtures until S1/S2 work. Add reconnect, backgrounding and notification interface contracts; APNs delivery is not proven until entitlement/device testing.
 - **Exit:** simulator build + UI/unit tests; on-device QA separately; then a paired physical iPhone reconnects to real Host sessions and can send an authorized Agent command.
 - **Dependency:** implement shell in parallel, integrate S1/S2/R1 afterward. No floating screen yet except a reserved extension slot.
+- **Status (2026-11-08):** shell merged as `6c9b164` (PR #21) with a new iOS CI workflow, 70 unit tests green and all review findings fixed. It is still fixture-only: no real Host/relay pairing, approvals, APNs, on-device camera or floating screen.
 
 ## Wave D — Session-scoped Remote Screen (P2; not a separate product)
 
