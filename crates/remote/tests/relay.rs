@@ -21,6 +21,10 @@ use ukk_remote::{
 
 const NOW: i64 = 1_000_000;
 
+/// Per-peer queue bound in the mock relay. Exceeding it disconnects the slow
+/// peer instead of growing memory without limit.
+const MAX_PEER_QUEUE_FRAMES: usize = 64;
+
 fn host_id() -> HostId {
     HostId::new("host-1").unwrap()
 }
@@ -100,9 +104,17 @@ impl Core {
             Err(_) => return,
         };
         if let Some(endpoint) = self.endpoints.get_mut(&to) {
-            if endpoint.connected {
-                endpoint.inbox.push_back(encoded);
+            if !endpoint.connected {
+                return;
             }
+            if endpoint.inbox.len() >= MAX_PEER_QUEUE_FRAMES {
+                // Bounded queue: a peer that never drains is disconnected
+                // rather than buffered without limit.
+                endpoint.connected = false;
+                endpoint.inbox.clear();
+                return;
+            }
+            endpoint.inbox.push_back(encoded);
         }
     }
 
@@ -916,6 +928,40 @@ fn revocation_and_session_close_fail_closed() {
             code: RelayErrorCode::SessionClosed,
         }
     );
+}
+
+#[test]
+fn relay_queues_are_bounded_and_overflow_fails_closed() {
+    let hub = Hub::new();
+    let mut host_link = hub.link();
+    let mut host = RelayDriver::host(host_id());
+    register_host(&mut host_link, &mut host);
+    let mut phone_link = hub.link();
+    let mut phone = RelayDriver::phone(host_id());
+    route_phone(&mut host_link, &mut host, &mut phone_link, &mut phone);
+
+    // Fill the Host inbox without reading, then push one more.
+    for index in 0..=MAX_PEER_QUEUE_FRAMES {
+        send_payload(&phone, &mut phone_link, format!("frame-{index}").as_bytes());
+    }
+    // The overflow disconnected the slow peer and cleared its queue.
+    assert_eq!(
+        host_link.recv_frame(MAX_SIGNALLING_FRAME_BYTES),
+        Err(RelayError::Offline)
+    );
+
+    // The phone learns on its next frame that the route is gone.
+    send_payload(&phone, &mut phone_link, b"after overflow");
+    let error = phone_link.recv();
+    assert_eq!(
+        error,
+        RelayMessage::Error {
+            v: SIGNALLING_VERSION,
+            code: RelayErrorCode::Offline,
+        }
+    );
+    assert_eq!(phone.handle(error), Err(RelayError::Offline));
+    assert_eq!(phone.state(), &RelayState::Closed);
 }
 
 #[test]

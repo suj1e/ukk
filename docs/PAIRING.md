@@ -251,7 +251,9 @@ Failure posture: duplicate registration is refused without evicting the first
 connection; a route for an unknown/closed session is refused; an oversized
 envelope or payload is rejected before parsing/buffering; a stale generation,
 wrong Host, out-of-order message or typed relay error permanently closes the
-driver. The v1 driver tracks one routed session per connection; a second
+driver. Per-peer delivery queues are bounded: the mock relay caps a peer at
+64 undrained frames and disconnects it on overflow instead of growing memory;
+a production adapter must apply an equivalent bound. The v1 driver tracks one routed session per connection; a second
 `route` is a protocol error rather than a silent misroute. A production
 multiplexer would keep a per-session table, which is out of scope here.
 
@@ -326,7 +328,7 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 (BSD-3-Clause),
 
 ## What the tests prove
 
-`crates/remote/tests` (74 tests including unit tests):
+`crates/remote/tests` (75 tests including unit tests):
 
 * invite round-trip, strict unknown/missing field rejection, oversized and
   trailing input, unsafe relay schemes, secret redaction and zeroize-on-demand;
@@ -351,7 +353,7 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 (BSD-3-Clause),
   phone routing, a full Noise pairing exchange carried as bounded opaque
   frames, duplicate registration, offline/unknown-route/resume refusal,
   reconnect generation advancement, oversized frame/payload rejection,
-  session close and revocation. The mock is synchronous and deterministic; it
+  bounded-queue overflow, session close and revocation. The mock is synchronous and deterministic; it
   opens no socket and makes no external call.
 
 **NOT VERIFIED:** real alma-relay interoperability (no WSS, TLS, relay
