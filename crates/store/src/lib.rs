@@ -7,10 +7,11 @@
 //! `ukk-protocol`; this crate only persists and reloads them.
 
 use rusqlite::Connection;
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, path::PathBuf};
 use ukk_domain::LayoutError;
 use ukk_protocol::{EnvelopeError, IdempotencyError, LimitError, RegistryError, SyncError};
 
+pub mod backup;
 mod events;
 mod idempotency;
 mod layouts;
@@ -42,6 +43,11 @@ pub enum StoreError {
     CasConflict,
     DuplicateEvent(String),
     UnsupportedVersion(i64),
+    DestinationExists(PathBuf),
+    UnsafePath(String),
+    NotADatabase(String),
+    IntegrityCheckFailed(String),
+    Busy(String),
 }
 
 impl fmt::Display for StoreError {
@@ -66,6 +72,19 @@ impl fmt::Display for StoreError {
             Self::UnsupportedVersion(v) => {
                 write!(f, "database schema version {v} is newer than supported")
             }
+            Self::DestinationExists(path) => {
+                write!(
+                    f,
+                    "destination already exists: {} (overwrite was not requested)",
+                    path.display()
+                )
+            }
+            Self::UnsafePath(detail) => write!(f, "unsafe path: {detail}"),
+            Self::NotADatabase(detail) => write!(f, "not a ukk workspace database: {detail}"),
+            Self::IntegrityCheckFailed(detail) => {
+                write!(f, "SQLite integrity check failed: {detail}")
+            }
+            Self::Busy(detail) => write!(f, "database is busy: {detail}"),
         }
     }
 }
