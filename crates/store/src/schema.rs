@@ -134,9 +134,11 @@ impl Store {
             tx.execute_batch(
                 "CREATE TABLE workspace_revision (
                     id INTEGER PRIMARY KEY CHECK(id=1),
-                    revision INTEGER NOT NULL CHECK(revision >= 0)
+                    revision INTEGER NOT NULL CHECK(revision >= 0),
+                    db_epoch TEXT NOT NULL
                 );
-                INSERT INTO workspace_revision(id, revision) VALUES(1, 0);",
+                INSERT INTO workspace_revision(id, revision, db_epoch)
+                VALUES(1, 0, lower(hex(randomblob(16))));",
             )?;
             for table in ["spaces", "sessions", "agent_runs", "session_layouts"] {
                 for (operation, suffix) in [
