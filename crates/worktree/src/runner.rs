@@ -67,6 +67,17 @@ impl Worktree {
         {
             return WorktreeError::PermissionDenied { operation, detail };
         }
+        if lower.contains("cannot change to")
+            || lower.contains("no such file or directory")
+            || lower.contains("not a directory")
+            || lower.contains("cannot find the file specified")
+            || lower.contains("cannot find the path specified")
+        {
+            return WorktreeError::NotARepository {
+                path: self.project_root.clone(),
+                detail: Some(detail),
+            };
+        }
         WorktreeError::GitFailed {
             operation,
             exit_code: output.exit_code,
@@ -131,7 +142,11 @@ fn run(
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_PAGER", "cat")
-        .env("PAGER", "cat");
+        .env("PAGER", "cat")
+        // Error classification is based on Git's English prose; keep the
+        // child's locale stable across user environments.
+        .env("LC_ALL", "C")
+        .env("LANG", "C");
 
     let mut child = command.spawn().map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => WorktreeError::GitMissing {
@@ -290,6 +305,22 @@ mod tests {
                 assert!(stderr.contains("unexpected failure"));
             }
             error => panic!("expected GitFailed, got {error:?}"),
+        }
+    }
+
+    #[test]
+    fn a_missing_project_directory_is_not_a_repository() {
+        let worktree = probe();
+        for stderr in [
+            b"fatal: cannot change to '/missing': No such file or directory\n".as_slice(),
+            b"fatal: cannot change to 'C:\\missing': The system cannot find the file specified.\n"
+                .as_slice(),
+            b"fatal: cannot chdir: Not a directory\n".as_slice(),
+        ] {
+            assert!(matches!(
+                worktree.classify_failure("rev-parse", &failure(stderr)),
+                WorktreeError::NotARepository { .. }
+            ));
         }
     }
 

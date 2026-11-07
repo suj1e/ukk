@@ -152,8 +152,10 @@ impl Status {
         self.entries.iter().filter(|entry| entry.conflicted).count()
     }
 
+    /// Clean means "no changes" with confidence. A byte-truncated status with
+    /// no parsed entries is unknown, not clean.
     pub fn is_clean(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && !self.truncated
     }
 
     pub fn head_short(&self) -> Option<&str> {
@@ -171,9 +173,18 @@ impl Status {
     }
 }
 
-pub(crate) fn parse(raw: &[u8], max_entries: usize) -> Status {
-    let mut status = Status::default();
-    let mut records = raw.split(|byte| *byte == 0);
+pub(crate) fn parse(raw: &[u8], max_entries: usize, output_truncated: bool) -> Status {
+    let mut status = Status {
+        truncated: output_truncated,
+        ..Status::default()
+    };
+    // A truncated stream can end in the middle of a record. Discard that
+    // partial record instead of reporting a mangled path.
+    let mut records = raw.split(|byte| *byte == 0).collect::<Vec<_>>();
+    if output_truncated && !raw.ends_with(b"\0") {
+        records.pop();
+    }
+    let mut records = records.into_iter();
     while let Some(record) = records.next() {
         if record.is_empty() {
             continue;
@@ -342,7 +353,7 @@ mod tests {
     fn parses_branch_headers_and_ordinary_entries() {
         let mut raw = b"# branch.oid abc123def\0# branch.head main\0# branch.upstream origin/main\0# branch.ab +2 -3\0".to_vec();
         raw.extend_from_slice(b"1 .M N... 100644 100644 100644 aaa bbb src/lib.rs\0");
-        let status = parse(&raw, 10);
+        let status = parse(&raw, 10, false);
         assert_eq!(status.branch.as_deref(), Some("main"));
         assert_eq!(status.head.as_deref(), Some("abc123def"));
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
@@ -358,7 +369,7 @@ mod tests {
     #[test]
     fn parses_rename_with_original_path_and_spaces() {
         let raw = b"2 R. N... 100644 100644 100644 aaa bbb R100 new name.rs\0old name.rs\0";
-        let status = parse(raw, 10);
+        let status = parse(raw, 10, false);
         let entry = &status.entries[0];
         assert_eq!(entry.path.display(), "new name.rs");
         assert_eq!(
@@ -373,7 +384,7 @@ mod tests {
     fn parses_unicode_and_non_utf8_paths_without_panicking() {
         let mut raw = b"1 .M N... 100644 100644 100644 aaa bbb caff\xc3\xa8.rs\0".to_vec();
         raw.extend_from_slice(b"? caf\xe9.rs\0");
-        let status = parse(&raw, 10);
+        let status = parse(&raw, 10, false);
         assert_eq!(status.entries[0].path.display(), "caffè.rs");
         assert!(!status.entries[1].path.is_utf8());
         assert_eq!(status.entries[1].path.display(), "caf�.rs");
@@ -383,7 +394,7 @@ mod tests {
     #[test]
     fn parses_conflicts_and_counts_them_separately() {
         let raw = b"u UU N... 100644 100644 100644 100644 aaa bbb ccc conflict.rs\0";
-        let status = parse(raw, 10);
+        let status = parse(raw, 10, false);
         assert_eq!(status.conflicted(), 1);
         assert_eq!(status.staged(), 0);
         assert_eq!(status.unstaged(), 0);
@@ -395,15 +406,26 @@ mod tests {
         for index in 0..5 {
             raw.extend_from_slice(format!("? file{index}.rs\0").as_bytes());
         }
-        let status = parse(&raw, 2);
+        let status = parse(&raw, 2, false);
         assert_eq!(status.entries.len(), 2);
         assert!(status.truncated);
     }
 
     #[test]
+    fn byte_truncation_is_reported_and_partial_records_are_dropped() {
+        // The second record is cut mid-path, as a byte cap would do.
+        let raw = b"? complete.txt\0? incomplete-file-name";
+        let status = parse(raw, 10, true);
+        assert!(status.truncated);
+        assert_eq!(status.entries.len(), 1);
+        assert_eq!(status.entries[0].path.display(), "complete.txt");
+        assert!(!status.is_clean());
+    }
+
+    #[test]
     fn detached_and_initial_head_are_representable() {
         let raw = b"# branch.oid (initial)\0# branch.head (detached)\0";
-        let status = parse(raw, 10);
+        let status = parse(raw, 10, false);
         assert!(status.detached);
         assert!(status.head.is_none());
         assert!(status.branch.is_none());

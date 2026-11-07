@@ -100,6 +100,8 @@ fn clean_repository_reports_no_changes_and_recent_activity() {
     let repo = TempRepo::new("clean");
     repo.write("src/lib.rs", "fn main() {}\n");
     repo.commit("Initial commit");
+    repo.write("src/lib.rs", "fn main() { println!(); }\n");
+    repo.commit("Second commit");
 
     let worktree = repo.worktree();
     let status = worktree.status().unwrap();
@@ -110,7 +112,12 @@ fn clean_repository_reports_no_changes_and_recent_activity() {
 
     let activity = worktree.activity().unwrap();
     assert!(activity.has_commits);
-    assert_eq!(activity.commits[0].subject, "Initial commit");
+    assert_eq!(activity.commits[0].subject, "Second commit");
+    assert_eq!(activity.commits[1].subject, "Initial commit");
+    for commit in &activity.commits {
+        assert_eq!(commit.id.len(), 40, "commit id has no stray newline");
+        assert!(commit.id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
     assert!(!activity.truncated);
 
     assert!(worktree.diff(DiffScope::Head).unwrap().is_empty());
@@ -250,9 +257,9 @@ fn large_output_and_long_status_lists_are_bounded() {
 }
 
 #[test]
-fn a_hung_git_process_is_killed_at_the_timeout() {
+fn a_hung_git_process_is_killed_and_reaped_at_the_timeout() {
     let repo = TempRepo::new("timeout");
-    let limits = Limits::default().with_timeout(Duration::from_millis(200));
+    let limits = Limits::default().with_timeout(Duration::from_millis(2000));
     let hang = PathBuf::from(env!("CARGO_BIN_EXE_ukk-worktree-hang-git"));
     let started = std::time::Instant::now();
     let error = Worktree::open_with(&repo.path, limits, hang).unwrap_err();
@@ -263,6 +270,43 @@ fn a_hung_git_process_is_killed_at_the_timeout() {
         "timeout returned after {:?}",
         started.elapsed()
     );
+
+    let pid_file = repo.path.join(".ukk-hang-git.pid");
+    let pid_text = match fs::read_to_string(&pid_file) {
+        Ok(text) => text,
+        Err(error) => {
+            let entries: Vec<_> = fs::read_dir(&repo.path)
+                .map(|entries| {
+                    entries
+                        .filter_map(Result::ok)
+                        .map(|entry| entry.file_name())
+                        .collect()
+                })
+                .unwrap_or_default();
+            panic!(
+                "missing {} ({error}); directory contains {entries:?}; error was {error:?}",
+                pid_file.display()
+            );
+        }
+    };
+    let pid: u32 = pid_text.trim().parse().expect("pid is numeric");
+    #[cfg(unix)]
+    {
+        let alive = Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stderr(Stdio::null())
+            .status()
+            .expect("run kill -0")
+            .success();
+        assert!(!alive, "the timed-out child {pid} is still alive");
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows process liveness needs a platform API; the pid file plus the
+        // bounded return still prove the child ran and the call did not block.
+        assert_ne!(pid, 0);
+    }
 }
 
 #[test]
@@ -415,5 +459,123 @@ fn unreadable_project_root_is_a_permission_error() {
         Err(WorktreeError::PermissionDenied { .. }) => {}
         Err(error) => panic!("expected a permission error, got {error:?}"),
         Ok(_) => eprintln!("skipping: this user can read mode-000 directories"),
+    }
+}
+
+#[test]
+fn corrupt_head_is_an_error_not_an_empty_history_or_diff() {
+    let repo = TempRepo::new("corrupt-head");
+    repo.write("file.txt", "one\n");
+    repo.commit("base");
+    let worktree = repo.worktree();
+
+    fs::write(
+        repo.path
+            .join(".git")
+            .join("refs")
+            .join("heads")
+            .join("main"),
+        b"garbage\n",
+    )
+    .expect("corrupt the branch ref");
+
+    let activity = worktree.activity().unwrap_err();
+    assert!(
+        matches!(activity, WorktreeError::GitFailed { .. }),
+        "{activity:?}"
+    );
+    let diff = worktree.diff(DiffScope::Head).unwrap_err();
+    assert!(matches!(diff, WorktreeError::GitFailed { .. }), "{diff:?}");
+
+    // A ref that points at a missing object is also corrupt, not unborn.
+    fs::write(
+        repo.path
+            .join(".git")
+            .join("refs")
+            .join("heads")
+            .join("main"),
+        b"0123456789abcdef0123456789abcdef01234567\n",
+    )
+    .expect("point the branch ref at a missing object");
+    let activity = worktree.activity().unwrap_err();
+    assert!(
+        matches!(activity, WorktreeError::GitFailed { .. }),
+        "{activity:?}"
+    );
+    let diff = worktree.diff(DiffScope::Head).unwrap_err();
+    assert!(matches!(diff, WorktreeError::GitFailed { .. }), "{diff:?}");
+}
+
+#[test]
+fn a_byte_capped_status_is_reported_as_truncated() {
+    let repo = TempRepo::new("status-cap");
+    repo.write("seed.txt", "seed\n");
+    repo.commit("base");
+    for index in 0..40 {
+        repo.write(
+            &format!("untracked-with-a-fairly-long-name-{index:02}.txt"),
+            "new\n",
+        );
+    }
+
+    let limits = Limits {
+        max_output_bytes: 300,
+        ..Limits::default()
+    };
+    let status = Worktree::with_limits(&repo.path, limits)
+        .unwrap()
+        .status()
+        .unwrap();
+    assert!(
+        status.truncated,
+        "byte-capped status must report truncation"
+    );
+    assert!(!status.is_clean(), "truncated status must not claim clean");
+    assert!(status.entries.len() < 40);
+    assert!(status
+        .entries
+        .iter()
+        .all(|entry| entry.path.display().ends_with(".txt")));
+}
+
+#[cfg(unix)]
+#[test]
+fn pathspec_metacharacters_select_only_the_literal_file() {
+    let repo = TempRepo::new("pathspec");
+    let files = [
+        ("q?.txt", "question-mark"),
+        ("q2.txt", "plain-two"),
+        ("*star.txt", "star-file"),
+        ("[bracket].txt", "bracket-file"),
+        (":colon.txt", "colon-file"),
+        ("dir [b]/inner.txt", "bracket-directory"),
+    ];
+    for (path, contents) in files {
+        repo.write(path, format!("{contents}\n"));
+    }
+    repo.commit("base");
+    for (path, contents) in files {
+        repo.write(path, format!("{contents} changed\n"));
+    }
+
+    let worktree = repo.worktree();
+    for (path, contents) in files {
+        let diff = worktree
+            .diff(DiffScope::UnstagedFile(RepoPath::from(path)))
+            .unwrap();
+        assert!(
+            diff.text.contains(&format!("{contents} changed")),
+            "diff for {path} missed its own change: {}",
+            diff.text
+        );
+        assert_eq!(diff.files, 1, "diff for {path} matched extra files");
+        for (other, other_contents) in files {
+            if other != path {
+                assert!(
+                    !diff.text.contains(&format!("{other_contents} changed")),
+                    "diff for {path} contained {other}"
+                );
+            }
+        }
     }
 }

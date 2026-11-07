@@ -48,7 +48,10 @@ Every error has `hint()` guidance; the UI copies the full diagnostic.
 - `stdin` is closed, terminal prompts disabled, no pager.
 - Repository-configured `core.fsmonitor`, external diff programs and textconv filters are disabled. `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and related environment overrides are removed.
 - Commands run from the repository top level and are scoped by the project-root pathspec, so a Space pointing at a subdirectory never reports sibling changes.
+- Every path is sent as a *literal* pathspec (`:(literal)…`) after `--`, so `?`, `*`, `[...]`, a leading `:` and bracket directories select exactly one file. Bare pathspecs would act as globs and could show another file's diff.
 - Timeouts kill the child; output readers drain past the cap so a large repository cannot deadlock the pipe.
+- A byte-truncated status sets `Status.truncated`, discards any partial trailing record and never reports the tree as clean. The UI labels the result as bounded instead of claiming a clean tree.
+- Only a genuinely unborn branch is an empty history or an empty `HEAD` diff. A broken ref, a ref to a missing object or an unreadable HEAD is a typed error; `show-ref` exit codes distinguish "branch has no commits" from "ref is corrupt".
 
 **Residual risk:** Git still honours repository-configured *clean filters* declared through `.gitattributes`. A hostile repository that the user explicitly opens can execute such a filter during `status`/`diff`. This crate is not a sandbox for untrusted repositories; the UI states that inspection is local and read-only, not that the repository is trusted.
 
@@ -91,7 +94,7 @@ cargo clippy --manifest-path apps/desktop/Cargo.toml --all-targets --features gp
 
 `gpui_platform/runtime_shaders` is used locally because this machine has no Metal toolchain; CI uses default features. The native window was **not launched**, so real GUI rendering, selection and scrolling remain NOT VERIFIED.
 
-Contract tests build throwaway repositories in the OS temp directory and cover: clean/dirty, staged rename, untracked, conflicts, whole-tree vs per-file diff, binary diffs, large-output truncation, timeout kill, missing Git, not-a-repository, unborn HEAD, subdirectory scoping and permission denial. They never run a destructive command.
+Contract tests build throwaway repositories in the OS temp directory and cover: clean/dirty, staged rename, untracked, conflicts, whole-tree vs per-file diff, binary diffs, large-output truncation, status byte-cap truncation, timeout kill and reaping (pid file), missing Git, not-a-repository, unborn HEAD, corrupt/missing-object HEAD, pathspec metacharacters, subdirectory scoping and permission denial. They never run a destructive command.
 
 ## Remaining D3 scope
 

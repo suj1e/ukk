@@ -253,10 +253,12 @@ impl Workspace {
                 }),
         );
 
-        if status.is_clean() {
-            column = column.child(self.notice(
-                "Working tree is clean. No staged, unstaged or untracked files under this project root.",
-            ));
+        if status.entries.is_empty() {
+            column = column.child(self.notice(if status.truncated {
+                "Changed-file output was truncated before any complete entry could be read, so the working-tree state is unknown. Refresh to retry the read-only inspection."
+            } else {
+                "Working tree is clean. No staged, unstaged or untracked files under this project root."
+            }));
             return column.into_any_element();
         }
 

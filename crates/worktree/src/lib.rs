@@ -167,6 +167,7 @@ impl Worktree {
         Ok(status::parse(
             &output.stdout,
             self.limits.max_status_entries,
+            output.stdout_truncated,
         ))
     }
 
@@ -203,12 +204,25 @@ impl Worktree {
         args.extend(self.pathspec_args());
         let result = self.finish_diff("diff", args);
         match result {
-            Err(WorktreeError::GitFailed { stderr, .. })
-                if matches!(scope, DiffScope::Head) && is_unborn_head(&stderr) =>
-            {
-                // An unborn HEAD has nothing tracked to compare against, so an
-                // empty working-tree diff is the truthful answer.
-                Ok(Diff::default())
+            Err(WorktreeError::GitFailed {
+                operation,
+                exit_code,
+                stderr,
+            }) => {
+                // Only a genuinely unborn HEAD is an empty diff. A broken ref
+                // also makes `git diff HEAD` fail; it must be reported.
+                if matches!(scope, DiffScope::Head)
+                    && is_unborn_head(&stderr)
+                    && matches!(self.head_state(), Ok(HeadState::Unborn))
+                {
+                    Ok(Diff::default())
+                } else {
+                    Err(WorktreeError::GitFailed {
+                        operation,
+                        exit_code,
+                        stderr,
+                    })
+                }
             }
             other => other,
         }
@@ -231,38 +245,23 @@ impl Worktree {
     }
 
     /// Recent commits scoped to this project root.
+    ///
+    /// An unborn HEAD is a truthful empty history. A broken or unreadable
+    /// HEAD is an error, never an empty list.
     pub fn activity(&self) -> Result<Activity, WorktreeError> {
-        // `log` fails on an unborn HEAD; detect that explicitly so an empty
-        // repository is an empty activity list rather than an error.
-        let probe = self.run_git(
-            "rev-parse",
-            &["--verify".into(), "--quiet".into(), "HEAD^{commit}".into()],
-        )?;
-        if probe.exit_code != Some(0) {
-            // An unborn HEAD exits non-zero without any stderr. Any other
-            // failure (corruption, invalid HEAD, permission) is reported
-            // instead of being misread as an empty history.
-            let stderr = String::from_utf8_lossy(&probe.stderr);
-            if probe.stderr_truncated || !stderr.trim().is_empty() {
-                let lower = stderr.to_ascii_lowercase();
-                let unborn = lower.contains("needed a single revision")
-                    || lower.contains("needs a single revision")
-                    || lower.contains("unknown revision")
-                    || lower.contains("bad revision")
-                    || lower.contains("ambiguous argument")
-                    || lower.contains("does not have any commits yet");
-                if !unborn {
-                    return Err(self.classify_failure("rev-parse", &probe));
-                }
-            }
-            return Ok(Activity::empty());
-        }
+        let head_exists = match self.head_state()? {
+            HeadState::Born => true,
+            HeadState::Unborn => return Ok(Activity::empty()),
+        };
         let requested = self.limits.max_commits.saturating_add(1);
         let mut args: Vec<std::ffi::OsString> = vec![
             format!("-n{requested}").into(),
             "--no-decorate".into(),
             "--no-color".into(),
-            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x00".into(),
+            // `-z` makes commits NUL-separated with no newline separators;
+            // `format:` avoids the implicit trailing terminator.
+            "-z".into(),
+            "--format=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s".into(),
         ];
         args.extend(self.pathspec_args());
         let output = self.run_git("log", &args)?;
@@ -273,7 +272,49 @@ impl Worktree {
             &output.stdout,
             self.limits.max_commits,
             output.stdout_truncated,
+            head_exists,
         ))
+    }
+
+    /// Distinguish an unborn branch from an unreadable/broken HEAD.
+    fn head_state(&self) -> Result<HeadState, WorktreeError> {
+        let probe = self.run_git("rev-parse", &["--verify".into(), "HEAD^{commit}".into()])?;
+        if probe.exit_code == Some(0) {
+            return Ok(HeadState::Born);
+        }
+        // `rev-parse --verify HEAD` fails identically for an unborn branch and
+        // a broken ref. A symbolic HEAD pointing at a branch is only genuine
+        // when the branch simply has no commits yet.
+        let symbolic = self.run_git("symbolic-ref", &["-q".into(), "HEAD".into()])?;
+        if symbolic.exit_code == Some(0) && symbolic.stdout.starts_with(b"refs/") {
+            // The branch name exists, but a branch that *is* present and still
+            // cannot resolve to a commit is corrupt, not unborn.
+            let mut branch = symbolic.stdout.as_slice();
+            while matches!(branch.last(), Some(b'\n' | b'\r')) {
+                branch = &branch[..branch.len() - 1];
+            }
+            let exists = self.run_git(
+                "show-ref",
+                &[
+                    "--verify".into(),
+                    "--quiet".into(),
+                    bytes_to_os_string(branch),
+                ],
+            )?;
+            match exists.exit_code {
+                // `show-ref` exits 1 only when the ref genuinely does not
+                // exist. Exit 0 means it exists (so HEAD was resolvable) and
+                // any other code means the ref/object is corrupt.
+                Some(1) => return Ok(HeadState::Unborn),
+                Some(0) => return Err(self.classify_failure("rev-parse", &probe)),
+                _ => return Err(self.classify_failure("show-ref", &exists)),
+            }
+        }
+        let symbolic_stderr = String::from_utf8_lossy(&symbolic.stderr);
+        if symbolic.exit_code != Some(0) && !symbolic_stderr.trim().is_empty() {
+            return Err(self.classify_failure("symbolic-ref", &symbolic));
+        }
+        Err(self.classify_failure("rev-parse", &probe))
     }
 
     fn pathspec_args(&self) -> Vec<std::ffi::OsString> {
@@ -284,9 +325,26 @@ impl Worktree {
         if self.prefix.is_empty() {
             ".".into()
         } else {
-            bytes_to_os_string(&self.prefix)
+            bytes_to_os_string(&literal_pathspec(&self.prefix))
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeadState {
+    Born,
+    Unborn,
+}
+
+/// Prefix a repository-relative path with Git's literal pathspec magic so a
+/// file name containing `?`, `*`, `[...]` or a leading `:` addresses exactly
+/// that path.
+pub(crate) fn literal_pathspec(raw: &[u8]) -> Vec<u8> {
+    const MAGIC: &[u8] = b":(literal)";
+    let mut literal = Vec::with_capacity(MAGIC.len() + raw.len());
+    literal.extend_from_slice(MAGIC);
+    literal.extend_from_slice(raw);
+    literal
 }
 
 fn split_lines(raw: &[u8]) -> Vec<&[u8]> {

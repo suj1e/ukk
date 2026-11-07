@@ -2,6 +2,7 @@
 
 #[cfg(unix)]
 use crate::bytes_to_os_string;
+use crate::literal_pathspec;
 use crate::WorktreeError;
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -34,15 +35,20 @@ impl RepoPath {
         String::from_utf8_lossy(&self.raw)
     }
 
-    /// Convert to a command-line argument, preserving bytes on Unix.
+    /// Convert to a literal Git pathspec argument, preserving bytes on Unix.
+    ///
+    /// Git interprets bare pathspecs as globs and gives a leading `:` special
+    /// meaning. Wrapping with `:(literal)` makes `?`, `*`, `[...]` and a
+    /// leading `:` match exactly one path. Callers must still pass `--`.
     pub fn git_arg(&self) -> Result<OsString, WorktreeError> {
+        let literal = literal_pathspec(&self.raw);
         #[cfg(unix)]
         {
-            Ok(bytes_to_os_string(&self.raw))
+            Ok(bytes_to_os_string(&literal))
         }
         #[cfg(not(unix))]
         {
-            match std::str::from_utf8(&self.raw) {
+            match String::from_utf8(literal) {
                 Ok(path) => Ok(OsString::from(path)),
                 Err(_) => Err(WorktreeError::NonUtf8Path {
                     path: self.display().into_owned(),
@@ -85,5 +91,29 @@ impl fmt::Display for RepoPath {
 impl fmt::Debug for RepoPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "RepoPath({:?})", self.display())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_argument_is_a_literal_pathspec() {
+        for path in [
+            "plain.txt",
+            "q?.txt",
+            "*star.txt",
+            "[bracket].txt",
+            ":colon.txt",
+            "dir with space/file.txt",
+        ] {
+            let argument = RepoPath::from(path).git_arg().unwrap();
+            assert_eq!(
+                argument.to_string_lossy(),
+                format!(":(literal){path}"),
+                "pathspec magic must be disabled for {path}"
+            );
+        }
     }
 }
