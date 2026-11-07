@@ -32,7 +32,11 @@ pub struct PaneTab {
 
 impl PaneTab {
     pub fn new(title: String, content: PaneContent) -> Self {
-        Self { id: new_id(), title, content }
+        Self {
+            id: new_id(),
+            title,
+            content,
+        }
     }
 }
 
@@ -94,8 +98,8 @@ impl PaneNode {
 
     pub fn validate(&self) -> Result<(), LayoutError> {
         fn validate_content(content: &PaneContent) -> Result<(), LayoutError> {
-            if let PaneContent::Agent { agent_run_id }
-            | PaneContent::Terminal { agent_run_id } = content
+            if let PaneContent::Agent { agent_run_id } | PaneContent::Terminal { agent_run_id } =
+                content
             {
                 if agent_run_id.trim().is_empty() {
                     return Err(LayoutError::EmptyAgentId);
@@ -181,13 +185,15 @@ impl PaneNode {
             content: &PaneContent,
         ) -> Option<PaneNode> {
             match node {
-                PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target => Some(PaneNode::Split {
-                    id: new_id(),
-                    axis,
-                    ratio,
-                    first: Box::new(node.clone()),
-                    second: Box::new(PaneNode::leaf(content.clone())),
-                }),
+                PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target => {
+                    Some(PaneNode::Split {
+                        id: new_id(),
+                        axis,
+                        ratio,
+                        first: Box::new(node.clone()),
+                        second: Box::new(PaneNode::leaf(content.clone())),
+                    })
+                }
                 PaneNode::Leaf { .. } | PaneNode::Tabs { .. } => None,
                 PaneNode::Split {
                     id,
@@ -282,10 +288,12 @@ impl PaneNode {
                     first,
                     second,
                 } => {
-                    if matches!(&**first, PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target) {
+                    if matches!(&**first, PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target)
+                    {
                         return Some((**second).clone());
                     }
-                    if matches!(&**second, PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target) {
+                    if matches!(&**second, PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target)
+                    {
                         return Some((**first).clone());
                     }
                     if let Some(updated) = remove(first, target) {
