@@ -3,6 +3,16 @@ use super::*;
 use ukk_domain::{AgentRun, DomainSnapshot, PaneNode, Session, SessionLayout, Space};
 
 impl Store {
+    /// Durable monotonic revision, incremented by SQLite triggers for any
+    /// workspace metadata write (including writes from independent processes).
+    pub fn workspace_revision(&self) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT revision FROM workspace_revision WHERE id=1",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn snapshot(&self) -> Result<DomainSnapshot> {
         let mut spaces = Vec::new();
         {
