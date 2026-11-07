@@ -105,7 +105,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .text_sm()
-                                    .font_semibold()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(rgb(INK))
                                     .child(heading),
                             )
@@ -276,7 +276,7 @@ impl Workspace {
                         div()
                             .mt_2()
                             .text_2xl()
-                            .font_semibold()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(INK))
                             .child(title),
                     )
