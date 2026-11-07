@@ -1,0 +1,29 @@
+name: Rust host spike
+
+on:
+  push:
+    paths:
+      - 'Cargo.toml'
+      - 'crates/**'
+      - '.github/workflows/rust-spike.yml'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'crates/**'
+      - '.github/workflows/rust-spike.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run unit and mock protocol tests
+        run: cargo test --workspace
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
