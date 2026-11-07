@@ -12,10 +12,10 @@ import os
 import pathlib
 import platform
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.request
 import zipfile
 
 VERSION = "0.1.18"
@@ -65,8 +65,23 @@ def main() -> int:
     work = pathlib.Path(tempfile.mkdtemp(prefix="ukk-hc-install-"))
     archive = work / pathlib.Path(url).name
     print(f"downloading herdr-core {VERSION} from {url}", file=sys.stderr)
-    with urllib.request.urlopen(url, timeout=120) as response, archive.open("wb") as out:
-        shutil.copyfileobj(response, out)
+    # curl is present on every GitHub-hosted runner and is also what the
+    # upstream installer uses. Python's urllib stopped mid-stream against this
+    # endpoint on both local hosts and runners.
+    subprocess.run(
+        [
+            "curl",
+            "-fsSL",
+            "--retry",
+            "3",
+            "--connect-timeout",
+            "30",
+            "-o",
+            str(archive),
+            url,
+        ],
+        check=True,
+    )
 
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     if digest != expected:
@@ -77,10 +92,10 @@ def main() -> int:
     extracted.mkdir()
     if archive.suffix == ".zip":
         with zipfile.ZipFile(archive) as bundle:
-            bundle.extractall(extracted)
+            bundle.extractall(extracted, filter="data")
     else:
         with tarfile.open(archive) as bundle:
-            bundle.extractall(extracted)
+            bundle.extractall(extracted, filter="data")
 
     suffix = ".exe" if key.startswith("win32") else ""
     source = next(
