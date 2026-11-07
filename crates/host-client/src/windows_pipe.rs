@@ -16,15 +16,19 @@ use std::ptr::null_mut;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{GetLastError, LocalFree, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    GetLastError, LocalFree, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
-use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER, SECURITY_ATTRIBUTES};
+use windows_sys::Win32::Security::{
+    GetTokenInformation, TokenUser, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+};
 use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -40,7 +44,10 @@ fn current_user_sid() -> io::Result<String> {
         return Err(io::Error::last_os_error());
     }
     if token.is_null() {
-        return Err(io::Error::new(ErrorKind::InvalidData, "OpenProcessToken returned null"));
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "OpenProcessToken returned null",
+        ));
     }
     // SAFETY: OpenProcessToken returned an owned handle. OwnedHandle closes it.
     let token = unsafe { OwnedHandle::from_raw_handle(token) };
@@ -51,7 +58,10 @@ fn current_user_sid() -> io::Result<String> {
         GetTokenInformation(token.as_raw_handle(), TokenUser, null_mut(), 0, &mut needed);
     }
     if needed == 0 || needed > 65_536 {
-        return Err(io::Error::new(ErrorKind::InvalidData, "unexpected TokenUser size"));
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "unexpected TokenUser size",
+        ));
     }
     // TOKEN_USER contains an aligned pointer. u64-backed storage provides
     // at least 8-byte alignment on Windows targets.
@@ -72,7 +82,10 @@ fn current_user_sid() -> io::Result<String> {
     // SAFETY: successful TokenUser call wrote TOKEN_USER at the aligned start.
     let user = unsafe { &*(aligned.as_ptr().cast::<TOKEN_USER>()) };
     if user.User.Sid.is_null() {
-        return Err(io::Error::new(ErrorKind::InvalidData, "token user SID is null"));
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "token user SID is null",
+        ));
     }
     let mut ptr = null_mut();
     // SAFETY: SID points into still-live TOKEN_USER storage; ptr is output.
@@ -80,7 +93,10 @@ fn current_user_sid() -> io::Result<String> {
         return Err(io::Error::last_os_error());
     }
     if ptr.is_null() {
-        return Err(io::Error::new(ErrorKind::InvalidData, "SID conversion returned null"));
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "SID conversion returned null",
+        ));
     }
     // SAFETY: Windows supplied a NUL-terminated SID string. Bound scanning
     // to avoid unbounded reads in case of an inconsistent system response.
@@ -98,8 +114,15 @@ fn current_user_sid() -> io::Result<String> {
         LocalFree(ptr.cast::<c_void>());
         result
     }?;
-    if !sid.starts_with("S-1-") || !sid.chars().all(|c| c.is_ascii_digit() || c == 'S' || c == '-') {
-        return Err(io::Error::new(ErrorKind::InvalidData, "unexpected SID text"));
+    if !sid.starts_with("S-1-")
+        || !sid
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == 'S' || c == '-')
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "unexpected SID text",
+        ));
     }
     Ok(sid)
 }
@@ -214,8 +237,7 @@ pub fn open_client() -> io::Result<File> {
         match options.open(&name) {
             Ok(file) => return Ok(file),
             Err(error)
-                if error.raw_os_error() == Some(ERROR_PIPE_BUSY)
-                    && Instant::now() < deadline =>
+                if error.raw_os_error() == Some(ERROR_PIPE_BUSY) && Instant::now() < deadline =>
             {
                 thread::sleep(Duration::from_millis(30));
             }
@@ -234,5 +256,4 @@ mod tests {
         assert!(name.starts_with(r"\\.\pipe\ukk-agent-host-S-1-"));
         assert!(!name.contains("..\\"));
     }
-
 }
