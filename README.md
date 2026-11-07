@@ -3,7 +3,7 @@
 **Native, extensible Multi-Agent Workspace.**
 
 > **设计阶段 / Architecture-first** · GPUI Desktop + SwiftUI iOS + herdr-core + Relay + Plugins  
-> **当前阶段：运行时集成 Spike 01。** 已提交一个本地只读 Rust Host / hc-client 原型；尚未经过真实 Mac + herdr-core 联调，也尚未实现 GPUI 界面。下面的完整架构与功能仍是目标设计。
+> **当前阶段：Runtime Spike 01 + Desktop Spike 02。** 已提交本地只读 Rust Host / hc-client 与 GPUI 桌面原生窗口源码，含真实终端快照读取；尚未经过真实 Mac + herdr-core 联调，也未确认 macOS GPUI 编译通过。下面的完整架构与功能仍是目标设计。
 
 ukk 是一个从零打造的原生 Coding Agent 工作空间：同时运行多个 Codex、Claude Code 或其他兼容 Agent，保留可持久恢复的工作会话，通过 iPhone 扫码连接电脑，并在必要时以**悬浮小窗**查看或操控电脑屏幕。
 
@@ -71,6 +71,19 @@ cargo run -p ukk-host -- request terminal.list
 
 See [Runtime Spike 01 — runbook and acceptance](docs/RUNTIME_SPIKE.md) for `hc` installation, live events and exact limitations.
 
+## GPUI Desktop Spike 02
+
+A new GPUI native desktop window is now in `apps/desktop` (not a herdr-app fork). It talks to the local `ukk-host` over the bounded `ukk-host-client` Unix socket adapter, displays real terminal/Agent runtime fields, supports selection and manual refresh, and clearly labels Host offline state. No fabricated Agent chats, fixed roles or remote desktop mode.
+
+The GPUI dependency is isolated from root Cargo workspace CI and pinned to a Zed revision. The separate `GPUI Desktop (macOS)` GitHub workflow checks native compilation, but its outcome has **not been verified**.
+
+```bash
+# First start hc and ukk-host, then in another shell on macOS:
+cargo run --manifest-path apps/desktop/Cargo.toml
+```
+
+See [Desktop Spike 02](docs/DESKTOP_SPIKE.md) for exact setup, limitations and Mac verification tasks.
+
 ## Documentation
 
 | Document | Contents |
@@ -87,6 +100,7 @@ See [Runtime Spike 01 — runbook and acceptance](docs/RUNTIME_SPIKE.md) for `hc
 | [Roadmap](docs/ROADMAP.md) | 完整产品开发阶段和验收标准 |
 | [Development](docs/DEVELOPMENT.md) | 预期代码目录和工程验证步骤 |
 | [Runtime Spike 01](docs/RUNTIME_SPIKE.md) | Rust Host 原型、命令、模拟测试和真实 Mac 验收项 |
+| [Desktop Spike 02](docs/DESKTOP_SPIKE.md) | GPUI 原生窗口、真实终端状态、macOS 构建验收项 |
 | [Upstream References](docs/REFERENCES.md) | 官方依赖、许可和待确认事项 |
 | [ADR-0001](docs/adr/0001-platform-and-runtime.md) | GPUI + SwiftUI + herdr-core 的技术决策 |
 | [ADR-0002](docs/adr/0002-remote-control-is-plugin.md) | 远控作为会话插件的交互决策 |
@@ -100,6 +114,6 @@ See [Runtime Spike 01 — runbook and acceptance](docs/RUNTIME_SPIKE.md) for `hc
 
 ## Project status
 
-文档基线已建立，已有本地只读 Rust Host/hc-client Spike 源代码（尚未在真实 Mac 验证）。GPUI 版本、herdr-core API 兼容、alma-relay 配对接入、iOS 真机、WebRTC 和 macOS 权限等都需要实际验证。
+文档基线已建立，已有本地只读 Rust Host / hc-client 及 GPUI Desktop 原型源码（尚未完成 Mac 验证）。GPUI 版本、herdr-core API 兼容、alma-relay 配对接入、iOS 真机、WebRTC 和 macOS 权限等都需要实际验证。
 
 **Repository license:** 尚未决定（仓库目前为 Private）；参考项目的 Apache-2.0/MIT 不等于自动给 ukk 授权。
