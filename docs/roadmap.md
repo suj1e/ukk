@@ -74,6 +74,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** record real `hc schema`, `hc connect` and terminal framed attach protocol. Verify the actual operations supported for launch/attach/send/interrupt/stop and status/child relationship; implement only capability-checked actions the upstream API actually supplies. Persist verified `core_id + terminal_address` for AgentRun bindings; explicit user intent, typed failure and idempotency where relevant. Separate detach/archive from stop/kill.
 - **Exit:** two Agents, child spawn, Host/Desktop restart reattachment, stream backpressure, reconnect/gap tests; named upstream commit/version and actual on-device proof. No guessed approvals or runtime state.
 - **Dependency:** local authentication and capability design with H1; does **not** require remote device protocol.
+- **Status (2026-11-08):** hc-client and Host runtime merged as `ea56e63`/`feb4edc` (PRs #25/#27) after deep reviews fixed four hc-client and four Host-runtime majors. Real macOS E2E verified observe, unauthorized denial, send with output, zero-call detach, stop and token-free audit against hc 0.1.18. Desktop Agent-run wiring, agent_run_id→store resolution and Windows/Linux typed real-daemon runs remain.
 
 ### R2 — Structured Agent adapters and conversation contract
 
