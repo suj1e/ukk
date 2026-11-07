@@ -21,6 +21,15 @@ Read [docs/OVERVIEW.zh-CN.md](docs/OVERVIEW.zh-CN.md), [docs/ARCHITECTURE.md](do
 - Mobile: **SwiftUI iOS / iPadOS** stays in active scope for QR pairing, session access, approvals and floating Remote Screen.
 - **Android, Web and TUI are deferred.** Do not scaffold their applications or schedule their implementation unless explicitly requested. Keep protocol and domain boundaries extensible.
 
+## Workspace persistence rules
+
+- `ukk-domain` defines persisted Space / Session / AgentRun and Pane identity and tree validation. `ukk-store` owns SQLite schema and optimistic layout revision updates. Do not write SQLite directly from GPUI.
+- `AgentRun` is a product-level binding to `core_id + terminal_address`. Creating or archiving metadata never launches or terminates a herdr-core process.
+- **Do not auto-assign orphan terminals to arbitrary Sessions.** Bind only with verified core identity and user intent.
+- Closing a Pane, switching a Session, archiving a Session, or quitting GPUI must not send any terminal-stop/kill signal.
+- Current local Host RPC `workspace.snapshot` is **read-only**. Do not add new mutation methods before local permissions and peer validation are designed.
+- Run `cargo test --workspace` including SQLite reopen, CAS conflicts and cross-Session Agent reference tests. See [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md).
+
 ## Working practices
 
 - Verify upstream APIs, versions, licenses and schemas before adding dependencies.
