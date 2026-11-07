@@ -13,7 +13,7 @@ GPUI's `gpui_platform::application()` selects platform-specific backends:
 | Desktop OS | GPUI presentation backend | Host private IPC | Host background service | Remote Screen capture | Current state in ukk |
 |---|---|---|---|---|---|
 | macOS | Metal; text through font-kit | Unix Domain Socket | launchd user service (planned) | ScreenCaptureKit + VideoToolbox; Accessibility input | GPUI + local socket sources committed; native build/runtime test pending |
-| Windows | Win32 + DirectWrite | **Windows Named Pipe to implement** | user-scoped process / Task Scheduler or service design pending | Windows Graphics Capture + Media Foundation or D3D encoder; input API review | GPUI source shared; `hc-client` stdio works in principle; ukk Host `serve` not yet supported |
+| Windows | Win32 + DirectWrite | SID-scoped ACL-protected Named Pipe (source committed) | user-scoped process / Task Scheduler or service design pending | Windows Graphics Capture + Media Foundation or D3D encoder; input API review | GPUI and Host Named Pipe source committed; CI / real Windows verification pending |
 | Linux | Wayland / X11; platform graphics backend | Unix Domain Socket | systemd --user service (planned) | PipeWire/portal for Wayland, X11 capture fallback; input via permission-brokered APIs | GPUI + local socket sources committed; native build/runtime test pending |
 
 GPU rendering, text, fullscreen, tray, update, screen capture, input injection and window decorations must be tested per OS. A macOS pass does not constitute a Windows/Linux pass.
@@ -26,10 +26,10 @@ flowchart TB
   C --> OS{Desktop OS}
   OS -->|macOS| U["Unix Socket transport"]
   OS -->|Linux| L["Unix Socket transport"]
-  OS -->|Windows| W["Named Pipe transport (not implemented)"]
+  OS -->|Windows| W["ACL-protected Windows Named Pipe (source committed)"]
   U --> H["ukk Host / domain + subscriptions"]
   L --> H
-  W -. future .-> H
+  W --> H
   H --> HC["herdr-core / hc connect protocol"]
   H --> P["Platform Plugin APIs"]
   P --> M["macOS: ScreenCaptureKit / input"]
@@ -39,7 +39,7 @@ flowchart TB
 
 - **UI owns no Agent lifetime.** A window closed on any desktop OS must not stop ukk Host or herdr-core terminals.
 - **OS-neutral protocol.** Same commands, events, authorization, identity and models regardless of IPC transport.
-- **Windows IPC must be local-only and same-user access controlled.** Use ACL-backed named pipes, per-user namespace, byte limits and peer validation; do not replace it with unauthenticated localhost TCP.
+- **Windows IPC is local-only and scoped to the current user's SID.** The implementation builds an explicit protected DACL (current user + SYSTEM), rejects remote pipe clients, requires the first instance to be new, restricts the client to identification-level impersonation, and keeps bounded JSON-RPC frames. Verify on Windows CI and independently test different-user access denial before shipping.
 - **No headless screen capture assumption.** A herdr-core host can run without a graphical desktop, in which case Remote Screen is unavailable but Agents continue to work.
 - **Remote Screen remains an on-demand plugin**, not a navigation mode. OS capture and control permissions will differ.
 - **Platform-specific components are adapters**, not reimplementations of business logic or page layouts.
@@ -54,25 +54,27 @@ cargo clippy --workspace --all-targets -- -D warnings
 # Desktop — macOS, Windows and Linux each compile from same source tree
 cargo check --manifest-path apps/desktop/Cargo.toml
 
-# Local Host + Desktop (currently usable by design only on Unix: macOS/Linux)
+# Local Host + Desktop (Windows uses a per-user Named Pipe, Unix uses sockets)
 cargo run -p ukk-host -- serve
 cargo run --manifest-path apps/desktop/Cargo.toml
 ```
 
-**Windows limitation:** the `serve` / Desktop Host-client methods currently return a clear unsupported/error result. Windows builds should succeed at the source level, but runtime interoperability cannot work until Named Pipe support is implemented and verified.
+**Windows status:** Windows Named Pipe Host/server and client **source is committed**; Windows CI and real-device validation have not been confirmed. For now the Windows client has a 3s connection-busy retry but the synchronous Named Pipe read path does not yet enforce a hard read deadline. Add bounded waits/cancellation before production remote or untrusted plugin use.
 
 ## Required CI coverage
 
 - [x] Rust core test/Clippy workflow matrix includes Ubuntu, macOS and Windows.
 - [x] GPUI source build workflow matrix includes Ubuntu, macOS and Windows (with native Linux build dependencies).
 - [ ] Verify CI passes on each OS and fix platform-specific compiler/toolchain issues.
-- [ ] Windows named-pipe Host server + client; secure per-user access.
+- [x] Windows Named Pipe Host server/client and explicit current-user DACL (source committed; not yet verified).\n- [ ] Windows CI/test green, different-user ACL denial test, pipe hijack test, timeout/cancellation and peer verification as appropriate.
 - [ ] End-to-end real hc snapshot/events from Windows Host and Linux Host, including reconnect and child Agent tree.
 - [ ] Window close/reopen persistence, permissions, keyboard shortcuts and accessibility tested on all platforms.
 - [ ] OS-specific Remote Screen privilege prompts, view/control separation and media compatibility.
 
 ## Prioritization
 
-**All three desktops are first-class targets.** Build verification starts on all three immediately. Feature implementation can be staged to reduce uncertainty: first a complete OS-independent Host/data protocol, then local IPC parity, then UI/runtime validation on each OS. The exact shipping schedule is tied to the platform acceptance checks, not to a Mac-only MVP assumption.
+**All three desktops are first-class targets.** Build verification starts on all three immediately. Feature implementation can be staged to reduce uncertainty: OS-independent Host/data protocol, cross-platform local IPC, then validated UI/runtime integration on each OS. The exact shipping schedule is tied to the platform acceptance checks, not to a Mac-only MVP assumption.
 
 Related documents: [Architecture](ARCHITECTURE.md), [Product](PRODUCT.md), [Runtime Spike](RUNTIME_SPIKE.md), [Desktop Spike](DESKTOP_SPIKE.md), [Remote Screen](REMOTE_SCREEN.md).
+
+Windows transport implementation and caveats: [Windows Named Pipe runbook](WINDOWS_IPC.md).
