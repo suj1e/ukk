@@ -11,6 +11,18 @@
 
 This progress is a **technical vertical slice**, not completion of the full milestone gates below. See [Live Runtime Sync](LIVE_EVENTS.md).
 
+## Desktop platform parity gate
+
+macOS, Windows and Linux are **all first-class Desktop targets**, not a Mac-only MVP with Windows/Linux left as optional future apps. Shared GPUI UI must remain one source tree, and the Host has to offer equivalent local read-only/event functionality across all three.
+
+The platform validation track runs throughout Milestones 0–4:
+- Three-OS GPUI and Rust CI is configured; results require verification.
+- Windows Named Pipe local Host IPC is mandatory before claiming Windows runtime support.
+- Linux Wayland/X11 (and host systemd user-session) needs real runtime testing.
+- Remote Screen will use separate OS-specific capture/input adapters, never separate Agent UI products.
+
+See [platform matrix](PLATFORM_SUPPORT.md) and [Issue #4](https://github.com/suj1e/ukk/issues/4).
+
 ## Milestone 0 — Source and interface feasibility
 
 - Pin reference commits/versions for herdr-core, GPUI, Alma Relay and chosen media stack.
@@ -69,7 +81,7 @@ This progress is a **technical vertical slice**, not completion of the full mile
 - Agent-provider ecosystem and flexible handoffs; worktree workflows.
 - Plugin development kit, package signing, controlled distribution and registry.
 - Search, session export, shareable deep links, reusable layouts, automation/jobs, webhook integrations.
-- Windows/Linux Desktop Host parity; headless servers; multi-machine aggregation.
+- Desktop OS-specific release polish and parity regression; headless servers; multi-machine aggregation.
 - Android Compose; optional Web and Ratatui clients using same domain protocol.
 - Accessibility, localization, analytics opt-in, perf budgets, E2EE review, backups/migrations.
 - Reliable public release, security docs and contribution process.
