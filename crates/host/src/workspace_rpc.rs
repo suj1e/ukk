@@ -4,7 +4,9 @@
 //! Requests are validated and use durable SQLite compare-and-swap. The caller
 //! must first pass the local mutation capability at the transport boundary.
 
-use serde_json::{json, Value};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use ukk_domain::{PaneContent, SplitAxis};
 use ukk_store::{Store, StoreError};
 
