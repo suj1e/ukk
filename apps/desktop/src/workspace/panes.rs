@@ -85,7 +85,9 @@ impl Workspace {
                     PaneContent::Files => PaneContent::Activity,
                     PaneContent::Terminal { .. } | PaneContent::Activity => PaneContent::Diff,
                 };
+                let destination = id.clone();
                 div()
+                    .id(format!("drop-target-leaf-{id}"))
                     .flex()
                     .flex_col()
                     .flex_1()
@@ -167,6 +169,11 @@ impl Workspace {
                             .text_color(rgb(MUTED))
                             .child(format!("View ID: {id}")),
                     )
+                    .on_drop::<DraggedPaneTab>(cx.listener(
+                        move |this, payload: &DraggedPaneTab, _, cx| {
+                            this.accept_dragged_tab(payload, &destination, cx);
+                        },
+                    ))
                     .into_any_element()
             }
             PaneNode::Tabs { id, tabs } => self.tab_group(id, tabs, cx),
