@@ -39,7 +39,7 @@ impl fmt::Display for HostError {
             Self::Json(error) => write!(f, "Host JSON error: {error}"),
             Self::Protocol(error) => write!(f, "Host protocol error: {error}"),
             Self::Remote(error) => write!(f, "Host RPC error: {error}"),
-            Self::UnsupportedPlatform => write!(f, "local Unix socket is not supported on this platform"),
+            Self::UnsupportedPlatform => write!(f, "local IPC is not supported on this platform"),
         }
     }
 }
