@@ -5,6 +5,11 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use ukk_protocol::Limits;
+
+/// Current schema. v1 is workspace metadata, v2 adds the durable workspace
+/// revision, v3 adds the S1 event log, device trust and idempotency tables.
+const SCHEMA_VERSION: i64 = 3;
 
 /// Local-only configuration. The folder is created by the Host process, not
 /// by the Desktop UI, so closing the window cannot remove persisted metadata.
@@ -44,6 +49,14 @@ impl Store {
     }
 
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_limits(path, Limits::default())
+    }
+
+    /// Opens a database with explicit protocol bounds. The same limits govern
+    /// event payload size, retained history and idempotency capacity, so the
+    /// durable adapter cannot be configured more loosely than the Host.
+    pub fn open_with_limits(path: &Path, limits: Limits) -> Result<Self> {
+        limits.validate().map_err(StoreError::Limit)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -63,17 +76,27 @@ impl Store {
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(3))?;
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
-        let mut store = Self { conn };
+        let mut store = Self { conn, limits };
         store.migrate()?;
         Ok(store)
     }
 
     pub fn open_memory() -> Result<Self> {
+        Self::open_memory_with_limits(Limits::default())
+    }
+
+    pub fn open_memory_with_limits(limits: Limits) -> Result<Self> {
+        limits.validate().map_err(StoreError::Limit)?;
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        let mut store = Self { conn };
+        let mut store = Self { conn, limits };
         store.migrate()?;
         Ok(store)
+    }
+
+    #[must_use]
+    pub fn limits(&self) -> &Limits {
+        &self.limits
     }
 
     fn migrate(&mut self) -> Result<()> {
@@ -81,10 +104,10 @@ impl Store {
         let version: i64 = self
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 2 {
+        if version > SCHEMA_VERSION {
             return Err(StoreError::UnsupportedVersion(version));
         }
-        if version == 2 {
+        if version == SCHEMA_VERSION {
             return Ok(());
         }
         // Upgrade under one IMMEDIATE transaction. A second process waiting
@@ -94,10 +117,10 @@ impl Store {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 2 {
+        if version > SCHEMA_VERSION {
             return Err(StoreError::UnsupportedVersion(version));
         }
-        if version == 2 {
+        if version == SCHEMA_VERSION {
             tx.commit()?;
             return Ok(());
         }
@@ -171,6 +194,64 @@ impl Store {
                 }
             }
             tx.execute_batch("PRAGMA user_version = 2;")?;
+        }
+        // v3: durable S1 protocol state. These tables are deliberately
+        // independent of the workspace revision triggers: protocol cursors,
+        // device grants and idempotency records are not UI metadata.
+        if version < 3 {
+            tx.execute_batch(
+                r#"
+                CREATE TABLE event_streams (
+                    stream_id TEXT PRIMARY KEY NOT NULL,
+                    generation INTEGER NOT NULL CHECK (generation > 0),
+                    head INTEGER NOT NULL CHECK (head >= 0),
+                    floor INTEGER NOT NULL CHECK (floor >= 0 AND floor <= head),
+                    updated_ms INTEGER NOT NULL
+                );
+                CREATE TABLE event_log (
+                    stream_id TEXT NOT NULL REFERENCES event_streams(stream_id) ON DELETE CASCADE,
+                    cursor INTEGER NOT NULL CHECK (cursor > 0),
+                    event_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL CHECK (generation > 0),
+                    emitted_at_ms INTEGER NOT NULL,
+                    event_json TEXT NOT NULL,
+                    PRIMARY KEY (stream_id, cursor),
+                    UNIQUE (stream_id, event_id)
+                );
+                CREATE INDEX event_log_retained ON event_log(stream_id, cursor);
+                CREATE TABLE devices (
+                    device_id TEXT PRIMARY KEY NOT NULL,
+                    key_fingerprint TEXT NOT NULL,
+                    generation INTEGER NOT NULL CHECK (generation >= 1),
+                    revoked INTEGER NOT NULL DEFAULT 0 CHECK (revoked IN (0, 1)),
+                    created_ms INTEGER NOT NULL,
+                    updated_ms INTEGER NOT NULL
+                );
+                CREATE TABLE device_grants (
+                    device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+                    scope TEXT NOT NULL,
+                    identity_generation INTEGER NOT NULL CHECK (identity_generation >= 1),
+                    expires_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY (device_id, scope)
+                );
+                CREATE TABLE idempotency_records (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    plane TEXT NOT NULL CHECK (plane IN ('local_ipc', 'remote')),
+                    principal_kind TEXT NOT NULL CHECK (principal_kind IN ('local_owner', 'device')),
+                    principal_id TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK (state IN ('in_flight', 'completed', 'expired')),
+                    result_json TEXT,
+                    created_ms INTEGER NOT NULL,
+                    completed_at_ms INTEGER,
+                    expired_at_ms INTEGER,
+                    CHECK (state <> 'completed' OR (result_json IS NOT NULL AND completed_at_ms IS NOT NULL)),
+                    CHECK (state <> 'expired' OR expired_at_ms IS NOT NULL)
+                );
+                CREATE INDEX idempotency_by_state ON idempotency_records(state, completed_at_ms);
+                PRAGMA user_version = 3;
+                "#,
+            )?;
         }
         tx.commit()?;
         Ok(())

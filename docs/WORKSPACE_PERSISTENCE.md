@@ -36,7 +36,10 @@ flowchart TB
 ## Files
 
 - `crates/domain/` — serde-friendly typed entities; recursive validated `PaneNode::Split` and `PaneNode::Leaf`; immutable split/close helpers; no GPUI dependency.
-- `crates/store/` — SQLite with bundled engine, schema version 1, FK constraints, WAL, atomic Session + default layout creation, optimistic `revision` update and tests.
+- `crates/store/` — SQLite with bundled engine, schema version 3, FK constraints, WAL, atomic Session + default layout creation, optimistic `revision` update and tests.
+- `crates/store/src/events.rs` — durable S1 event log: transactional cursor assignment, range read, retention floor and snapshot boundary.
+- `crates/store/src/trust.rs` — device identity, scoped grants, rotation/revocation CAS and `TrustRegistry` hydration.
+- `crates/store/src/idempotency.rs` — atomic idempotency begin/finish, in-flight retention, completion tombstones and capacity refusal.
 - `crates/host/` — read-only `workspace.snapshot` JSON-RPC for GPUI; local CLI creation, archiving, agent binding and split/close.
 - `crates/host-client/` — shared typed `DomainSnapshot` fetch over Unix sockets and Windows Named Pipes.
 - `apps/desktop/` — Space / Session sidebar and recursive split-pane display driven by persisted layout, not fake Agent dialogues.
@@ -55,10 +58,61 @@ Default local location:
 - The default Unix data directory is mode 0700 and SQLite file is created with mode 0600.
 - WAL allows concurrent CLI writers and Host snapshot readers.
 - Foreign keys enforce associations and unique `(core_id, terminal_address)` avoids duplicate terminal bindings.
-- `PRAGMA user_version=1` migration prevents silently loading newer schema versions.
+- `PRAGMA user_version=3` migration prevents silently loading newer schema versions; v1 → v2 → v3 upgrades run under one `IMMEDIATE` transaction.
 - Layout edits use `expected_revision`; stale updates return a Conflict instead of overwriting another view.
 - A Session created by CLI starts with one Activity pane, rather than a pretend chat transcript.
 - The storage layer contains project metadata, not terminal output, secrets, video frames, approvals or chat transcripts.
+
+## S1 protocol state (schema v3)
+
+Schema v3 adds the durable state the S1 remote protocol needs after a Host
+restart. `crates/store` depends on `ukk-protocol` for the cursor, trust and
+idempotency types and decisions; it persists and reloads them without adding a
+transport or a permission surface. Existing Space / Session / AgentRun / layout
+tables and their CAS semantics are unchanged.
+
+| Table | Holds |
+|---|---|
+| `event_streams` | one row per stream: protocol generation, durable `head`, retention `floor` |
+| `event_log` | ordered `(stream, cursor)` rows with event id, generation and payload JSON |
+| `devices` | device id, public-key fingerprint, identity generation, revoked status |
+| `device_grants` | scope, grant generation and absolute expiry per device |
+| `idempotency_records` | key, command fingerprint, plane, principal, state, result and timestamps |
+
+Contract:
+
+- **Append is transactional.** `Store::append_event` opens an `IMMEDIATE`
+  transaction, validates the typed event against `Limits`, assigns `head + 1`,
+  inserts the event and advances the head in one commit. Duplicate event ids,
+  oversized payloads, a mismatched stored generation and cursor exhaustion are
+  refused before the head moves.
+- **Retention is monotonic.** `Store::prune_events_through` deletes covered
+  events and advances the floor; moving the floor backwards is a typed error.
+  Append also prunes to `Limits::max_retained_events`.
+- **Reads use protocol outcomes.** `Store::read_events` returns
+  `Resume::Events`, `Resume::SnapshotRequired { at_cursor: head }` below the
+  floor, or `CursorBeyondHead`; it never resets a cursor. Corrupt gaps and
+  generation mismatches are storage errors.
+- **Snapshot boundary.** `Store::snapshot_at_head` binds a domain-owned body to
+  the current durable head and enforces the snapshot size bound.
+- **Trust is CAS-guarded.** `register_device` starts at generation 1.
+  `rotate_device_key` and `revoke_device` take the expected generation, reject a
+  stale writer, and clear grants atomically. `load_trust_registry` hydrates the
+  protocol `TrustRegistry`; authorization is not reimplemented in the store.
+- **Idempotency is atomic.** `begin_idempotent_command` performs purge, lookup,
+  capacity check and insert in one `IMMEDIATE` transaction. Exactly one
+  concurrent retry receives `Execute`. In-flight records never expire; completed
+  records become tombstones after retention and still consume capacity; a full
+  store refuses new keys instead of evicting.
+- **No secrets.** Device rows store only the public-key fingerprint and grant
+  policy. Private keys, pairing secrets and session keys are not written to
+  SQLite.
+
+**NOT VERIFIED:** Host RPC/transport wiring, relay/WAN delivery, OS keychain
+storage, real phone/relay reconnect, and multi-process contention beyond the
+SQLite busy timeout are not exercised by this adapter. The store contract is
+covered by reopen, cursor-regression, retention, CAS, concurrent-begin and
+migration tests; real transport integration remains a separate milestone.
 
 ## Local developer walkthrough
 
@@ -111,13 +165,14 @@ The CLI uses quoted arguments. The example angle-bracket placeholders must be re
 - A layout tree is not yet a draggable multi-pane implementation: GPUI renders the stored split structure but ratio-resizing, drag/reorder, tab management and per-device layout preferences are still planned.
 - Dynamic herdr-core terminals are intentionally not auto-assigned to a random Session. Mapping requires user intent and actual core identity; orphan terminals stay visible in the runtime list.
 - Product-level Sessions survive UI and Host restarts. **Live Agent execution** still depends on herdr-core's independent persistence and its compatibility with the current runtime.
-- A SQLite file cannot protect against another malicious process running as the same OS user. The full device trust, plugin sandbox and remote authorization remain separate security milestones.
-- SQLite migrations, CI and platform-specific file permissions need actual runtime testing before release.
+- A SQLite file cannot protect against another malicious process running as the same OS user. Device trust persistence exists, but pairing cryptography, OS key storage, plugin sandbox and remote transport authorization remain separate security milestones.
+- SQLite migrations are covered by automated tests; CI and platform-specific file permissions still need actual runtime testing before release.
 
 ## Tests added
 
 - Domain: split/close roundtrip, preserve Agent identity, reject last-pane removal, reject invalid ratios, duplicate IDs, JSON format stability.
 - Store: DB reopen persistence, optimistic revision conflict, cross-Session binding rejection, archived Session not removing AgentRun.
+- Store (S1, schema v3): event-log reopen and continued cursors, cursor regression, retention floor/snapshot boundary, duplicate event id, generation mismatch; device grants across reopen/expiry, rotation/revocation CAS invalidation; idempotency concurrent begin, tombstone expiry, capacity refusal, plane/principal/fingerprint conflicts; v1→v3 and v2→v3 migration with workspace data preserved.
 - Host integration: mock hc live event stream + local socket `workspace.snapshot` from persisted SQLite.
 - Windows: Windows Named Pipe test additionally reads a persisted Space and Session from Host.
 - Three-OS Rust CI, GPUI build workflow already configured; success is **not** confirmed.

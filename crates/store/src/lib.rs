@@ -1,17 +1,27 @@
 //! ukk SQLite repository API. Runtime processes remain owned by herdr-core.
 //! Re-export public storage API while keeping schema, records and layout SQL
 //! separate from each other and the GPUI frontend.
+//!
+//! Schema v3 adds the durable S1 protocol state: per-stream event logs, device
+//! trust/grants and idempotency records. Protocol types and decisions stay in
+//! `ukk-protocol`; this crate only persists and reloads them.
 
 use rusqlite::Connection;
 use std::{error::Error, fmt};
 use ukk_domain::LayoutError;
+use ukk_protocol::{EnvelopeError, IdempotencyError, LimitError, RegistryError, SyncError};
 
+mod events;
+mod idempotency;
 mod layouts;
 mod records;
+#[cfg(test)]
+mod s1_tests;
 mod schema;
 mod snapshot;
 #[cfg(test)]
 mod tests;
+mod trust;
 
 pub use schema::default_database_path;
 
@@ -21,9 +31,16 @@ pub enum StoreError {
     Json(serde_json::Error),
     Io(std::io::Error),
     Layout(LayoutError),
+    Limit(LimitError),
+    Envelope(EnvelopeError),
+    Protocol(SyncError),
+    Trust(RegistryError),
+    Idempotency(IdempotencyError),
     Invalid(String),
     NotFound(String),
     Conflict,
+    CasConflict,
+    DuplicateEvent(String),
     UnsupportedVersion(i64),
 }
 
@@ -34,9 +51,18 @@ impl fmt::Display for StoreError {
             Self::Json(e) => write!(f, "layout JSON: {e}"),
             Self::Io(e) => write!(f, "filesystem: {e}"),
             Self::Layout(e) => write!(f, "invalid pane layout: {e}"),
+            Self::Limit(e) => write!(f, "protocol limit: {e}"),
+            Self::Envelope(e) => write!(f, "protocol envelope: {e}"),
+            Self::Protocol(e) => write!(f, "durable protocol state: {e}"),
+            Self::Trust(e) => write!(f, "device trust: {e}"),
+            Self::Idempotency(e) => write!(f, "idempotency: {e}"),
             Self::Invalid(s) => write!(f, "invalid input: {s}"),
             Self::NotFound(s) => write!(f, "not found: {s}"),
             Self::Conflict => write!(f, "layout revision conflict; reload before retrying"),
+            Self::CasConflict => {
+                write!(f, "generation conflict; reload before retrying")
+            }
+            Self::DuplicateEvent(id) => write!(f, "durable event already exists: {id}"),
             Self::UnsupportedVersion(v) => {
                 write!(f, "database schema version {v} is newer than supported")
             }
@@ -66,9 +92,44 @@ impl From<LayoutError> for StoreError {
         Self::Layout(e)
     }
 }
+impl From<LimitError> for StoreError {
+    fn from(e: LimitError) -> Self {
+        Self::Limit(e)
+    }
+}
+impl From<EnvelopeError> for StoreError {
+    fn from(e: EnvelopeError) -> Self {
+        Self::Envelope(e)
+    }
+}
+impl From<SyncError> for StoreError {
+    fn from(e: SyncError) -> Self {
+        Self::Protocol(e)
+    }
+}
+impl From<RegistryError> for StoreError {
+    fn from(e: RegistryError) -> Self {
+        Self::Trust(e)
+    }
+}
+impl From<IdempotencyError> for StoreError {
+    fn from(e: IdempotencyError) -> Self {
+        Self::Idempotency(e)
+    }
+}
 
-pub type Result<T> = std::result::Result<T, StoreError>;
+pub type Result<T, E = StoreError> = std::result::Result<T, E>;
 
 pub struct Store {
     conn: Connection,
+    limits: ukk_protocol::Limits,
+}
+
+/// Wall-clock milliseconds for persisted timestamps and grant/idempotency
+/// expiry. This is metadata time, not a durable cursor.
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }

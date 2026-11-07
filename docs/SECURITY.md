@@ -269,6 +269,7 @@ Use macOS Keychain / iOS Keychain. Host identity and pairing material must never
 | Oversized payload/event/snapshot rejection | `tests/wire.rs` |
 | Version negotiation mismatch and envelope generation mismatch | `tests/wire.rs` |
 | Reserved `hc_seq`/`host_epoch` rejection; unknown fields | `tests/wire.rs` |
+| Durable event log, trust grants and idempotency records survive reopen; rotation/revocation CAS invalidation; concurrent begin | `crates/store/src/s1_tests.rs` |
 
 ## NOT VERIFIED in S1
 
@@ -280,8 +281,10 @@ working:
   registry inputs that S2 pairing must produce and authenticate.
 * **Host transport integration.** The crate is not yet called by a live Host
   listener or relay connection; no phone or relay packet test has run.
-* **Durable persistence.** Event logs, trust records and idempotency records are
-  modeled in memory; SQLite tables/migrations are a follow-up.
+* **Durable persistence.** `crates/store` schema v3 persists event logs, device
+  trust/grants and idempotency records with reopen, CAS and migration tests.
+  Host transport integration, relay/WAN delivery and OS key storage remain
+  separate; no live Host listener calls this adapter yet.
 * **Controller lease issuance UI.** Leases are API-typed and expiry-tested, but
   no local consent surface exists yet (M1).
 * **Rate limiting and fuzzing.** Size/queue bounds exist; per-connection rate
