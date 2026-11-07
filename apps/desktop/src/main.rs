@@ -382,6 +382,56 @@ impl Workspace {
             )
     }
 
+    fn space_row(&self, space: &ukk_domain::Space, cx: &mut Context<Self>) -> impl IntoElement {
+        let id = space.id.clone();
+        let title = space.title.clone();
+        let active = self.selected_space.as_deref() == Some(id.as_str());
+        div()
+            .id(format!("space-{id}"))
+            .px_3()
+            .py_2()
+            .rounded_lg()
+            .cursor_pointer()
+            .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
+            .hover(|style| style.bg(rgb(SURFACE)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.selected_space = Some(id.clone());
+                this.selected_session = this.domain.sessions.iter()
+                    .find(|s| s.space_id == id && !s.archived)
+                    .map(|s| s.id.clone());
+                this.selected = None;
+                cx.notify();
+            }))
+            .child(div().text_sm().text_color(rgb(INK)).child(title))
+    }
+
+    fn pane_button(
+        &self,
+        cx: &mut Context<Self>,
+        id: String,
+        label: &'static str,
+        action: PaneAction,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(LINE))
+            .bg(rgb(WHITE))
+            .text_xs()
+            .text_color(rgb(ACCENT))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(SURFACE)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.mutation_busy {
+                    this.pane_action(action.clone(), cx);
+                }
+            }))
+            .child(label)
+    }
+
     fn session_row(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.selected_session.as_deref() == Some(session.id.as_str());
         let id = session.id.clone();
@@ -407,43 +457,50 @@ impl Workspace {
             )
     }
 
-    fn session_pane(&self, node: &PaneNode) -> gpui::AnyElement {
+    /// Recursive native composition. Splits are ordinary GPUI layout nodes;
+    /// only the Host changes durable layout data. No Pane owns an Agent.
+    fn session_pane(&self, node: &PaneNode, cx: &mut Context<Self>) -> gpui::AnyElement {
         match node {
             PaneNode::Leaf { id, content } => {
                 let (heading, description) = match content {
                     PaneContent::Activity => (
                         "Activity".to_string(),
-                        "No structured activity events have been connected yet.".to_string(),
+                        "Structured activity stream will be connected here.".to_string(),
                     ),
                     PaneContent::Files => (
                         "Files".to_string(),
-                        "Project file browser is not connected yet.".to_string(),
+                        "Project browser is not connected yet.".to_string(),
                     ),
                     PaneContent::Diff => (
                         "Diff".to_string(),
-                        "Git diff integration is the next stage.".to_string(),
+                        "Git diff integration is upcoming.".to_string(),
                     ),
                     PaneContent::Agent { agent_run_id } => {
                         let binding = self.domain.agent_runs.iter().find(|a| &a.id == agent_run_id);
                         match binding {
                             Some(run) => (
                                 format!("Agent · {}", run.adapter),
-                                format!("Bound to {} / {}. Runtime remains in herdr-core.",
+                                format!("{} / {} · runtime owned by herdr-core.",
                                     run.core_id, run.terminal_address),
                             ),
-                            None => ("Unresolved Agent pane".into(), "Binding not found in this Session.".into()),
+                            None => ("Unresolved Agent".into(), "Binding not found.".into()),
                         }
                     }
                     PaneContent::Terminal { agent_run_id } => {
                         let binding = self.domain.agent_runs.iter().find(|a| &a.id == agent_run_id);
                         match binding {
-                            Some(run) => (
-                                "Terminal".into(),
-                                format!("{} · PTY attachment not implemented yet.", run.terminal_address),
-                            ),
-                            None => ("Unresolved Terminal pane".into(), "Binding not found.".into()),
+                            Some(run) => ("Terminal".into(),
+                                format!("{} · PTY attachment is upcoming.", run.terminal_address)),
+                            None => ("Unresolved Terminal".into(), "Binding not found.".into()),
                         }
                     }
+                };
+                let new_content = match content {
+                    PaneContent::Agent { agent_run_id } =>
+                        PaneContent::Terminal { agent_run_id: agent_run_id.clone() },
+                    PaneContent::Diff => PaneContent::Files,
+                    PaneContent::Files => PaneContent::Activity,
+                    PaneContent::Terminal { .. } | PaneContent::Activity => PaneContent::Diff,
                 };
                 div()
                     .flex()
@@ -456,26 +513,78 @@ impl Workspace {
                     .rounded_lg()
                     .border_1()
                     .border_color(rgb(LINE))
-                    .child(div().text_sm().font_semibold().text_color(rgb(INK)).child(heading))
-                    .child(div().mt_2().text_xs().text_color(rgb(MUTED)).child(description))
-                    .child(div().mt_4().text_xs().text_color(rgb(MUTED)).child(format!("Pane: {id}")))
+                    .child(
+                        div().flex().items_center().justify_between().gap_2()
+                            .child(div().text_sm().font_semibold()
+                                .text_color(rgb(INK)).child(heading))
+                            .child(
+                                div().flex().gap_1()
+                                    .child(self.pane_button(cx, format!("{id}-split-right"), "Split →",
+                                        PaneAction::Split { pane_id: id.clone(),
+                                            axis: SplitAxis::Horizontal,
+                                            content: new_content.clone() }))
+                                    .child(self.pane_button(cx, format!("{id}-split-down"), "Split ↓",
+                                        PaneAction::Split { pane_id: id.clone(),
+                                            axis: SplitAxis::Vertical,
+                                            content: new_content }))
+                                    .child(self.pane_button(cx, format!("{id}-close"), "×",
+                                        PaneAction::Close { pane_id: id.clone() })),
+                            ),
+                    )
+                    .child(div().mt_3().text_sm().text_color(rgb(MUTED)).child(description))
+                    .child(div().mt_5().text_xs().text_color(rgb(MUTED))
+                        .child(format!("View ID: {id}")))
                     .into_any_element()
             }
-            PaneNode::Split { axis, first, second, .. } => {
-                let base = div().flex().flex_1().min_w_0().min_h_0().gap_3();
-                let base = if *axis == SplitAxis::Vertical {
-                    base.flex_col()
+            PaneNode::Split { id, axis, ratio, first, second } => {
+                let smaller = (*ratio - 0.1).max(0.15);
+                let larger = (*ratio + 0.1).min(0.85);
+                let controls = div()
+                    .flex()
+                    .justify_end()
+                    .items_center()
+                    .gap_2()
+                    .mb_2()
+                    .child(
+                        div().text_xs().text_color(rgb(MUTED))
+                            .child(format!("{}% / {}%",
+                                (*ratio * 100.0).round() as i32,
+                                ((1.0 - ratio) * 100.0).round() as i32)),
+                    )
+                    .child(self.pane_button(cx, format!("{id}-smaller"), "−",
+                        PaneAction::Resize { split_id: id.clone(), ratio: smaller }))
+                    .child(self.pane_button(cx, format!("{id}-larger"), "+",
+                        PaneAction::Resize { split_id: id.clone(), ratio: larger }));
+                let first_view = div()
+                    .flex()
+                    .flex_shrink_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .flex_basis(gpui::DefiniteLength::Fraction(*ratio))
+                    .child(self.session_pane(first, cx));
+                let second_view = div()
+                    .flex()
+                    .flex_shrink_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .flex_basis(gpui::DefiniteLength::Fraction(1.0 - ratio))
+                    .child(self.session_pane(second, cx));
+                let columns = div().flex().flex_1().min_w_0().min_h_0().gap_3();
+                let columns = if *axis == SplitAxis::Vertical {
+                    columns.flex_col()
                 } else {
-                    base.flex_row()
+                    columns.flex_row()
                 };
-                base.child(self.session_pane(first))
-                    .child(self.session_pane(second))
+                div()
+                    .flex().flex_col().flex_1().min_w_0().min_h_0()
+                    .child(controls)
+                    .child(columns.child(first_view).child(second_view))
                     .into_any_element()
             }
         }
     }
 
-    fn session_detail(&self, session: &Session) -> impl IntoElement {
+    fn session_detail(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement {
         let root = self.domain.layouts.iter()
             .find(|layout| layout.session_id == session.id)
             .map(|layout| &layout.root);
@@ -501,7 +610,7 @@ impl Workspace {
                         .child("Pane layout is restored from SQLite; no view owns an Agent process.")),
             );
         if let Some(root) = root {
-            view = view.child(div().flex().flex_1().min_h_0().p_5().child(self.session_pane(root)));
+            view = view.child(div().flex().flex_1().min_h_0().p_5().child(self.session_pane(root, cx)));
         } else {
             view = view.child(div().p_6().text_color(rgb(MUTED)).child("Session layout unavailable"));
         }
@@ -706,7 +815,7 @@ impl Workspace {
     fn detail(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         if let Some(id) = self.selected_session.as_deref() {
             if let Some(session) = self.domain.sessions.iter().find(|session| session.id == id) {
-                return self.session_detail(session).into_any_element();
+                return self.session_detail(session, cx).into_any_element();
             }
         }
         let selected = self.selected_terminal().cloned();
