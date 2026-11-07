@@ -33,7 +33,11 @@ impl Workspace {
             }
         }
         let selected = self.selected_terminal().cloned();
-        let title = selected.as_ref().map(|t| t.display_name()).unwrap_or("No agents running").to_string();
+        let title = selected
+            .as_ref()
+            .map(|t| t.display_name())
+            .unwrap_or("No agents running")
+            .to_string();
 
         let mut body = div()
             .flex()
@@ -118,7 +122,10 @@ impl Workspace {
             term.argv.join(" ")
         };
         let parent = term.parent.clone().unwrap_or_else(|| "—".to_owned());
-        let app = term.reported_app.clone().unwrap_or_else(|| "Not reported".to_owned());
+        let app = term
+            .reported_app
+            .clone()
+            .unwrap_or_else(|| "Not reported".to_owned());
         let lifecycle = term.lifecycle.clone();
         let address = term.address.clone();
         let cwd = term.cwd.clone();
@@ -212,19 +219,23 @@ impl Workspace {
                     .text_color(rgb(MUTED))
                     .child(name),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .text_sm()
-                    .text_color(rgb(INK))
-                    .child(value),
-            )
+            .child(div().flex_1().text_sm().text_color(rgb(INK)).child(value))
     }
 
     pub(super) fn inspector(&self) -> impl IntoElement {
         let count = self.snapshot.terminals.len();
-        let running = self.snapshot.terminals.iter().filter(|t| t.lifecycle == "live").count();
-        let needs_you = self.snapshot.terminals.iter().filter(|t| t.reported_status.as_deref() == Some("blocked")).count();
+        let running = self
+            .snapshot
+            .terminals
+            .iter()
+            .filter(|t| t.lifecycle == "live")
+            .count();
+        let needs_you = self
+            .snapshot
+            .terminals
+            .iter()
+            .filter(|t| t.reported_status.as_deref() == Some("blocked"))
+            .count();
         let message = self.message.clone();
         div()
             .flex()
