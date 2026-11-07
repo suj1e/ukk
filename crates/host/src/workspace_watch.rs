@@ -22,11 +22,7 @@ pub(crate) fn snapshot() -> StoreResult<Value> {
 /// Bounded (10 seconds max) long-poll that observes writes committed by
 /// *any* SQLite connection. A database replacement changes db_epoch, so a
 /// stale desktop always receives an authoritative new snapshot.
-pub(crate) fn wait(
-    after_epoch: &str,
-    after_revision: i64,
-    timeout_ms: u64,
-) -> StoreResult<Value> {
+pub(crate) fn wait(after_epoch: &str, after_revision: i64, timeout_ms: u64) -> StoreResult<Value> {
     let store = Store::open_default()?;
     let deadline = Instant::now() + Duration::from_millis(timeout_ms.min(10_000));
     loop {
@@ -57,9 +53,6 @@ mod tests {
         let value = versioned(&store).unwrap();
         assert_eq!(value["revision"], 1);
         assert!(value["snapshot"]["spaces"].as_array().unwrap().len() == 1);
-        assert_eq!(
-            value["db_epoch"],
-            store.workspace_cursor().unwrap().0
-        );
+        assert_eq!(value["db_epoch"], store.workspace_cursor().unwrap().0);
     }
 }
