@@ -59,6 +59,10 @@ Behaviour details:
 - `serve` and `cleanup` acquire an exclusive `flock` on
   `<socket-dir>/agent-host.lock`. The kernel drops this lock when the Host
   exits, so a crash or SIGTERM never leaves an unrecoverable lock.
+- On Windows, Host exclusivity is proven by creating the first Named Pipe
+  instance **before** `LocalAuth::install()` and before broker work starts. A
+  refused second Host therefore cannot rotate the live Host's mutation
+  capability token or leave it transiently missing.
 
 ## Stale-socket recovery (Unix)
 
@@ -71,13 +75,18 @@ is intentionally conservative and race-free between Hosts:
 3. Probe the path:
    - missing → bind normally;
    - a socket with a **successful connect** → refuse: a live Host owns it;
-   - a socket with a failed connect → re-check it is still a socket, then unlink
-     it and bind;
+   - a socket with **`ECONNREFUSED`** → re-check it is still a socket, verify it
+     is owned by the Host uid with mode 0600, then unlink it and bind;
+   - any other connect error (`EACCES`, `EMFILE`, `EAGAIN`, …) → abort with a
+     diagnostic; ambiguous failures never authorize an unlink;
    - a symlink or any non-socket file → refuse and leave it untouched.
 4. Bind, set the socket to 0600, verify type/uid/mode, then serve.
 
-`ukk-host cleanup` performs the same probe under the same lock and only removes
-a verified stale socket. It refuses a live socket, a foreign file and a symlink.
+`ukk-host cleanup` validates the directory (real directory, owned by the Host
+uid, no group/other bits) before creating the lock, then performs the same
+probe under that lock. It only removes a socket that is still owned by the
+Host uid with mode 0600. It refuses a live socket, a foreign file, a symlink
+and any non-private stale socket.
 
 ### Reproduced acceptance scenario
 
@@ -113,9 +122,10 @@ Automated equivalents (macOS, run locally):
 
 ### Unix socket
 
-- Directory: default path forced to 0700; **all** paths (including
-  `UKK_SOCKET` overrides) must be a real directory, owned by the Host uid, with
-  no group/other permission bits. Insecure directories and symlinks are
+- Directory: default path validated (real directory, Host uid) and only then
+  forced to 0700; **all** paths (including `UKK_SOCKET` overrides) must be a
+  real directory owned by the Host uid with no group/other permission bits.
+  Identity is checked before any chmod. Insecure directories and symlinks are
   rejected before bind.
 - Socket: created 0600, then type, uid and mode are verified; a mismatch aborts
   startup.

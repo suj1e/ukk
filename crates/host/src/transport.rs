@@ -227,6 +227,11 @@ pub(super) fn serve_windows() -> AppResult<()> {
     use ukk_host_client::windows_pipe::{self, PipeStream};
 
     let name = windows_pipe::pipe_name()?;
+    // Prove exclusive ownership *before* rotating the mutation capability or
+    // starting broker work. A second Host must fail at the first pipe
+    // instance and must never invalidate the live Host's token.
+    let mut pending = windows_pipe::create_server_pipe(&name, true)?;
+    let auth = Arc::new(LocalAuth::install()?);
     let broker = Broker::new();
     broker.start();
     println!("ukk Host listening on local Named Pipe {name}");
@@ -234,9 +239,7 @@ pub(super) fn serve_windows() -> AppResult<()> {
         "Security: same-user Named Pipe clients only; protected DACL; remote pipe clients \
          rejected; max {MAX_CONNECTIONS} clients"
     );
-    let auth = Arc::new(LocalAuth::install()?);
     let clients = Arc::new(AtomicUsize::new(0));
-    let mut pending = windows_pipe::create_server_pipe(&name, true)?;
     loop {
         windows_pipe::accept_client(&pending)?;
         // Install the replacement instance before detaching the connected

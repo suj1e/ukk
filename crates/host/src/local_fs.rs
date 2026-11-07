@@ -7,6 +7,7 @@
 //!   is listening, and only while a lifecycle `flock` excludes concurrent
 //!   Host startup. A live socket, symlink or unrelated file is never unlinked.
 
+use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -62,15 +63,36 @@ pub(super) fn secure_socket_directory(
 ) -> Result<(), String> {
     fs::create_dir_all(directory)
         .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
-    if default_location {
-        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("could not protect {}: {error}", directory.display()))?;
-    }
+    // Validate the existing object *before* changing permissions: never chmod
+    // a directory that is a symlink or owned by a different user.
     let metadata = fs::symlink_metadata(directory)
         .map_err(|error| format!("could not inspect {}: {error}", directory.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(format!(
             "socket directory {} must be a real directory, not a symlink or file",
+            directory.display()
+        ));
+    }
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let expected = unsafe { libc::geteuid() };
+    if metadata.uid() != expected {
+        return Err(format!(
+            "refusing socket directory {}: owned by uid {}, but the Host runs as uid {expected} \
+             (permissions were not changed)",
+            directory.display(),
+            metadata.uid()
+        ));
+    }
+    if default_location {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("could not protect {}: {error}", directory.display()))?;
+    }
+    // Re-read after the chmod so the verified mode is the mode used for bind.
+    let metadata = fs::symlink_metadata(directory)
+        .map_err(|error| format!("could not inspect {}: {error}", directory.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "socket directory {} changed while being verified; refusing to use it",
             directory.display()
         ));
     }
@@ -145,10 +167,17 @@ pub(super) fn socket_state(path: &Path) -> io::Result<SocketState> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(SocketState::Missing),
         Err(error) => Err(error),
         Ok(metadata) if metadata.file_type().is_symlink() => Ok(SocketState::Foreign),
-        Ok(metadata) if metadata.file_type().is_socket() => Ok(match UnixStream::connect(path) {
-            Ok(_) => SocketState::Live,
-            Err(_) => SocketState::Stale,
-        }),
+        Ok(metadata) if metadata.file_type().is_socket() => match UnixStream::connect(path) {
+            Ok(_) => Ok(SocketState::Live),
+            // Only a refused connection proves that a socket exists with no
+            // listener. EACCES, EMFILE, EAGAIN and other failures are
+            // ambiguous and must never authorize an unlink.
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+                Ok(SocketState::Stale)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(SocketState::Missing),
+            Err(error) => Err(error),
+        },
         Ok(_) => Ok(SocketState::Foreign),
     }
 }
@@ -172,6 +201,9 @@ pub(super) fn remove_stale_socket(path: &Path) -> Result<bool, String> {
             // redirect the unlink to a file or symlink.
             match fs::symlink_metadata(path) {
                 Ok(metadata) if metadata.file_type().is_socket() => {
+                    // Fail closed unless the object we are about to unlink is
+                    // still our own 0600 socket, not a swapped file/symlink.
+                    verify_socket_permissions(path)?;
                     fs::remove_file(path).map_err(|error| {
                         format!("could not remove stale socket {}: {error}", path.display())
                     })?;
@@ -207,6 +239,9 @@ pub(super) fn cleanup_stale_socket(path: &Path) -> Result<String, String> {
             directory.display()
         ));
     }
+    // Cleanup must never unlink inside an insecure or foreign-owned directory.
+    let default_location = env::var_os("UKK_SOCKET").is_none();
+    secure_socket_directory(directory, default_location)?;
     let _lock = HostLock::acquire(directory)?;
     match socket_state(path)
         .map_err(|error| format!("could not inspect {}: {error}", path.display()))?
@@ -328,6 +363,7 @@ mod tests {
         let directory = private_temp_dir("stale");
         let path = directory.join("agent-host.sock");
         let listener = UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(socket_state(&path).unwrap(), SocketState::Live);
         let live_error = remove_stale_socket(&path).unwrap_err();
         assert!(live_error.contains("already listening"), "{live_error}");
@@ -336,6 +372,26 @@ mod tests {
         assert_eq!(socket_state(&path).unwrap(), SocketState::Stale);
         assert!(remove_stale_socket(&path).unwrap());
         assert!(!path.exists());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn stale_socket_with_loose_permissions_is_not_removed() {
+        let directory = private_temp_dir("stale-mode");
+        let path = directory.join("agent-host.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        drop(listener);
+        assert_eq!(socket_state(&path).unwrap(), SocketState::Stale);
+        let error = remove_stale_socket(&path).unwrap_err();
+        assert!(error.contains("0600"), "{error}");
+        assert!(
+            path.exists(),
+            "a non-private stale socket must not be unlinked"
+        );
+        let cleanup_error = cleanup_stale_socket(&path).unwrap_err();
+        assert!(cleanup_error.contains("0600"), "{cleanup_error}");
+        assert!(path.exists());
         let _ = fs::remove_dir_all(&directory);
     }
 

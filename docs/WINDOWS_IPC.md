@@ -58,8 +58,10 @@ this local IPC endpoint. No TCP fallback exists.
    SID and SYSTEM have full access. It refuses null/missing security
    descriptors. **No Win32 default pipe ACL fallback.**
 3. `PIPE_REJECT_REMOTE_CLIENTS` prohibits remote machines.
-4. `FILE_FLAG_FIRST_PIPE_INSTANCE` is required for the first server instance;
-   a second Host cannot take over a live endpoint.
+4. `FILE_FLAG_FIRST_PIPE_INSTANCE` is required for the first server instance,
+   and it is created **before** the mutation capability is rotated or the
+   broker starts. A second Host cannot take over a live endpoint, invalidate
+   the live Host's token, or start competing broker work.
 5. Client opens with `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION`, never
    full impersonation.
 6. **Server verifies the client process token SID** and **client verifies the
@@ -88,9 +90,10 @@ this local IPC endpoint. No TCP fallback exists.
 - Peer uid must equal the Host effective uid (`SO_PEERCRED` on Linux/Android,
   `getpeereid` on macOS/BSD); unsupported platforms fail closed.
 - Stale-socket recovery runs under an exclusive `flock`: a successful connect
-  probe means a live Host and the socket is never unlinked; a failed probe plus
-  a still-a-socket re-check permits safe removal. `ukk-host cleanup` performs
-  the same check explicitly.
+  probe means a live Host and the socket is never unlinked. Only
+  `ECONNREFUSED` counts as stale; ambiguous errors abort. Removal requires the
+  path to still be a Host-owned 0600 socket. `ukk-host cleanup` validates the
+  directory ownership/mode first and performs the same checks explicitly.
 - Read/write timeouts and quotas match the Windows limits.
 
 ### Threats not yet addressed for production

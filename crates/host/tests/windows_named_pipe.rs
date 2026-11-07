@@ -121,7 +121,10 @@ fn windows_second_host_is_rejected_while_first_is_live() {
     let root = std::env::temp_dir().join(format!("ukk-win-live-{}", new_id()));
     std::fs::create_dir_all(&root).unwrap();
     let db = root.join("workspace.sqlite3");
-    drop(Store::open(&db).unwrap());
+    let space = {
+        let mut store = Store::open(&db).unwrap();
+        store.create_space("Windows live", "C:/src/ukk").unwrap()
+    };
     let host_environment = |command: &mut Command| {
         command
             .arg("serve")
@@ -170,6 +173,22 @@ fn windows_second_host_is_rejected_while_first_is_live() {
         client.ping().unwrap_or(false),
         "the live Host pipe must survive the rejected second Host"
     );
+
+    // Regression guard: the refused second Host must fail *before* rotating
+    // the mutation capability token. Otherwise the live Host would keep the
+    // old secret and every local mutation would return -32030.
+    let created = client
+        .local_workspace_mutation(
+            "workspace.session.create",
+            json!({
+                "request_id": new_id(),
+                "space_id": space.id,
+                "title": "After refused second Host"
+            }),
+        )
+        .expect("live Host mutation capability must survive a refused second start");
+    assert!(created["id"].is_string(), "{created}");
+
     drop(guard);
     std::fs::remove_dir_all(root).unwrap();
 }
