@@ -23,6 +23,12 @@ The platform validation track runs throughout Milestones 0–4:
 
 See [platform matrix](PLATFORM_SUPPORT.md) and [Issue #4](https://github.com/suj1e/ukk/issues/4).
 
+## Delivery scope — current priority
+
+**Active product targets:** one GPUI Desktop codebase for **macOS / Windows / Linux** and a native **SwiftUI iOS / iPadOS** companion. Core multi-Agent, persistent Sessions, plugin platform, QR pairing, Relay and floating Remote Screen remain in scope. Windows Named Pipe and Linux desktop verification are first-class deliverables, not post-launch aspirations.
+
+**Deferred, not canceled:** Android native, Web UI and TUI. They stay as future protocol clients in architectural planning, but have **no current implementation milestone, project skeleton or required CI gate**. Reconsider them after the Desktop + iOS experience is validated.
+
 ## Milestone 0 — Source and interface feasibility
 
 - Pin reference commits/versions for herdr-core, GPUI, Alma Relay and chosen media stack.
@@ -82,7 +88,7 @@ See [platform matrix](PLATFORM_SUPPORT.md) and [Issue #4](https://github.com/suj
 - Plugin development kit, package signing, controlled distribution and registry.
 - Search, session export, shareable deep links, reusable layouts, automation/jobs, webhook integrations.
 - Desktop OS-specific release polish and parity regression; headless servers; multi-machine aggregation.
-- Android Compose; optional Web and Ratatui clients using same domain protocol.
+- **Deferred client backlog only (not a Milestone 5 implementation commitment):** Android Compose, Web and Ratatui/TUI; reactivate by a separate product decision.
 - Accessibility, localization, analytics opt-in, perf budgets, E2EE review, backups/migrations.
 - Reliable public release, security docs and contribution process.
 
