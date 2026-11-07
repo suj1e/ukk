@@ -36,14 +36,15 @@ The Host has a **narrow local capability-protected mutation allowlist** for Sess
 - **[PR #14 — deterministic hc mock transport](https://github.com/suj1e/ukk/pull/14)**: merged Q0 fix. The recurring Ubuntu failure was **`ETXTBSY` (ExecutableFileBusy)**: the test wrote a Python mock executable and immediately exec'd it while parallel test threads could inherit the still-open write descriptor. Replaced with a Cargo-built fixture binary (`CARGO_BIN_EXE_mock_hc`), removed the Python dependency and enabled the test on Windows. Root CI **6/6 green** (push + PR runs, macOS/Ubuntu/Windows).
 - **[PR #12 — cross-Pane Tab move](https://github.com/suj1e/ukk/pull/12)**: **merged** as `4499a02`. Implements `PaneNode::move_tab`, local capability-protected `workspace.tab.move`, one SQLite CAS and GPUI Leaf/Tabs drop targets. Core/Host and Desktop CI passed on all three OSes. Real mouse, nested-target, stale-revision, keyboard and accessibility acceptance remain open under D2/Q0.
 - **Latest observed root CI for the Q0 fix (head `f1f1850`)**: [push run 42389783352](https://github.com/suj1e/ukk/actions/runs/42389783352) and [PR run 42389787914](https://github.com/suj1e/ukk/actions/runs/42389787914) both passed macOS/Ubuntu/Windows. The previous `main` Ubuntu failure was the same ETXTBSY test-fixture race, not a protocol regression.
-- **Real macOS runtime evidence (2026-11-08)**: herdr-core `0.1.18` (signed release, checksum-verified) with two live terminals; `ukk-host doctor` reported 2 terminals, `list` returned both, `watch` emitted snapshot + `created` + `foreground` events. Stopping the Host left both hc terminals live. Restarting the Host failed with `Address already in use` because the stale Unix socket was retained — reproduced for H1.
+- **Real herdr-core evidence (2026-11-08)**: herdr-core `0.1.18` (signed release, pinned URL + SHA-256) verified on **macOS, Ubuntu and Windows CI** via [PR #15](https://github.com/suj1e/ukk/pull/15): two persistent terminals, `ukk-host doctor`/`list` seeing both, `ukk-host watch` emitting snapshot + `created`, and both terminals surviving after the Host viewer stopped. Locally on macOS the same flow also confirmed the Host SIGTERM leaves a stale Unix socket (`Address already in use` on restart) — reproduced for H1.
+- **Still NOT VERIFIED**: live GPUI window interaction on any OS (local macOS build blocks on the missing Metal Toolchain component; `xcodebuild -downloadComponent MetalToolchain` fails to fetch its catalog), plus real-hc launch/attach/send/interrupt lifecycle (R1).
 - CI builds and tests **do not open native windows**. None of these checkmarks demonstrate live drag, accessibility, launch-agent workflows, Windows different-user access denial or iPhone use.
 
 ## Open product gaps
 
 | Priority | Gap / current boundary | Task IDs in roadmap |
 | --- | --- | --- |
-| P0 | Real macOS/Windows/Linux GPUI, Host and SQLite smoke evidence; Windows/Linux real-hc runs | `Q0` |
+| P0 | Live GPUI window smoke on macOS/Windows/Linux (local macOS blocked by missing Metal Toolchain); real-hc launch/attach/send/interrupt | `Q0`, `R1` |
 | P0 | Cross-Pane move merged (#12); add tab keyboard navigation, accessible focus, restart-local focus persistence and correct CAS error UX | `D2` |
 | P0 | Verify real `hc` APIs and attach stream; user-authorized launch/send/interrupt with explicit provenance and lifetimes | `R1` |
 | P0 | Actual conversation/terminal/structured turn content, git diff/files/activity with truthful unsupported-state UX | `R2`, `D3` |

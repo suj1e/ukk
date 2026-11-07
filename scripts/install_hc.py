@@ -72,6 +72,7 @@ def main() -> int:
         [
             "curl",
             "-fsSL",
+            "--show-error",
             "--retry",
             "3",
             "--connect-timeout",
@@ -92,26 +93,28 @@ def main() -> int:
     extracted.mkdir()
     if archive.suffix == ".zip":
         with zipfile.ZipFile(archive) as bundle:
-            bundle.extractall(extracted, filter="data")
+            bundle.extractall(extracted)
     else:
         with tarfile.open(archive) as bundle:
             bundle.extractall(extracted, filter="data")
 
     suffix = ".exe" if key.startswith("win32") else ""
-    source = next(
-        (
-            path
-            for path in extracted.rglob(f"herdr-core{suffix}")
-            if path.is_file()
-        ),
-        None,
-    )
-    if source is None:
-        print("herdr-core executable missing from archive", file=sys.stderr)
-        return 1
-
     install = pathlib.Path(".hc") / "bin"
     install.mkdir(parents=True, exist_ok=True)
+    # Keep the whole archive payload: Windows needs `conpty/` beside the
+    # executable, and macOS ships the signed app bundle. Copying only the
+    # top-level binary would produce a CLI that cannot start terminals.
+    for entry in extracted.iterdir():
+        target = install / entry.name
+        if entry.is_dir():
+            shutil.copytree(entry, target, dirs_exist_ok=True)
+        else:
+            shutil.copy2(entry, target)
+
+    source = install / f"herdr-core{suffix}"
+    if not source.is_file():
+        print("herdr-core executable missing from archive", file=sys.stderr)
+        return 1
     destination = install / f"hc{suffix}"
     shutil.copy2(source, destination)
     destination.chmod(0o755)
