@@ -5,10 +5,14 @@
 //! A production Host will need durable state, identity, permissions and an
 //! event broker before the mobile client can connect.
 
+mod broker;
+
+use broker::Broker;
 use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::sync::Arc;
 
 use ukk_hc_client::HcClient;
 
@@ -114,13 +118,16 @@ fn serve() -> AppResult<()> {
     // Never unlink an existing socket: another Host might own it.
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    let broker = Broker::new();
+    broker.start();
     println!("ukk Host listening on {}", path.display());
-    println!("Read-only methods: host.ping, terminal.list");
+    println!("Read-only methods: host.ping, terminal.list, host.snapshot, host.wait");
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
+                let broker = Arc::clone(&broker);
                 std::thread::spawn(move || {
-                    if let Err(error) = serve_one(stream) {
+                    if let Err(error) = serve_one(stream, broker) {
                         eprintln!("ukk Host client error: {error}");
                     }
                 });
@@ -132,7 +139,7 @@ fn serve() -> AppResult<()> {
 }
 
 #[cfg(unix)]
-fn serve_one(stream: UnixStream) -> AppResult<()> {
+fn serve_one(stream: UnixStream, broker: Arc<Broker>) -> AppResult<()> {
     const MAX_LINE: usize = 64 * 1024;
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream;
@@ -166,13 +173,13 @@ fn serve_one(stream: UnixStream) -> AppResult<()> {
                 continue;
             }
         };
-        let result = handle_request(&input);
+        let result = handle_request(&input, &broker);
         write_json(&mut writer, &result)?;
     }
 }
 
 #[cfg(unix)]
-fn handle_request(req: &Value) -> Value {
+fn handle_request(req: &Value, broker: &Broker) -> Value {
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     if req.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
         || req.get("method").and_then(Value::as_str).is_none()
@@ -188,6 +195,23 @@ fn handle_request(req: &Value) -> Value {
             "jsonrpc":"2.0","id":id,
             "result":{"status":"ok","protocol":"ukk-local-spike-1","read_only":true}
         }),
+        "host.snapshot" => json!({"jsonrpc":"2.0","id":id,"result":broker.snapshot()}),
+        "host.wait" => {
+            let params = req.get("params");
+            let after_epoch = params
+                .and_then(|p| p.get("after_epoch"))
+                .and_then(Value::as_str);
+            let after_revision = params
+                .and_then(|p| p.get("after_revision"))
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let timeout_ms = params
+                .and_then(|p| p.get("timeout_ms"))
+                .and_then(Value::as_u64)
+                .unwrap_or(10_000);
+            json!({"jsonrpc":"2.0","id":id,
+                   "result":broker.wait(after_epoch, after_revision, timeout_ms)})
+        }
         "terminal.list" => match HcClient::default().call("terminal.list", json!({})) {
             Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
             Err(error) => json!({
@@ -234,24 +258,48 @@ mod tests {
 
     #[test]
     fn ping_is_read_only() {
+        let broker = Broker::new();
         let response = handle_request(&json!({
             "jsonrpc":"2.0","id":19,"method":"host.ping","params":{}
-        }));
+        }), &broker);
         assert_eq!(response["id"], 19);
         assert_eq!(response["result"]["read_only"], true);
     }
 
     #[test]
     fn rejects_unknown_or_mutating_methods() {
+        let broker = Broker::new();
         let response = handle_request(&json!({
             "jsonrpc":"2.0","id":20,"method":"terminal.kill","params":{"terminal":"t1"}
-        }));
+        }), &broker);
         assert_eq!(response["error"]["code"], -32601);
     }
 
     #[test]
+    fn snapshot_starts_disconnected() {
+        let broker = Broker::new();
+        let response = handle_request(&json!({
+            "jsonrpc":"2.0","id":30,"method":"host.snapshot","params":{}
+        }), &broker);
+        assert_eq!(response["result"]["revision"], 0);
+        assert_eq!(response["result"]["connected"], false);
+        assert_eq!(response["result"]["terminals"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn wait_returns_immediately_for_new_host_epoch() {
+        let broker = Broker::new();
+        let response = handle_request(&json!({
+            "jsonrpc":"2.0","id":31,"method":"host.wait",
+            "params":{"after_epoch":"previous-host","after_revision":0,"timeout_ms":10000}
+        }), &broker);
+        assert_eq!(response["result"]["revision"], 0);
+    }
+
+    #[test]
     fn rejects_invalid_requests() {
-        let response = handle_request(&json!({"method":"host.ping"}));
+        let broker = Broker::new();
+        let response = handle_request(&json!({"method":"host.ping"}), &broker);
         assert_eq!(response["error"]["code"], -32600);
     }
 }
