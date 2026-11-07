@@ -45,6 +45,12 @@ flowchart TB
 
 **核心关系：** `Host → Spaces → Sessions → AgentRuns → herdr-core TerminalRefs`。Tabs/Panes 仅控制视图；关闭窗口不会终止 Agent。控制协议与屏幕媒体链路分离。
 
+## 当前开发范围
+
+**正在推进：** macOS、Windows、Linux（同一套 GPUI Desktop）＋ iOS / iPadOS（SwiftUI）。核心能力包含 herdr-core 多 Agent、持久 Sessions、自由分栏、插件架构、扫码配对和按需悬浮 Remote Screen。
+
+**暂缓：** Android、Web、TUI。保留未来可通过统一协议接入的扩展空间，当前不创建客户端工程、不分配实现里程碑；不影响 Desktop / iOS 的功能完整性。
+
 ## Desktop platforms / 桌面跨平台
 
 **macOS、Windows、Linux 都是 ukk Desktop 的一等目标平台。** 同一套 Rust + GPUI 原生 UI，共用 Host 协议与 herdr-core Runtime。macOS 使用 Metal，Windows 使用 Win32/DirectWrite，Linux 使用 Wayland/X11。
@@ -59,7 +65,7 @@ flowchart TB
 - **Floating Remote Screen:** 会话内浮窗，点击可展开控制，收起继续对话；查看与操控需独立授权。
 - **Plugin Platform:** Manifest、命令、事件、原生视图槽位、插件权限代理、后台任务。
 - **Persistent runtime:** herdr-core 持有实际执行；ukk Host 管理产品级状态与跨端同步。
-- **Future clients:** Windows/Linux、Android、Web、TUI、Headless，按阶段推进但不删减完整愿景。
+- **Platform scope:** 当前优先完成 macOS / Windows / Linux 的 GPUI Desktop，以及 SwiftUI iOS / iPadOS；Android / Web / TUI 放入未来候选清单，暂不立项开发。Headless Host 仍属于多设备能力基础。
 
 ## Runtime Spike 01 — source now available
 
