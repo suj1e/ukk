@@ -32,6 +32,15 @@ struct DraggedSplitHandle {
     split_id: String,
 }
 
+/// Drag payload carries only local Session and view identifiers. It must
+/// never grant process control or move a Tab across different Sessions.
+#[derive(Clone)]
+struct DraggedPaneTab {
+    session_id: String,
+    source_group_id: String,
+    tab_id: String,
+}
+
 struct SplitDragPreview {
     session_id: String,
     split_id: String,
@@ -65,6 +74,11 @@ enum PaneAction {
         group_id: String,
         tab_id: String,
         direction: i32,
+    },
+    TabMove {
+        source_group_id: String,
+        destination_pane_id: String,
+        tab_id: String,
     },
 }
 
