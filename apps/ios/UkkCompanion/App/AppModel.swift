@@ -73,8 +73,9 @@ final class AppModel: ObservableObject {
     }
 
     /// Scanned payloads are validated in memory only; they never reach
-    /// `pairingPayloadDraft`, the UI, logs or disk.
-    func handleScannedCode(_ payload: String) {
-        validatePairing(payload: payload)
+    /// `pairingPayloadDraft`, the UI, logs or disk. The clock is injectable so
+    /// tests are deterministic against fixture timestamps.
+    func handleScannedCode(_ payload: String, now: Date = Date()) {
+        validatePairing(payload: payload, now: now)
     }
 }

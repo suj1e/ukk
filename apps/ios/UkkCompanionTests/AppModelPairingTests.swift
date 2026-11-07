@@ -9,7 +9,7 @@ final class AppModelPairingTests: XCTestCase {
         let payload = makePayload(secret: secret)
         let outcome = await MainActor.run { () -> (draft: String, message: String?) in
             let model = AppModel()
-            model.handleScannedCode(payload)
+            model.handleScannedCode(payload, now: FixtureTime.base)
             return (model.pairingPayloadDraft, model.pairingParseMessage)
         }
 
