@@ -1,7 +1,7 @@
 //! Space, Session and AgentRun persistence; no terminal process actions.
 use super::*;
 use rusqlite::{params, OptionalExtension};
-use std::{time::{SystemTime, UNIX_EPOCH}};
+use std::time::{SystemTime, UNIX_EPOCH};
 use ukk_domain::{new_id, AgentRun, Session, SessionLayout, Space};
 
 fn now_ms() -> i64 {
@@ -14,7 +14,9 @@ fn now_ms() -> i64 {
 fn nonempty(value: &str, field: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 200 {
-        return Err(StoreError::Invalid(format!("{field} must contain 1–200 characters")));
+        return Err(StoreError::Invalid(format!(
+            "{field} must contain 1–200 characters"
+        )));
     }
     Ok(value.to_owned())
 }
@@ -45,38 +47,59 @@ impl Store {
     /// Repeating that UUID with different inputs is rejected (not silently
     /// interpreted as a new action). This operation never starts a terminal.
     pub fn create_session_with_id(
-        &mut self, space_id: &str, title: &str, id: &str,
+        &mut self,
+        space_id: &str,
+        title: &str,
+        id: &str,
     ) -> Result<Session> {
         let title = nonempty(title, "Session title")?;
         let space_id = nonempty(space_id, "Space ID")?;
         let id = uuid::Uuid::parse_str(id)
             .map_err(|_| StoreError::Invalid("request_id must be a UUID".into()))?
             .to_string();
-        let tx = self.conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let previous = tx.query_row(
-            "SELECT id,space_id,title,archived,created_ms,updated_ms FROM sessions WHERE id=?1",
-            params![id],
-            |row| Ok(Session {
-                id: row.get(0)?, space_id: row.get(1)?, title: row.get(2)?,
-                archived: row.get::<_, i64>(3)? != 0,
-                created_ms: row.get(4)?, updated_ms: row.get(5)?,
-            }),
-        ).optional()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let previous = tx
+            .query_row(
+                "SELECT id,space_id,title,archived,created_ms,updated_ms FROM sessions WHERE id=?1",
+                params![id],
+                |row| {
+                    Ok(Session {
+                        id: row.get(0)?,
+                        space_id: row.get(1)?,
+                        title: row.get(2)?,
+                        archived: row.get::<_, i64>(3)? != 0,
+                        created_ms: row.get(4)?,
+                        updated_ms: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
         if let Some(existing) = previous {
             if existing.space_id == space_id && existing.title == title {
                 return Ok(existing);
             }
             return Err(StoreError::Conflict);
         }
-        let exists: Option<String> = tx.query_row(
-            "SELECT id FROM spaces WHERE id=?1", params![space_id], |row| row.get(0),
-        ).optional()?;
+        let exists: Option<String> = tx
+            .query_row(
+                "SELECT id FROM spaces WHERE id=?1",
+                params![space_id],
+                |row| row.get(0),
+            )
+            .optional()?;
         if exists.is_none() {
             return Err(StoreError::NotFound(format!("space {space_id}")));
         }
         let created = now_ms();
         let session = Session {
-            id, space_id, title, archived: false, created_ms: created, updated_ms: created,
+            id,
+            space_id,
+            title,
+            archived: false,
+            created_ms: created,
+            updated_ms: created,
         };
         let layout = SessionLayout::new(session.id.clone());
         let encoded = serde_json::to_string(&layout.root)?;
@@ -107,18 +130,30 @@ impl Store {
         let core_id = nonempty(core_id, "herdr-core ID")?;
         let terminal_address = nonempty(terminal_address, "terminal address")?;
         let adapter = nonempty(adapter, "adapter")?;
-        let session: Option<String> = self.conn.query_row(
-            "SELECT id FROM sessions WHERE id=?1", params![session_id], |row| row.get(0),
-        ).optional()?;
+        let session: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM sessions WHERE id=?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
         if session.is_none() {
             return Err(StoreError::NotFound(format!("session {session_id}")));
         }
         if let Some(parent) = parent_run_id {
-            let parent_session: Option<String> = self.conn.query_row(
-                "SELECT session_id FROM agent_runs WHERE id=?1", params![parent], |row| row.get(0),
-            ).optional()?;
+            let parent_session: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT session_id FROM agent_runs WHERE id=?1",
+                    params![parent],
+                    |row| row.get(0),
+                )
+                .optional()?;
             if parent_session.as_deref() != Some(&session_id) {
-                return Err(StoreError::Invalid("parent AgentRun must belong to the same Session".into()));
+                return Err(StoreError::Invalid(
+                    "parent AgentRun must belong to the same Session".into(),
+                ));
             }
         }
         let run = AgentRun {
