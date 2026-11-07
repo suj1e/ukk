@@ -59,9 +59,9 @@ cargo run -p ukk-host -- serve
 cargo run --manifest-path apps/desktop/Cargo.toml
 ```
 
-**Windows status:** Windows Named Pipe Host/server and client **source is committed** and Windows CI passed `cargo test --workspace` + Clippy at code commit `a40e3a3` (run `42391205944`). Pipe I/O is overlapped with a bounded deadline and `CancelIoEx`; the server and client verify each other's process token SID. Real-device validation, cross-user denial and real service installation remain NOT VERIFIED. See [Host lifecycle](HOST_LIFECYCLE.md#evidence).
+**Windows status:** Windows Named Pipe Host/server and client **source is committed** and Windows CI passed `cargo test --workspace` + Clippy at code commit `9b28bce` (run `42392340865`); real herdr-core acceptance also passed (run `42392340910`). Pipe I/O is overlapped with a bounded deadline and `CancelIoEx`; the server and client verify each other's process token SID. Real-device validation, cross-user denial and real service installation remain NOT VERIFIED. See [Host lifecycle](HOST_LIFECYCLE.md#evidence).
 
-**macOS/Linux status:** the Unix socket enforces a 0700 directory, 0600 socket, same-user peer credentials and flock-guarded stale-socket recovery. The hardening tests pass in macOS and Linux CI (run `42391205944`). Cross-user denial and real service installation remain NOT VERIFIED.
+**macOS/Linux status:** the Unix socket enforces a 0700 directory, 0600 socket, same-user peer credentials and flock-guarded stale-socket recovery. The hardening tests pass in macOS and Linux CI (run `42392340865`), and real herdr-core acceptance passes on all three OS images (run `42392340910`). Cross-user denial and real service installation remain NOT VERIFIED.
 
 ## Required CI coverage
 

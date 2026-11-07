@@ -1,10 +1,10 @@
 # Windows local Host IPC — Named Pipe and cross-platform Host lifecycle
 
 > Updated 2026-11-08. Windows is a first-class GPUI Desktop target. Source is
-> committed and all three OS jobs of Rust core/Host CI run `42391205944`
-> passed at code commit `a40e3a3`. **Real-device validation and cross-user
-> denial have not been observed.** Do not present this as production-ready
-> authorization.
+> committed and Rust core/Host CI run `42392340865` plus real herdr-core
+> acceptance run `42392340910` passed on Ubuntu, macOS and Windows at code
+> commit `9b28bce`. **Real-device validation and cross-user denial have not
+> been observed.** Do not present this as production-ready authorization.
 
 ## Architecture
 
@@ -178,14 +178,16 @@ runtime, not evidence of live Agent integration.
       `connected: true`, `terminal.list` succeeds, stale-socket recovery and
       cleanup verified; no Agent was signalled.
 - [x] Windows CI builds and runs `cargo test --workspace` and Clippy
-      (including `windows_named_pipe.rs` and the overlapped deadline unit
-      tests): run `42391205944` at `a40e3a3`.
-- [x] Linux CI runs the Unix hardening tests: run `42391205944` at `a40e3a3`.
+      (including `windows_named_pipe.rs`, second-Host token preservation and
+      the overlapped deadline unit tests): run `42392340865` at `9b28bce`.
+- [x] Linux CI runs the Unix hardening tests: run `42392340865` at `9b28bce`.
+- [x] Real herdr-core acceptance (`doctor`/`list`/`watch`, Agent survival) on
+      Ubuntu/macOS/Windows: run `42392340910` at `9b28bce`.
 - [ ] Real `install`/`uninstall`/`restart` on macOS, Linux and Windows.
 - [ ] Different-user access denied on all three platforms.
 - [ ] GPUI UI builds and launches on Windows (not just source present).
-- [ ] Real herdr-core on Windows: two live terminals, correct status and child
-      hierarchy, Host restart leaving Agents alive.
+- [ ] Real herdr-core on Windows: child hierarchy, `serve` broker
+      `connected: true`, and Host service restart leaving Agents alive.
 
 See [Host lifecycle](HOST_LIFECYCLE.md), [platform support](PLATFORM_SUPPORT.md),
 [live event stream](LIVE_EVENTS.md), and [security](SECURITY.md).

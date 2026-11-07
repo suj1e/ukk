@@ -158,22 +158,29 @@ Automated equivalents (macOS, run locally):
 
 | Claim | macOS | Linux | Windows |
 |---|---|---|---|
-| Source compiles | Yes (`cargo test --workspace`, local) | Yes, CI `42391205944` | Yes, CI `42391205944` |
-| Framing/JSON/auth/oversize/quota/connection-cap tests | Yes (`crates/host/tests/ipc_hardening.rs`, local) | Yes, CI `42391205944` | Unix-only test file; Windows equivalents are `windows_named_pipe.rs` |
-| Socket dir 0700 / socket 0600 | Yes (local test) | Yes, CI `42391205944` | N/A (Named Pipe ACL instead) |
-| Peer identity check | `getpeereid` unit tests (local) | `SO_PEERCRED` tests, CI `42391205944` | Server/client SID tests, CI `42391205944` |
-| Stale socket + SIGTERM + restart | Yes (local, real process) | Yes, CI `42391205944` | Pipe vanishes with last handle; second-instance test, CI `42391205944` |
-| Overlapped read/write deadline + cancellation | N/A | N/A | Unit tests (`windows_pipe.rs`) pass in CI `42391205944` |
+| Source compiles | Yes (`cargo test --workspace`, local) | Yes, CI `42392340865` | Yes, CI `42392340865` |
+| Framing/JSON/auth/oversize/quota/connection-cap tests | Yes (`crates/host/tests/ipc_hardening.rs`, local) | Yes, CI `42392340865` | Unix-only test file; Windows equivalents are `windows_named_pipe.rs` |
+| Socket dir 0700 / socket 0600 | Yes (local test) | Yes, CI `42392340865` | N/A (Named Pipe ACL instead) |
+| Peer identity check | `getpeereid` unit tests (local) | `SO_PEERCRED` tests, CI `42392340865` | Server/client SID tests, CI `42392340865` |
+| Stale socket + SIGTERM + restart | Yes (local, real process) | Yes, CI `42392340865` | Pipe vanishes with last handle; second-instance + token-preservation test, CI `42392340865` |
+| Overlapped read/write deadline + cancellation | N/A | N/A | Unit tests (`windows_pipe.rs`) pass in CI `42392340865` |
 | Service template content | Yes (unit tests compile/run on all OS) | Yes (same) | Yes (same) |
 | Real `install`/`uninstall`/`restart` on a machine | **NOT VERIFIED** (commands not executed to avoid registering a real user service during development) | **NOT VERIFIED** | **NOT VERIFIED** |
-| Real herdr-core connectivity (`connected: true`, `terminal.list`) | Yes, herdr-core 0.1.18 local | **NOT VERIFIED** | **NOT VERIFIED** |
+| Real herdr-core CLI integration (`doctor`/`list`/`watch`, Agent survival) | Yes, herdr-core 0.1.18 local, plus CI `42392340910` | CI `42392340910` | CI `42392340910` |
+| Host broker `connected: true` over `serve` | Yes, local real hc 0.1.18 | **NOT VERIFIED** | **NOT VERIFIED** |
 | Different-user denial | **NOT VERIFIED** (see runbook) | **NOT VERIFIED** (mode check + peer uid source) | **NOT VERIFIED** (see runbook) |
 
-**Cross-platform CI:** Rust core/Host workflow run `42391205944` passed
-formatting, workspace tests and Clippy on `ubuntu-latest`, `macos-latest` and
-`windows-latest` at commit `a40e3a3` (the code commit preceding the docs-only
-CI evidence update). Real service-manager execution and cross-user denial are
-still not covered.
+**Cross-platform CI at code commit `9b28bce`:**
+
+- Rust core/Host run `42392340865`: formatting, workspace tests and Clippy on
+  `ubuntu-latest`, `macos-latest` and `windows-latest` all passed.
+- Real herdr-core acceptance run `42392340910`: `doctor`/`list`/`watch` against
+  herdr-core 0.1.18 and Agent survival passed on all three OS images.
+- Desktop native cross-platform run `42392340928` passed (validates the shared
+  Host client from the Desktop workspace).
+
+Real service-manager execution (register/start/stop via launchd, systemd and
+Task Scheduler) and cross-user denial remain NOT VERIFIED.
 
 ## Different-user denial (NOT VERIFIED) — runbook
 
