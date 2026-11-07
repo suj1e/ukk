@@ -127,6 +127,34 @@ device's retry record or learn its result.
   lookup. An unauthorized retry cannot discover whether a key exists or what
   its result was.
 
+## Pairing and device trust (implemented, S2 core)
+
+`crates/remote` implements the pairing core; relay networking, OS key storage
+and iOS UI are separate follow-ups. See [PAIRING.md](PAIRING.md) for the exact
+wire fields, prologue encoding and dependency record.
+
+| Control | Implementation |
+| --- | --- |
+| Bootstrap credential | 32-byte one-time PSK in a bounded QR payload (`v: 1`), default 2 min / max 5 min expiry, single use, unknown fields rejected, strict `https`/`wss` relay validation |
+| Secret handling | `InviteSecret` is zeroized on drop and never formatted; QR parsing/errors discard payload text |
+| Key agreement | `snow` 0.10.0 Noise `IKpsk0` (X25519, ChaChaPoly, SHA-256); QR secret as `psk0`; Host static key pinned from the QR; device static key encrypted in message 1; non-contributory/low-order X25519 keys rejected on both sides |
+| Transcript binding | Canonical prologue binds version, Host id, invite id, absolute expiry, relay URL and Host public key; Noise hashes it with every handshake message |
+| Human confirmation | Six-digit code derived from the final handshake hash plus a random one-time challenge (60 s cap / invite expiry); `confirm()` compares it in constant time and returns a `ConfirmedAttempt` that `approve()` requires |
+| Replay/expiry | Invitation is marked in progress before the first Noise read; a failed handshake burns it; expired and reused invitations fail closed |
+| Grants | Explicit subset of requested scopes, additive only, absolute expiry (default 30 days / max 90 days), `device.manage` not grantable through pairing; authority is committed only after an encrypted completion ACK (`PendingPairing` → `complete`) |
+| Revocation/rotation | Delegated to the S1 live trust registry; revocation clears grants, rotation bumps the generation and clears grants, and existing sessions fail on their next check |
+| Key storage | `DeviceKeyStore` trait; only an in-memory test store ships. OS Keychain/Keyring is **NOT VERIFIED** and must not fall back to plaintext SQLite |
+| WAN proof of possession | **NOT IMPLEMENTED / MAJOR GATE.** S2 authenticates the device only during pairing. S1 `accept_hello` trusts a client-supplied `DeviceClaim` on `TransportBinding::remote()`; until host/relay wiring requires a fresh Noise session keyed by the device static key (or a signature over hello), a captured claim can be replayed. Do not expose a WAN listener. |
+
+The pairing crate performs no network I/O. `RelayTransport` documents the
+outbound-WSS assumptions but no relay wire format is implemented;
+`recv_frame(max_bytes)` makes the 4096-byte frame bound part of the adapter
+contract.
+
+**NOT VERIFIED in S2:** WAN device-claim proof-of-possession, real alma-relay
+exchange, OS protected key storage, physical iPhone, relay outage/reconnect and
+independent cryptographic review.
+
 ## Threat scenarios and mitigations
 
 | Threat | Required mitigation |

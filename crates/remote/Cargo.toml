@@ -1,0 +1,31 @@
+[package]
+name = "ukk-remote"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "QR pairing, device trust and the relay boundary for ukk remote clients"
+
+[dependencies]
+ukk-protocol = { path = "../protocol" }
+
+# Noise Protocol Framework. Pattern: Noise_IKpsk0_25519_ChaChaPoly_SHA256.
+# Resolver primitives are selected explicitly to avoid pulling unused ciphers.
+snow = { version = "0.10.0", default-features = false, features = [
+    "use-curve25519",
+    "use-chacha20poly1305",
+    "use-sha2",
+    "use-getrandom",
+] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+zeroize = { version = "1", features = ["derive"] }
+base64 = "0.22"
+sha2 = "0.10"
+subtle = "2.6"
+getrandom = "0.3"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+url = "2.5"
+
+[dev-dependencies]
+serde_json = "1.0"
