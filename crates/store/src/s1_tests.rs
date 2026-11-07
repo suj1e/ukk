@@ -581,6 +581,7 @@ fn idempotency_concurrent_begin_admits_exactly_one_execution() {
             result: Some(CommandResult::Completed { .. })
         }
     ));
+    drop(reopened);
     fs::remove_dir_all(dir).unwrap();
 }
 
