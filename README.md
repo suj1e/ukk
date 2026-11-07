@@ -3,7 +3,7 @@
 **Native, extensible Multi-Agent Workspace.**
 
 > **设计阶段 / Architecture-first** · GPUI Desktop + SwiftUI iOS + herdr-core + Relay + Plugins  
-> **当前阶段：Runtime Spike 01 + Desktop Spike 02 + Live Sync Spike 03。** 已提交本地只读 Rust Host / hc-client 与 GPUI 桌面原生窗口源码，含真实终端快照读取；尚未经过真实 Mac + herdr-core 联调，也未确认 macOS GPUI 编译通过。下面的完整架构与功能仍是目标设计。
+> **当前阶段：Runtime Spike 01 + Desktop Spike 02 + Live Sync Spike 03 + Durable Workspace Spike 04。** 已提交本地只读 Rust Host / hc-client 与 GPUI 桌面原生窗口源码，含真实终端快照读取；尚未经过真实 Mac + herdr-core 联调，也未确认 macOS GPUI 编译通过。下面的完整架构与功能仍是目标设计。
 
 ukk 是一个从零打造的原生 Coding Agent 工作空间：同时运行多个 Codex、Claude Code 或其他兼容 Agent，保留可持久恢复的工作会话，通过 iPhone 扫码连接电脑，并在必要时以**悬浮小窗**查看或操控电脑屏幕。
 
@@ -117,6 +117,22 @@ See [Live Runtime Sync](docs/LIVE_EVENTS.md) for state ownership, API envelope, 
 
 Windows 的本地 Host 接入已增加同用户 SID 限权 Named Pipe：`ukk-host serve`、`host.snapshot`、`host.wait` 使用与 macOS/Linux 相同的只读 API。请注意：**实现源码已提交，不代表 Windows 编译/安全验收已经通过**。详见 [Windows Named Pipe 设计与运行说明](docs/WINDOWS_IPC.md)。
 
+## Durable Workspace / Session / Pane — Spike 04
+
+已提交 `ukk-domain` 和 `ukk-store`：通过 SQLite 维护产品级 Space、Session、AgentRun 绑定和版本化 Pane 布局。Session 和 Pane 不再与 herdr-core 的终端生命周期混为一谈；关闭 Pane 或归档 Session **不会停止任何 Agent**。
+
+GPUI 原生窗口现在可从 `workspace.snapshot` 读取 Space / Session 列表并展示已保存的分栏树（当前尚未支持拖拽调宽、原生聊天或 Diff 数据）。CLI 已支持创建 Space/Session、绑定真实终端、拆分/关闭 Pane；本地 RPC 保持只读，UI 元数据更改后目前需手动点击 Refresh。
+
+```bash
+cargo run -p ukk-host -- space-create ukk /your/project/path
+cargo run -p ukk-host -- workspace-dump
+# 用输出的真实 space_id 创建会话：
+cargo run -p ukk-host -- session-create <space-id> "Implement sync protocol"
+cargo run -p ukk-host -- workspace-dump
+```
+
+详见 [Workspace Persistence / SQLite 开发说明](docs/WORKSPACE_PERSISTENCE.md)。源码已提交，但三系统编译与实际 GPUI 运行尚未确认通过。
+
 ## Documentation
 
 | Document | Contents |
@@ -124,7 +140,7 @@ Windows 的本地 Host 接入已增加同用户 SID 限权 Named Pipe：`ukk-hos
 | [中文版总览](docs/OVERVIEW.zh-CN.md) | 产品方向、中文架构图、对象关系 |
 | [Product Requirements](docs/PRODUCT.md) | 完整功能矩阵、用户场景和体验原则 |
 | [Architecture](docs/ARCHITECTURE.md) | 端到端架构、组件边界和部署 |
-| [Domain Model](docs/DOMAIN_MODEL.md) | Spaces / Sessions / AgentRuns / Panes |
+| [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md) | SQLite Space/Session/AgentRun、布局版本与开发运行命令 |\n| [Domain Model](docs/DOMAIN_MODEL.md) | Spaces / Sessions / AgentRuns / Panes |
 | [Plugin System](docs/PLUGINS.md) | 插件生命周期、能力代理、UI 槽位 |
 | [Pairing](docs/PAIRING.md) | QR 扫码、设备授权与密钥 |
 | [Remote Protocol](docs/PROTOCOL.md) | Commands、Events、重连与同步 |
