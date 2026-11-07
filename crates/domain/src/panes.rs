@@ -1,8 +1,8 @@
 //! Validated immutable pane operations. UI layout never owns Agent processes.
+use crate::new_id;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
-use crate::new_id;
 
 /// Presentation-only node: never use its ID as an Agent or PTY identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,7 +25,10 @@ pub enum SplitAxis {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PaneNode {
-    Leaf { id: String, content: PaneContent },
+    Leaf {
+        id: String,
+        content: PaneContent,
+    },
     Split {
         id: String,
         axis: SplitAxis,
@@ -38,7 +41,10 @@ pub enum PaneNode {
 
 impl PaneNode {
     pub fn leaf(content: PaneContent) -> Self {
-        Self::Leaf { id: new_id(), content }
+        Self::Leaf {
+            id: new_id(),
+            content,
+        }
     }
 
     pub fn id(&self) -> &str {
@@ -89,7 +95,12 @@ impl PaneNode {
                         }
                     }
                 }
-                PaneNode::Split { ratio, first, second, .. } => {
+                PaneNode::Split {
+                    ratio,
+                    first,
+                    second,
+                    ..
+                } => {
                     if !ratio.is_finite() || !(0.15..=0.85).contains(ratio) {
                         return Err(LayoutError::InvalidRatio);
                     }
@@ -132,7 +143,13 @@ impl PaneNode {
                     second: Box::new(PaneNode::leaf(content.clone())),
                 }),
                 PaneNode::Leaf { .. } => None,
-                PaneNode::Split { id, axis: old_axis, ratio: old_ratio, first, second } => {
+                PaneNode::Split {
+                    id,
+                    axis: old_axis,
+                    ratio: old_ratio,
+                    first,
+                    second,
+                } => {
                     if let Some(updated) = insert(first, target, axis, ratio, content) {
                         return Some(PaneNode::Split {
                             id: id.clone(),
@@ -152,7 +169,8 @@ impl PaneNode {
                 }
             }
         }
-        let updated = insert(self, target, axis, ratio, &content).ok_or(LayoutError::PaneNotFound)?;
+        let updated =
+            insert(self, target, axis, ratio, &content).ok_or(LayoutError::PaneNotFound)?;
         updated.validate()?;
         Ok(updated)
     }
@@ -166,22 +184,37 @@ impl PaneNode {
         fn replace(node: &PaneNode, target: &str, ratio: f32) -> Option<PaneNode> {
             match node {
                 PaneNode::Leaf { .. } => None,
-                PaneNode::Split { id, axis, ratio: old_ratio, first, second } => {
+                PaneNode::Split {
+                    id,
+                    axis,
+                    ratio: old_ratio,
+                    first,
+                    second,
+                } => {
                     if id == target {
                         return Some(PaneNode::Split {
-                            id: id.clone(), axis: *axis, ratio,
-                            first: first.clone(), second: second.clone(),
+                            id: id.clone(),
+                            axis: *axis,
+                            ratio,
+                            first: first.clone(),
+                            second: second.clone(),
                         });
                     }
                     if let Some(updated) = replace(first, target, ratio) {
                         return Some(PaneNode::Split {
-                            id: id.clone(), axis: *axis, ratio: *old_ratio,
-                            first: Box::new(updated), second: second.clone(),
+                            id: id.clone(),
+                            axis: *axis,
+                            ratio: *old_ratio,
+                            first: Box::new(updated),
+                            second: second.clone(),
                         });
                     }
                     replace(second, target, ratio).map(|updated| PaneNode::Split {
-                        id: id.clone(), axis: *axis, ratio: *old_ratio,
-                        first: first.clone(), second: Box::new(updated),
+                        id: id.clone(),
+                        axis: *axis,
+                        ratio: *old_ratio,
+                        first: first.clone(),
+                        second: Box::new(updated),
                     })
                 }
             }
@@ -196,7 +229,13 @@ impl PaneNode {
         fn remove(node: &PaneNode, target: &str) -> Option<PaneNode> {
             match node {
                 PaneNode::Leaf { .. } => None,
-                PaneNode::Split { id, axis, ratio, first, second } => {
+                PaneNode::Split {
+                    id,
+                    axis,
+                    ratio,
+                    first,
+                    second,
+                } => {
                     if matches!(&**first, PaneNode::Leaf { id, .. } if id == target) {
                         return Some((**second).clone());
                     }
@@ -205,13 +244,19 @@ impl PaneNode {
                     }
                     if let Some(updated) = remove(first, target) {
                         return Some(PaneNode::Split {
-                            id: id.clone(), axis: *axis, ratio: *ratio,
-                            first: Box::new(updated), second: second.clone(),
+                            id: id.clone(),
+                            axis: *axis,
+                            ratio: *ratio,
+                            first: Box::new(updated),
+                            second: second.clone(),
                         });
                     }
                     remove(second, target).map(|updated| PaneNode::Split {
-                        id: id.clone(), axis: *axis, ratio: *ratio,
-                        first: first.clone(), second: Box::new(updated),
+                        id: id.clone(),
+                        axis: *axis,
+                        ratio: *ratio,
+                        first: first.clone(),
+                        second: Box::new(updated),
                     })
                 }
             }
@@ -267,10 +312,19 @@ mod tests {
 
     #[test]
     fn splitting_and_closing_never_changes_agent_identity() {
-        let original = PaneNode::leaf(PaneContent::Agent { agent_run_id: "a1".into() });
+        let original = PaneNode::leaf(PaneContent::Agent {
+            agent_run_id: "a1".into(),
+        });
         let original_id = original.id().to_owned();
         let split = original
-            .split_leaf(&original_id, SplitAxis::Horizontal, 0.5, PaneContent::Terminal { agent_run_id: "a1".into() })
+            .split_leaf(
+                &original_id,
+                SplitAxis::Horizontal,
+                0.5,
+                PaneContent::Terminal {
+                    agent_run_id: "a1".into(),
+                },
+            )
             .unwrap();
         assert_eq!(split.leaves().len(), 2);
         let second_id = split.leaves()[1].0.to_owned();
@@ -286,32 +340,66 @@ mod tests {
         let split = first
             .split_leaf(first.id(), SplitAxis::Horizontal, 0.5, PaneContent::Diff)
             .unwrap();
-        let ids_before: Vec<String> = split.leaves().iter().map(|(id, _)| (*id).to_owned()).collect();
+        let ids_before: Vec<String> = split
+            .leaves()
+            .iter()
+            .map(|(id, _)| (*id).to_owned())
+            .collect();
         let resized = split.resize_split(split.id(), 0.65).unwrap();
-        let ids_after: Vec<String> = resized.leaves().iter().map(|(id, _)| (*id).to_owned()).collect();
+        let ids_after: Vec<String> = resized
+            .leaves()
+            .iter()
+            .map(|(id, _)| (*id).to_owned())
+            .collect();
         assert_eq!(ids_before, ids_after);
-        assert!(matches!(&resized, PaneNode::Split { ratio, .. } if (*ratio - 0.65).abs() < f32::EPSILON));
-        assert_eq!(split.resize_split("missing", 0.6).unwrap_err(), LayoutError::PaneNotFound);
-        assert_eq!(split.resize_split(split.id(), f32::NAN).unwrap_err(), LayoutError::InvalidRatio);
+        assert!(
+            matches!(&resized, PaneNode::Split { ratio, .. } if (*ratio - 0.65).abs() < f32::EPSILON)
+        );
+        assert_eq!(
+            split.resize_split("missing", 0.6).unwrap_err(),
+            LayoutError::PaneNotFound
+        );
+        assert_eq!(
+            split.resize_split(split.id(), f32::NAN).unwrap_err(),
+            LayoutError::InvalidRatio
+        );
     }
 
     #[test]
     fn refuses_to_close_only_pane() {
         let only = PaneNode::leaf(PaneContent::Activity);
-        assert_eq!(only.close_leaf(only.id()).unwrap_err(), LayoutError::LastPane);
+        assert_eq!(
+            only.close_leaf(only.id()).unwrap_err(),
+            LayoutError::LastPane
+        );
     }
 
     #[test]
     fn rejects_invalid_sizes_and_targets() {
         let root = PaneNode::leaf(PaneContent::Files);
-        assert_eq!(root.split_leaf("missing", SplitAxis::Vertical, 0.4, PaneContent::Diff).unwrap_err(), LayoutError::PaneNotFound);
-        assert_eq!(root.split_leaf(root.id(), SplitAxis::Vertical, 1.0, PaneContent::Diff).unwrap_err(), LayoutError::InvalidRatio);
-        assert_eq!(root.split_leaf(root.id(), SplitAxis::Vertical, f32::NAN, PaneContent::Diff).unwrap_err(), LayoutError::InvalidRatio);
+        assert_eq!(
+            root.split_leaf("missing", SplitAxis::Vertical, 0.4, PaneContent::Diff)
+                .unwrap_err(),
+            LayoutError::PaneNotFound
+        );
+        assert_eq!(
+            root.split_leaf(root.id(), SplitAxis::Vertical, 1.0, PaneContent::Diff)
+                .unwrap_err(),
+            LayoutError::InvalidRatio
+        );
+        assert_eq!(
+            root.split_leaf(root.id(), SplitAxis::Vertical, f32::NAN, PaneContent::Diff)
+                .unwrap_err(),
+            LayoutError::InvalidRatio
+        );
     }
 
     #[test]
     fn rejects_duplicate_identifiers() {
-        let root = PaneNode::Leaf { id: "same".into(), content: PaneContent::Files };
+        let root = PaneNode::Leaf {
+            id: "same".into(),
+            content: PaneContent::Files,
+        };
         let invalid = PaneNode::Split {
             id: "same".into(),
             axis: SplitAxis::Horizontal,
@@ -319,13 +407,18 @@ mod tests {
             first: Box::new(root),
             second: Box::new(PaneNode::leaf(PaneContent::Diff)),
         };
-        assert_eq!(invalid.validate().unwrap_err(), LayoutError::DuplicateOrEmptyId);
+        assert_eq!(
+            invalid.validate().unwrap_err(),
+            LayoutError::DuplicateOrEmptyId
+        );
     }
 
     #[test]
     fn layout_json_roundtrip_preserves_split_order_and_ids() {
         let root = PaneNode::leaf(PaneContent::Activity);
-        let two = root.split_leaf(root.id(), SplitAxis::Vertical, 0.4, PaneContent::Diff).unwrap();
+        let two = root
+            .split_leaf(root.id(), SplitAxis::Vertical, 0.4, PaneContent::Diff)
+            .unwrap();
         let encoded = serde_json::to_string(&two).unwrap();
         let decoded: PaneNode = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, two);
