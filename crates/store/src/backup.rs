@@ -1122,6 +1122,19 @@ mod tests {
         ));
         assert!(!destination.exists());
 
+        let foreign_v3 = directory.join("foreign-v3.sqlite3");
+        {
+            let connection = Connection::open(&foreign_v3).unwrap();
+            connection
+                .execute_batch("PRAGMA user_version=3; CREATE TABLE notes(id INTEGER);")
+                .unwrap();
+        }
+        assert!(matches!(
+            backup_database(&foreign_v3, &destination, false),
+            Err(StoreError::NotADatabase(_))
+        ));
+        assert!(!destination.exists());
+
         let newer = directory.join("newer.sqlite3");
         {
             let connection = Connection::open(&newer).unwrap();
