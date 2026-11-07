@@ -193,11 +193,9 @@ impl Workspace {
                     .child(controls),
             )
             .child(self.session_pane(&surface, cx))
-            .on_drop::<DraggedPaneTab>(cx.listener(
-                move |this, payload: &DraggedPaneTab, _, cx| {
-                    this.accept_dragged_tab(payload, &destination, cx);
-                },
-            ))
+            .on_drop::<DraggedPaneTab>(cx.listener(move |this, payload: &DraggedPaneTab, _, cx| {
+                this.accept_dragged_tab(payload, &destination, cx);
+            }))
             .into_any_element()
     }
 }
