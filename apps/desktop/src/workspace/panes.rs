@@ -46,7 +46,9 @@ impl Workspace {
             .hover(|style| style.bg(rgb(ACCENT)))
             .block_mouse_except_scroll()
             .on_drag(
-                DraggedSplitHandle { split_id: split_id.to_owned() },
+                DraggedSplitHandle {
+                    split_id: split_id.to_owned(),
+                },
                 |_, _, _, cx| cx.new(|_| gpui::Empty),
             )
             .on_mouse_up(
@@ -58,12 +60,16 @@ impl Workspace {
                 cx.listener(move |this, _, _, cx| this.finish_split_drag(&id_for_out, cx)),
             );
         match axis {
-            SplitAxis::Horizontal => {
-                handle.w(px(8.)).h_full().cursor_col_resize().into_any_element()
-            }
-            SplitAxis::Vertical => {
-                handle.h(px(8.)).w_full().cursor_row_resize().into_any_element()
-            }
+            SplitAxis::Horizontal => handle
+                .w(px(8.))
+                .h_full()
+                .cursor_col_resize()
+                .into_any_element(),
+            SplitAxis::Vertical => handle
+                .h(px(8.))
+                .w_full()
+                .cursor_row_resize()
+                .into_any_element(),
         }
     }
 
