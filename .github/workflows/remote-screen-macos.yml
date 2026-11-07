@@ -1,0 +1,95 @@
+name: macOS ScreenCaptureKit capture spike
+
+# Builds and tests the macOS Swift capture helper for the M1 Remote Screen
+# spike. Real capture is NOT VERIFIED here: an unsigned SwiftPM executable has
+# no Screen Recording grant on a hosted runner, and the capture XCTest skips
+# with an explicit message instead of pretending to pass.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'plugins/remote-screen/**'
+      - '.github/workflows/remote-screen-macos.yml'
+  pull_request:
+    paths:
+      - 'plugins/remote-screen/**'
+      - '.github/workflows/remote-screen-macos.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-helper:
+    name: Swift helper build and validation tests
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show macOS and Swift toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Build the capture helper
+        run: swift build --package-path plugins/remote-screen/macos
+
+      - name: Run unit tests and assert the real-capture test skips honestly
+        env:
+          UKK_RUN_SCREEN_CAPTURE_TESTS: "0"
+        run: |
+          set -o pipefail
+          swift test --package-path plugins/remote-screen/macos 2>&1 \
+            | tee "$RUNNER_TEMP/swift-test.log"
+          if ! grep -q "NOT VERIFIED: real capture-once" "$RUNNER_TEMP/swift-test.log"; then
+            echo "::error::The real-capture test must report NOT VERIFIED when Screen Recording is unavailable"
+            exit 1
+          fi
+
+      - name: CLI argument and output-path validation smoke
+        run: |
+          set -eu
+          BIN="$(swift build --package-path plugins/remote-screen/macos --show-bin-path)/ukk-remote-screen-helper"
+          test -x "$BIN"
+
+          expect_exit() {
+            expected="$1"
+            shift
+            set +e
+            "$@"
+            code=$?
+            set -e
+            if [ "$code" -ne "$expected" ]; then
+              echo "::error::expected exit $expected, got $code for: $*"
+              exit 1
+            fi
+            echo "ok: exit $code for: $*"
+          }
+
+          "$BIN" --help >/dev/null
+          expect_exit 2 "$BIN" capture-once --display not-a-number --out "$RUNNER_TEMP/frame.png"
+          expect_exit 2 "$BIN" capture-once --display 0 --out "$RUNNER_TEMP/frame.png"
+          expect_exit 2 "$BIN" capture-once --display 1 --out "$RUNNER_TEMP/frame.jpg"
+          expect_exit 2 "$BIN" capture-once --display 1
+          expect_exit 2 "$BIN" capture-once --out "$RUNNER_TEMP/frame.png"
+          expect_exit 2 "$BIN" capture-once --display 1 --out "$RUNNER_TEMP/frame.png" --out "$RUNNER_TEMP/other.png"
+          expect_exit 2 "$BIN" list-displays --all
+          expect_exit 2 "$BIN" unknown-command
+
+      - name: Record verification status honestly
+        if: always()
+        run: |
+          {
+            echo "## macOS ScreenCaptureKit capture spike"
+            echo ""
+            echo "- \`swift build\` and \`swift test\` ran on \`macos-latest\`."
+            echo "- Argument parsing, output-path validation and permission-state mapping are covered without capture."
+            echo "- **NOT VERIFIED:** real \`capture-once\` against a live display. Hosted CI has no Screen Recording grant for an unsigned SwiftPM executable, and no audio, input control, streaming or media transport exists."
+            echo "- The capture XCTest skips with an explicit NOT VERIFIED message unless \`UKK_RUN_SCREEN_CAPTURE_TESTS=1\` is set on a manually granted machine."
+          } >> "$GITHUB_STEP_SUMMARY"

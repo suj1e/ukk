@@ -1,0 +1,30 @@
+# Remote Screen capture spike — schema v1.
+#
+# Scope is deliberately narrow: this manifest declares only a one-frame,
+# screen-view capture command backed by the macOS Swift helper in `macos/`.
+# It declares no `screen.control` or `screen.audio` capability, contributes no
+# UI view, and claims no media transport. Declaring a capability grants nothing:
+# the host grant store must still issue a scoped, short-lived `screen.view`
+# lease before the command can run.
+#
+# `entrypoint` is a bare helper name. No installer resolves it in this spike;
+# `macos/` builds a product with exactly this name
+# (`ukk-remote-screen-helper`), so a future installer can pin its absolute path.
+manifest_version = 1
+id = "dev.ukk.remote-screen.capture"
+name = "Remote Screen Capture Spike"
+version = "0.1.0"
+api = ">=0.1,<0.2"
+trust = "first-party"
+entrypoint = "ukk-remote-screen-helper"
+
+[capabilities]
+required = ["screen.view"]
+optional = []
+
+[[contributions.commands]]
+id = "screen.capture.once"
+title = "Capture one display frame"
+description = "Writes exactly one display frame to a user-chosen PNG path. No audio, no input control, no streaming or recording."
+scope = "session"
+requires = ["screen.view"]

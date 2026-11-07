@@ -81,6 +81,42 @@ fn shipped_sample_manifest_is_valid() {
 }
 
 #[test]
+fn shipped_remote_screen_capture_spike_manifest_is_valid() {
+    let text = include_str!("../../../plugins/remote-screen/plugin.toml");
+    let manifest = ValidatedManifest::from_toml_str(text)
+        .expect("remote screen capture spike manifest must validate");
+
+    assert_eq!(manifest.id().as_str(), "dev.ukk.remote-screen.capture");
+    assert_eq!(manifest.name(), "Remote Screen Capture Spike");
+    assert_eq!(manifest.version().to_string(), "0.1.0");
+    assert_eq!(manifest.api().as_str(), ">=0.1.0,<0.2.0");
+    assert_eq!(manifest.trust(), TrustLevel::FirstParty);
+    assert_eq!(manifest.entrypoint(), Some("ukk-remote-screen-helper"));
+
+    // Viewing is declared; control and audio are deliberately absent.
+    assert!(manifest
+        .required_capabilities()
+        .contains(&Capability::ScreenView));
+    assert!(!manifest
+        .declared_capabilities()
+        .contains(&Capability::ScreenControl));
+    assert!(!manifest
+        .declared_capabilities()
+        .contains(&Capability::ScreenAudio));
+    assert!(manifest.optional_capabilities().is_empty());
+
+    assert_eq!(manifest.commands().len(), 1);
+    let command = manifest.command("screen.capture.once").unwrap();
+    assert_eq!(command.scope(), CommandScope::Session);
+    assert_eq!(command.requires().len(), 1);
+    assert!(command.requires().contains(&Capability::ScreenView));
+
+    // The spike ships no UI contribution and subscribes to no events.
+    assert!(manifest.views().is_empty());
+    assert!(manifest.events().is_empty());
+}
+
+#[test]
 fn minimal_helper_manifest_is_valid() {
     let manifest = ValidatedManifest::from_toml_str(BASE).unwrap();
     assert_eq!(manifest.commands().len(), 0);

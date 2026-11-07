@@ -5,11 +5,13 @@ on:
     paths:
       - 'Cargo.toml'
       - 'crates/**'
+      - 'plugins/**/plugin.toml'
       - '.github/workflows/rust-spike.yml'
   pull_request:
     paths:
       - 'Cargo.toml'
       - 'crates/**'
+      - 'plugins/**/plugin.toml'
       - '.github/workflows/rust-spike.yml'
 
 concurrency:
