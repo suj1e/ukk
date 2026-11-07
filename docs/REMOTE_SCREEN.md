@@ -171,7 +171,7 @@ To exercise the real capture test on a manually granted machine:
 
 ## macOS host implementation targets
 
-- Screen capture: ScreenCaptureKit, user-selected screen or window with OS permission. **Current spike:** display-only, single-frame `capture-once` plus metadata listing; see below.
+- Screen capture: ScreenCaptureKit, user-selected screen or window with OS permission. **Current spike:** display-only, single-frame `capture-once` plus metadata listing; see [Capture spike](#capture-spike-m1-macos-only).
 - Hardware encoding: VideoToolbox H.264 baseline support (evaluate HEVC after interoperability testing).
 - Input: OS-supported event injection with Accessibility permission; require control grant independent of view grant.
 - Transport: authenticated WebRTC DTLS-SRTP or another audited E2EE media mechanism; prefer direct P2P where possible, TURN fallback.
