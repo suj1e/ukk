@@ -86,8 +86,8 @@ Exit states are stable so a future host adapter does not parse English:
 The output path guard is part of the contract: paths are capped at 1024 UTF-8
 bytes and must end in `.png`; the parent must exist and be a directory; existing
 directories, symbolic links, FIFOs and other special files are refused. The PNG
-is encoded to a temporary sibling and atomically renamed, so a failed encode
-leaves no partial or temporary frame.
+is created owner-only (`0600`), encoded to a temporary sibling and atomically
+renamed, so a failed encode leaves no partial or temporary frame.
 
 ### What this proves — and what it does not
 

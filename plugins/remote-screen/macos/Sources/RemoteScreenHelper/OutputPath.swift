@@ -76,12 +76,25 @@ enum OutputPath {
         let temporary = url.deletingLastPathComponent()
             .appendingPathComponent(".ukk-capture-\(UUID().uuidString).png", isDirectory: false)
 
+        // Screen pixels are sensitive: create the temporary file owner-only so
+        // there is no window in which another local user can read it. `rename`
+        // preserves the mode on the final output.
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, mode_t(0o600))
+        guard descriptor >= 0 else {
+            let code = errno
+            throw HelperError.outputFailed(
+                "cannot create temporary PNG for \(url.path): \(String(cString: strerror(code)))"
+            )
+        }
+        close(descriptor)
+
         guard let destination = CGImageDestinationCreateWithURL(
             temporary as CFURL,
             UTType.png.identifier as CFString,
             1,
             nil
         ) else {
+            try? FileManager.default.removeItem(at: temporary)
             throw HelperError.outputFailed("cannot create PNG destination for \(url.path)")
         }
 
@@ -90,6 +103,16 @@ enum OutputPath {
         guard CGImageDestinationFinalize(destination) else {
             try? FileManager.default.removeItem(at: temporary)
             throw HelperError.outputFailed("cannot encode PNG at \(url.path)")
+        }
+
+        // ImageIO may create its own output file with the process umask, so
+        // enforce owner-only again before the atomic rename.
+        guard chmod(temporary.path, mode_t(0o600)) == 0 else {
+            let code = errno
+            try? FileManager.default.removeItem(at: temporary)
+            throw HelperError.outputFailed(
+                "cannot set owner-only permissions on \(url.path): \(String(cString: strerror(code)))"
+            )
         }
 
         guard rename(temporary.path, url.path) == 0 else {
