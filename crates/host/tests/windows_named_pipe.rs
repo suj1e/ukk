@@ -2,13 +2,13 @@
 //! not TCP or the mobile relay. No real hc binary is needed for ping/offline.
 #![cfg(windows)]
 
+use serde_json::json;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+use ukk_domain::new_id;
 use ukk_host_client::HostClient;
 use ukk_store::Store;
-use ukk_domain::new_id;
-use serde_json::json;
 
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
@@ -70,17 +70,27 @@ fn windows_host_pipe_allows_read_only_local_snapshot() {
     assert_eq!(workspace.sessions[0].id, session.id);
 
     let request_id = new_id();
-    let created = client.local_workspace_mutation("workspace.session.create", json!({
-        "request_id":request_id,
-        "space_id":space.id,
-        "title":"Windows UI Session"
-    })).expect("local user can create a Session via protected Pipe");
+    let created = client
+        .local_workspace_mutation(
+            "workspace.session.create",
+            json!({
+                "request_id":request_id,
+                "space_id":space.id,
+                "title":"Windows UI Session"
+            }),
+        )
+        .expect("local user can create a Session via protected Pipe");
     assert!(created["id"].is_string());
-    let repeated = client.local_workspace_mutation("workspace.session.create", json!({
-        "request_id":request_id,
-        "space_id":space.id,
-        "title":"Windows UI Session"
-    })).unwrap();
+    let repeated = client
+        .local_workspace_mutation(
+            "workspace.session.create",
+            json!({
+                "request_id":request_id,
+                "space_id":space.id,
+                "title":"Windows UI Session"
+            }),
+        )
+        .unwrap();
     assert_eq!(created["id"], repeated["id"]);
     assert_eq!(client.workspace_snapshot().unwrap().sessions.len(), 2);
 
