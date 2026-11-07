@@ -211,7 +211,15 @@ fn schema_v1_upgrades_without_losing_sessions() {
     }
     original
         .conn
-        .execute_batch("DROP TABLE workspace_revision; PRAGMA user_version=1;")
+        .execute_batch(
+            "DROP TABLE IF EXISTS idempotency_records;
+             DROP TABLE IF EXISTS device_grants;
+             DROP TABLE IF EXISTS devices;
+             DROP TABLE IF EXISTS event_log;
+             DROP TABLE IF EXISTS event_streams;
+             DROP TABLE workspace_revision;
+             PRAGMA user_version=1;",
+        )
         .unwrap();
     drop(original);
 

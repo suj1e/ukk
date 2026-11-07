@@ -31,6 +31,9 @@ A feature is **not complete** when its source merely exists. It must have a test
 | `crates/store/src/records.rs` | Space/Session/AgentRun persistence | Pane rendering |
 | `crates/store/src/layouts.rs` | Layout validation and CAS | Agent termination |
 | `crates/store/src/snapshot.rs` | Read-only durable state materialization | Backend process management |
+| `crates/store/src/events.rs` | Durable S1 event-log cursors, retention and snapshot boundary | Wire framing, Host transport |
+| `crates/store/src/trust.rs` | Persisted device identity/grants and CAS rotation/revocation | Authorization decisions, key storage |
+| `crates/store/src/idempotency.rs` | Durable idempotency begin/finish and tombstones | Command execution, wire results |
 
 Keep modules **cohesive rather than arbitrarily small**. An entrypoint should ideally stay below ~150 lines and should not become a dumping ground. If a module exceeds ~300 lines, review whether it combines independent responsibilities; split when doing so improves ownership and testability. This is a review heuristic, not a rigid lint that encourages meaningless files.
 

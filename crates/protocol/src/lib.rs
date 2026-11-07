@@ -39,8 +39,8 @@ pub use cursor::{
     Resume, StreamBounds, SyncError,
 };
 pub use device::{
-    AuthenticatedDevice, DeviceClaim, DeviceStatus, IdentityGeneration, RegistryError, ScopedGrant,
-    TrustRegistry,
+    AuthenticatedDevice, DeviceClaim, DeviceStatus, IdentityGeneration, RegistryError,
+    RestoredDevice, ScopedGrant, TrustRegistry,
 };
 pub use envelope::{
     AgentRunStatusChanged, AgentSend, AgentStatus, ApprovalDecision, ApprovalRequested,

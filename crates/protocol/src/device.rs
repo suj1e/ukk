@@ -120,6 +120,21 @@ struct DeviceRecord {
     grants: BTreeMap<Scope, ScopedGrant>,
 }
 
+/// One durable device registration, used to rebuild a [`TrustRegistry`] after
+/// a Host restart.
+///
+/// This is a persistence adapter input, not a wire message. The caller must
+/// supply identifiers and a generation that were validated when written; the
+/// registry re-checks grant generations so a stale grant cannot be restored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredDevice {
+    pub device_id: DeviceId,
+    pub key_fingerprint: KeyFingerprint,
+    pub generation: IdentityGeneration,
+    pub status: DeviceStatus,
+    pub grants: Vec<ScopedGrant>,
+}
+
 fn grant_sets(record: &DeviceRecord, now_ms: i64) -> (ScopeSet, ScopeSet) {
     if record.status == DeviceStatus::Revoked {
         return (ScopeSet::empty(), ScopeSet::empty());
@@ -152,6 +167,42 @@ impl TrustRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Rebuilds the live registry from durable records.
+    ///
+    /// This is the restart path for a Host that persists device trust in
+    /// SQLite. It only reconstructs state that [`Self::register`],
+    /// [`Self::grant`], [`Self::rotate_key`] and [`Self::revoke`] would have
+    /// produced; authorization decisions remain in this module. A grant whose
+    /// generation does not match its device is rejected instead of silently
+    /// reviving a superseded capability.
+    pub fn restore(
+        devices: impl IntoIterator<Item = RestoredDevice>,
+    ) -> Result<Self, RegistryError> {
+        let mut registry = Self::new();
+        for device in devices {
+            if registry.devices.contains_key(&device.device_id) {
+                return Err(RegistryError::AlreadyRegistered);
+            }
+            let mut grants = BTreeMap::new();
+            for grant in device.grants {
+                if grant.identity_generation != device.generation {
+                    return Err(RegistryError::StaleGrantGeneration);
+                }
+                grants.insert(grant.scope, grant);
+            }
+            registry.devices.insert(
+                device.device_id,
+                DeviceRecord {
+                    fingerprint: device.key_fingerprint,
+                    generation: device.generation,
+                    status: device.status,
+                    grants,
+                },
+            );
+        }
+        Ok(registry)
     }
 
     /// Registers a device at generation 1 with no grants.

@@ -291,6 +291,53 @@ action, expire in absolute time (max 10 minutes) even if the phone vanishes,
 and are withdrawn on device revocation. Missing, expired and mismatched leases
 all produce distinct typed denials.
 
+## Durable persistence (SQLite adapter)
+
+`crates/store` schema v3 persists the S1 state that must survive a Host restart.
+The protocol crate remains the source of cursor, trust and idempotency
+semantics; the store only assigns cursors transactionally and reloads typed
+records. It adds no transport and no permission surface.
+
+| Table | Holds | Key invariant |
+| --- | --- | --- |
+| `event_streams` | per-stream generation, `head`, retention `floor` | one row per stream; generation must equal the current protocol |
+| `event_log` | `(stream, cursor)`, event id, generation, payload JSON | cursor and event id are unique per stream; append is one `IMMEDIATE` transaction |
+| `devices` | device id, public-key fingerprint, generation, revoked | revocation/rotation CAS on generation |
+| `device_grants` | scope, generation, absolute expiry | grants are cleared on rotation/revocation |
+| `idempotency_records` | key, fingerprint, plane, principal, state, result, timestamps | in-flight never expires; completed becomes a tombstone; capacity refuses |
+
+* **Append.** `Store::append_event` reads the stream under `BEGIN IMMEDIATE`,
+  assigns `head + 1`, validates the typed event with `Limits`, inserts the row
+  and advances `head` in the same commit. A duplicate event id, an oversized
+  payload, a different stored generation or cursor exhaustion is refused before
+  the head moves. Retention prunes oldest rows and advances `floor`; the floor
+  never moves backwards.
+* **Read.** `Store::read_events` returns the protocol's own `Resume`:
+  `CursorBeyondHead`, `SnapshotRequired { at_cursor: head }` below the floor, or
+  contiguous `Events`. Corrupt gaps, generation mismatches and stale payloads
+  are rejected instead of silently resetting.
+* **Snapshot boundary.** `Store::snapshot_at_head` binds a domain-owned body to
+  the current durable head and validates the protocol snapshot size.
+* **Trust.** `Store::load_trust_registry` hydrates `TrustRegistry` from
+  `devices`/`device_grants`; no authorization decision is reimplemented.
+  Rotation bumps the generation and deletes grants; revocation sets the terminal
+  status and deletes grants. Both are compare-and-swap on the expected
+  generation, so a stale writer cannot affect a newer key.
+* **Idempotency.** `begin_idempotent_command` runs purge → lookup → capacity →
+  insert in one `IMMEDIATE` transaction. Concurrent retries get exactly one
+  `Execute`. The same key with another plane, principal or fingerprint is a
+  typed conflict. Completed records expire into tombstones after retention;
+  in-flight records never expire; tombstones still consume capacity.
+
+No private key, pairing secret or session key is stored. Device rows contain
+only public identity metadata (fingerprint) and grant policy.
+
+**NOT VERIFIED:** Host RPC/transport wiring, relay/WAN delivery, OS keychain
+storage, real phone/relay reconnect, and multi-process contention beyond the
+SQLite busy timeout are not exercised by this adapter. The contract is tested
+through SQLite reopen, concurrent begin, CAS conflict and migration tests in
+`crates/store`.
+
 ## Limits and backpressure
 
 Default bounds (`Limits`); all are configurable and validated at startup:
@@ -347,3 +394,11 @@ See [security](SECURITY.md), [pairing](PAIRING.md),
   tombstones that refuse retries; capacity is refused rather than evicting;
   stale/future queued commands are rejected/discarded; the service refuses a
   post-retention retry instead of re-executing.
+
+`crates/store` (schema v3):
+
+* `s1_tests.rs` — event log reopen with continued cursors, cursor regression,
+  retention floor/snapshot boundary, duplicate event id, generation mismatch,
+  device grants across reopen/expiry, rotation/revocation CAS invalidation,
+  concurrent idempotency begin, tombstone expiry, capacity refusal, and v2→v3
+  migration with workspace data preserved.
