@@ -120,12 +120,12 @@ time.sleep(3)
     let observer = client.clone();
     let db_identity = initial_workspace.db_epoch.clone();
     let cursor = initial_workspace.revision;
-    let waiter = thread::spawn(move || {
-        observer.wait_for_workspace_change(&db_identity, cursor)
-    });
+    let waiter = thread::spawn(move || observer.wait_for_workspace_change(&db_identity, cursor));
     thread::sleep(Duration::from_millis(80));
-    Store::open(&db).unwrap()
-        .create_space("Second project", "/src/other").unwrap();
+    Store::open(&db)
+        .unwrap()
+        .create_space("Second project", "/src/other")
+        .unwrap();
     let changed_workspace = waiter.join().unwrap().unwrap();
     assert!(changed_workspace.revision > initial_workspace.revision);
     assert_eq!(changed_workspace.snapshot.unwrap().spaces.len(), 2);
