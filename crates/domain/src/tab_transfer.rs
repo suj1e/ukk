@@ -21,6 +21,26 @@ impl PaneNode {
             return Err(LayoutError::SameTabGroup);
         }
         self.validate()?;
+        // Resolve the destination against the ORIGINAL tree, before source
+        // collapse can turn a hidden tab ID into a new Leaf ID.
+        fn validate_destination(node: &PaneNode, target: &str) -> Result<bool, LayoutError> {
+            if node.id() == target {
+                return match node {
+                    PaneNode::Leaf { .. } | PaneNode::Tabs { .. } => Ok(true),
+                    PaneNode::Split { .. } => Err(LayoutError::NotTabGroup),
+                };
+            }
+            if let PaneNode::Split { first, second, .. } = node {
+                if validate_destination(first, target)? {
+                    return Ok(true);
+                }
+                return validate_destination(second, target);
+            }
+            Ok(false)
+        }
+        if !validate_destination(self, destination_pane_id)? {
+            return Err(LayoutError::PaneNotFound);
+        }
         fn find_group<'a>(node: &'a PaneNode, group: &str) -> Option<&'a [PaneTab]> {
             match node {
                 PaneNode::Tabs { id, tabs } if id == group => Some(tabs),
@@ -166,6 +186,14 @@ mod tests {
         );
         assert_eq!(
             tree.move_tab(&source_id, &moving_id, "missing")
+                .unwrap_err(),
+            LayoutError::PaneNotFound
+        );
+        // A hidden Tab ID is not a valid destination Pane, even if the
+        // source collapse would later reuse that ID as a Leaf node.
+        let hidden_id = tree.leaves()[0].0.to_owned();
+        assert_eq!(
+            tree.move_tab(&source_id, &moving_id, &hidden_id)
                 .unwrap_err(),
             LayoutError::PaneNotFound
         );
