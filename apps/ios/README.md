@@ -95,6 +95,11 @@ newer SDK does not prove test execution.
 
 ## Test coverage
 
+CI: `.github/workflows/ios.yml` builds the committed project for a generic iOS
+Simulator and runs the unit suite on the first available iPhone simulator on
+`macos-latest`. UI tests are not run in CI (they are slower and more
+environment-sensitive); the UI suite is documented below and was run manually.
+
 `UkkCompanionTests`:
 
 - navigation push/depth/selection, duplicate push, workspace replacement, reset;
