@@ -191,6 +191,17 @@ detaches, closes the client connection, reconnects and reattaches, then
 interrupts, explicitly stops and removes only that terminal. Fill in observed
 results here after each run; CI remains mock-based.
 
-Result: **see PR description for the exact head SHA and run output**. Any
-environment where the binary is unavailable is NOT VERIFIED; use the same
-runbook and record the version/schema hash.
+Observed on 2026-11-08 (macOS arm64, hc 0.1.18, client code at `73f791b`):
+
+* `real_core_reports_the_expected_schema_identity` passed: generation 1,
+  version 0.1.18, and every required method/feature advertised.
+* `real_core_launch_attach_reconnect_interrupt_stop_remove` passed: launched
+  one uniquely named `sleep 30` terminal, received the first paint, detached,
+  closed the client connection, reconnected and reattached with a fresh
+  paint, subscribed to events, interrupted, explicitly stopped (state
+  `finished`) and removed only that terminal.
+
+Result: **2 passed** in 0.10 s. PR #25 checks (test + real-hc acceptance) were
+green on macOS, Ubuntu and Windows at `73f791b`; this documentation edit is a
+later doc-only commit. Any environment where the binary is unavailable is NOT
+VERIFIED; use the runbook above and record the version/schema hash.
