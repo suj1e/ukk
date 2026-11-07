@@ -96,6 +96,7 @@ impl Workspace {
     /// A conflict always offers Reload; retrying the rejected intent is a
     /// separate, explicit button and never happens automatically.
     pub(super) fn status_banner(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        #[derive(Clone, Copy)]
         enum Kind {
             Conflict,
             Failure,
@@ -136,22 +137,25 @@ impl Workspace {
             .bg(rgb(0xfff4e5))
             .text_xs()
             .text_color(rgb(0x7a4b1e));
-        let mut actions = div().flex().items_center().gap_2().child(
-            div()
-                .id("status-reload")
-                .role(Role::Button)
-                .aria_label("Reload the authoritative layout")
-                .focusable()
-                .focus_visible(|style| style.border_color(rgb(ACCENT)))
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(0xd9b48a))
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
-                .child("Reload layout"),
-        );
+        let mut actions = div().flex().items_center().gap_2();
+        if !matches!(kind, Kind::Local) {
+            actions = actions.child(
+                div()
+                    .id("status-reload")
+                    .role(Role::Button)
+                    .aria_label("Reload the authoritative layout")
+                    .focusable()
+                    .focus_visible(|style| style.border_color(rgb(ACCENT)))
+                    .px_3()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0xd9b48a))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
+                    .child("Reload layout"),
+            );
+        }
         if retry {
             actions = actions.child(
                 div()
