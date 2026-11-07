@@ -61,7 +61,7 @@ impl Workspace {
                         div()
                             .mt_2()
                             .text_2xl()
-                            .font_semibold()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(INK))
                             .child(title),
                     )
@@ -131,6 +131,7 @@ impl Workspace {
         let cwd = term.cwd.clone();
 
         div()
+            .id("agent-detail-scroll")
             .flex()
             .flex_col()
             .flex_1()
@@ -147,7 +148,7 @@ impl Workspace {
                     .child(
                         div()
                             .text_xs()
-                            .font_semibold()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(MUTED))
                             .child("SELECTED AGENT"),
                     )
@@ -155,7 +156,7 @@ impl Workspace {
                         div()
                             .mt_3()
                             .text_xl()
-                            .font_semibold()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(INK))
                             .child(title),
                     )
@@ -247,7 +248,7 @@ impl Workspace {
             .bg(rgb(WHITE))
             .border_l_1()
             .border_color(rgb(LINE))
-            .child(div().text_xs().font_semibold().text_color(rgb(MUTED)).child("RUNTIME"))
+            .child(div().text_xs().font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgb(MUTED)).child("RUNTIME"))
             .child(
                 div()
                     .p_4()
@@ -260,7 +261,7 @@ impl Workspace {
                     .child(Self::meta_row("Live", running.to_string()))
                     .child(Self::meta_row("Blocked", needs_you.to_string())),
             )
-            .child(div().text_xs().font_semibold().text_color(rgb(MUTED)).child("CONNECTION"))
+            .child(div().text_xs().font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgb(MUTED)).child("CONNECTION"))
             .child(
                 div()
                     .text_sm()
