@@ -381,6 +381,9 @@ impl HostClient {
                 | "workspace.pane.split"
                 | "workspace.pane.close"
                 | "workspace.pane.resize"
+                | "workspace.tab.add"
+                | "workspace.tab.close"
+                | "workspace.tab.reorder"
         ) {
             return Err(HostError::Protocol(
                 "method is not an allowed local workspace mutation".into(),
