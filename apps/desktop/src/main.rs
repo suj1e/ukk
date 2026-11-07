@@ -175,7 +175,11 @@ impl Workspace {
         let active = self.selected.as_deref() == Some(terminal.address.as_str());
         let address = terminal.address.clone();
         let display_name = terminal.display_name().to_owned();
-        let status = terminal.state_label().to_owned();
+        let status = if self.online {
+            terminal.state_label().to_owned()
+        } else {
+            "Last known · Host offline".to_owned()
+        };
 
         div()
             .id(format!("terminal-{}", terminal.address))
@@ -203,7 +207,9 @@ impl Workspace {
                         div()
                             .size(px(7.0))
                             .rounded_full()
-                            .bg(rgb(if terminal.lifecycle == "finished" {
+                            .bg(rgb(if !self.online {
+                                0xbfc3cc
+                            } else if terminal.lifecycle == "finished" {
                                 0xbfc3cc
                             } else if terminal.reported_status.as_deref() == Some("blocked") {
                                 0xe4a84e
@@ -416,7 +422,11 @@ impl Workspace {
 
     fn terminal_detail(&self, term: &Terminal) -> impl IntoElement {
         let title = term.display_name().to_owned();
-        let state = term.state_label().to_owned();
+        let state = if self.online {
+            term.state_label().to_owned()
+        } else {
+            "Last known · Host offline".to_owned()
+        };
         let argv = if term.argv.is_empty() {
             "Not reported".to_owned()
         } else {
