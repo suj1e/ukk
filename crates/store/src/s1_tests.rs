@@ -13,8 +13,8 @@ use ukk_protocol::idempotency::MAX_RESULT_DETAIL_BYTES;
 use ukk_protocol::{
     Command, CommandResult, Denial, DeviceClaim, DeviceId, DeviceRevoke, DomainId, DurableCursor,
     Event, EventId, IdempotencyAdmission, IdempotencyError, IdempotencyKey, IdentityGeneration,
-    KeyFingerprint, Limits, Plane, Principal, RequestFingerprint, Resume, Scope, SessionCreate,
-    SessionCreated, StreamId, SyncError,
+    KeyFingerprint, Limits, Plane, Principal, RegistryError, RequestFingerprint, RequestId, Resume,
+    Scope, SessionCreate, SessionCreated, StreamId, SyncError,
 };
 
 fn temp_db(label: &str) -> (PathBuf, PathBuf) {
@@ -393,6 +393,10 @@ fn device_rotation_and_revocation_invalidate_old_identity_with_cas() {
         .unwrap();
     assert_eq!(rotated, IdentityGeneration::from_raw(2));
     assert!(store.device_grants(&device).unwrap().is_empty());
+    assert!(matches!(
+        store.grant_device_scope(&device, Scope::AgentSend, generation, 10_000, 2_100),
+        Err(StoreError::Trust(RegistryError::StaleGrantGeneration))
+    ));
 
     let rotated_trust = store.load_trust_registry().unwrap();
     assert!(matches!(
@@ -428,8 +432,84 @@ fn device_rotation_and_revocation_invalidate_old_identity_with_cas() {
         Err(Denial::DeviceRevoked)
     ));
     assert!(store.device_grants(&device).unwrap().is_empty());
+    assert!(matches!(
+        store.grant_device_scope(&device, Scope::AgentSend, rotated, 10_000, 4_000),
+        Err(StoreError::Trust(RegistryError::Revoked))
+    ));
     // Revocation at the same generation is idempotent.
     store.revoke_device(&device, rotated, 3_100).unwrap();
+}
+
+#[test]
+fn idempotency_persists_accepted_and_rejected_classifications() {
+    let mut store = Store::open_memory().unwrap();
+    let principal = Principal::LocalOwner { uid: 501 };
+    let fingerprint = sample_fingerprint();
+    let accepted_key = IdempotencyKey::new("key-accepted").unwrap();
+    let accepted = CommandResult::Accepted {
+        dispatch_id: RequestId::new("dispatch-1").unwrap(),
+    };
+    store
+        .begin_idempotent_command(
+            Plane::LocalIpc,
+            &principal,
+            &accepted_key,
+            &fingerprint,
+            1_000,
+        )
+        .unwrap();
+    store
+        .finish_idempotent_command(&accepted_key, accepted.clone(), 1_001)
+        .unwrap();
+    let admission = store
+        .begin_idempotent_command(
+            Plane::LocalIpc,
+            &principal,
+            &accepted_key,
+            &fingerprint,
+            1_002,
+        )
+        .unwrap();
+    assert!(matches!(
+        admission,
+        IdempotencyAdmission::Duplicate {
+            result: Some(result)
+        } if result == accepted
+    ));
+
+    let rejected_key = IdempotencyKey::new("key-rejected").unwrap();
+    let rejected = CommandResult::Rejected {
+        denial: Denial::MissingScope {
+            scope: Scope::AgentSend,
+        },
+    };
+    store
+        .begin_idempotent_command(
+            Plane::LocalIpc,
+            &principal,
+            &rejected_key,
+            &fingerprint,
+            2_000,
+        )
+        .unwrap();
+    store
+        .finish_idempotent_command(&rejected_key, rejected.clone(), 2_001)
+        .unwrap();
+    let admission = store
+        .begin_idempotent_command(
+            Plane::LocalIpc,
+            &principal,
+            &rejected_key,
+            &fingerprint,
+            2_002,
+        )
+        .unwrap();
+    assert!(matches!(
+        admission,
+        IdempotencyAdmission::Duplicate {
+            result: Some(result)
+        } if result == rejected
+    ));
 }
 
 #[test]
