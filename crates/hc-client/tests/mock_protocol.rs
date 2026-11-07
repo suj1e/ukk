@@ -40,9 +40,9 @@ if request["method"] == "terminal.list":
     print(json.dumps({
         "jsonrpc": "2.0", "id": 1,
         "result": {"terminals": [
-            {"id": "t3", "name": "codex"},
-            {"id": "t4", "name": "claude"}
-        ], "hidden_finished": 0}
+            {"address": "t3", "name": "codex", "argv":["codex"], "cwd":"/work", "state":"live", "labels":{}, "created_ms":1, "screen":"exact", "cols":80, "rows":24},
+            {"address": "t4", "name": "claude", "argv":["claude"], "cwd":"/work", "state":"live", "labels":{}, "created_ms":2, "screen":"exact", "cols":80, "rows":24}
+        ], "hidden_finished": 0, "machines":[]}
     }), flush=True)
 elif request["method"] == "events.subscribe":
     print(json.dumps({"jsonrpc": "2.0", "id": 1,
