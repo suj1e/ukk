@@ -4,7 +4,10 @@ use super::*;
 impl Workspace {
     pub(super) fn selected_terminal(&self) -> Option<&Terminal> {
         let id = self.selected.as_deref()?;
-        self.snapshot.terminals.iter().find(|terminal| terminal.address == id)
+        self.snapshot
+            .terminals
+            .iter()
+            .find(|terminal| terminal.address == id)
     }
 
     /// Update the UI from an authoritative Host view. The Host reports
@@ -17,11 +20,12 @@ impl Workspace {
         self.host_revision = live.revision;
         self.online = live.core_connected;
         self.message = live.message;
-        if !self
-            .selected
-            .as_ref()
-            .is_some_and(|address| live.snapshot.terminals.iter().any(|t| &t.address == address))
-        {
+        if !self.selected.as_ref().is_some_and(|address| {
+            live.snapshot
+                .terminals
+                .iter()
+                .any(|t| &t.address == address)
+        }) {
             self.selected = None; // A Space/Session should be the initial focus.
         }
         self.snapshot = live.snapshot;
@@ -35,12 +39,12 @@ impl Workspace {
             let mut revision = 0_u64;
             loop {
                 let last_epoch = epoch.clone();
-                let result = cx
-                    .background_executor()
-                    .spawn(async move {
-                        HostClient::from_env().wait_for_change(&last_epoch, revision)
-                    })
-                    .await;
+                let result =
+                    cx.background_executor()
+                        .spawn(async move {
+                            HostClient::from_env().wait_for_change(&last_epoch, revision)
+                        })
+                        .await;
                 match result {
                     Ok(live) => {
                         epoch = live.host_epoch.clone();
@@ -105,25 +109,34 @@ impl Workspace {
                 }
                 match domain {
                     Ok(domain) => {
-                        if view.selected_space.as_ref().is_some_and(
-                            |id| !domain.spaces.iter().any(|s| &s.id == id)
-                        ) {
+                        if view
+                            .selected_space
+                            .as_ref()
+                            .is_some_and(|id| !domain.spaces.iter().any(|s| &s.id == id))
+                        {
                             view.selected_space = None;
                         }
                         if view.selected_space.is_none() {
                             view.selected_space = domain.spaces.first().map(|s| s.id.clone());
                         }
-                        if view.selected_session.as_ref().is_some_and(
-                            |id| !domain.sessions.iter().any(|s| &s.id == id)
-                        ) {
+                        if view
+                            .selected_session
+                            .as_ref()
+                            .is_some_and(|id| !domain.sessions.iter().any(|s| &s.id == id))
+                        {
                             view.selected_session = None;
                         }
                         if view.selected_session.is_none() && view.selected.is_none() {
-                            view.selected_session = domain.sessions.iter()
-                                .find(|s| !s.archived &&
-                                    view.selected_space.as_ref().is_none_or(
-                                        |space| &s.space_id == space
-                                    ))
+                            view.selected_session = domain
+                                .sessions
+                                .iter()
+                                .find(|s| {
+                                    !s.archived
+                                        && view
+                                            .selected_space
+                                            .as_ref()
+                                            .is_none_or(|space| &s.space_id == space)
+                                })
                                 .map(|s| s.id.clone());
                         }
                         view.domain = domain;
