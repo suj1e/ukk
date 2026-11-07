@@ -5,12 +5,31 @@ use ukk_domain::{AgentRun, DomainSnapshot, PaneNode, Session, SessionLayout, Spa
 impl Store {
     /// Durable monotonic revision, incremented by SQLite triggers for any
     /// workspace metadata write (including writes from independent processes).
-    pub fn workspace_revision(&self) -> Result<i64> {
+    pub fn workspace_cursor(&self) -> Result<(String, i64)> {
         Ok(self.conn.query_row(
-            "SELECT revision FROM workspace_revision WHERE id=1",
+            "SELECT db_epoch,revision FROM workspace_revision WHERE id=1",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?)
+    }
+
+    pub fn workspace_revision(&self) -> Result<i64> {
+        Ok(self.workspace_cursor()?.1)
+    }
+
+    /// Return a stable snapshot and matching durable cursor. Every metadata
+    /// write updates the revision in the same SQLite transaction, so a change
+    /// during this read is detected and retried rather than mislabeled.
+    pub fn snapshot_versioned(&self) -> Result<(String, i64, DomainSnapshot)> {
+        for _ in 0..4 {
+            let before = self.workspace_cursor()?;
+            let snapshot = self.snapshot()?;
+            let after = self.workspace_cursor()?;
+            if before == after {
+                return Ok((after.0, after.1, snapshot));
+            }
+        }
+        Err(StoreError::Conflict)
     }
 
     pub fn snapshot(&self) -> Result<DomainSnapshot> {
