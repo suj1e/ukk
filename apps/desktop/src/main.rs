@@ -217,7 +217,7 @@ impl Workspace {
                         div()
                             .flex_1()
                             .text_sm()
-                            .font_medium()
+                            .font_semibold()
                             .text_color(rgb(INK))
                             .child(display_name),
                     ),
@@ -266,7 +266,7 @@ impl Workspace {
                         div()
                             .flex_1()
                             .text_sm()
-                            .font_medium()
+                            .font_semibold()
                             .text_color(rgb(INK))
                             .child("Local machine"),
                     ),
