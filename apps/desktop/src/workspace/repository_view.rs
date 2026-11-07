@@ -505,12 +505,12 @@ impl Workspace {
                     cx,
                 )
             }
-            RepositoryLoad::Ready(diff) => self.diff_ready(diff),
+            RepositoryLoad::Ready(diff) => self.diff_ready(diff, pane_id),
         });
         column.into_any_element()
     }
 
-    fn diff_ready(&self, diff: &Diff) -> gpui::AnyElement {
+    fn diff_ready(&self, diff: &Diff, pane_id: &str) -> gpui::AnyElement {
         if diff.is_empty() {
             return self.notice(if self.repository.selection.is_none() {
                 "No tracked differences. Untracked files are listed under Files and are not part of a Git diff."
@@ -529,7 +529,7 @@ impl Workspace {
         }
         column = column.child(
             div()
-                .id("repository-diff-text")
+                .id(format!("repository-diff-text-{pane_id}"))
                 .flex()
                 .flex_col()
                 .flex_1()
@@ -574,11 +574,11 @@ impl Workspace {
                 move |this, cx| this.reload_repository_surfaces(cx),
                 cx,
             ),
-            RepositoryLoad::Ready(activity) => self.activity_ready(activity),
+            RepositoryLoad::Ready(activity) => self.activity_ready(activity, pane_id),
         }
     }
 
-    fn activity_ready(&self, activity: &Activity) -> gpui::AnyElement {
+    fn activity_ready(&self, activity: &Activity, pane_id: &str) -> gpui::AnyElement {
         let mut column = div().flex().flex_col().flex_1().min_h_0().gap_1();
         if activity.commits.is_empty() {
             column = column.child(self.notice(if activity.has_commits {
@@ -633,7 +633,7 @@ impl Workspace {
             .collect::<Vec<_>>();
         column = column.child(
             div()
-                .id("repository-activity-list")
+                .id(format!("repository-activity-list-{pane_id}"))
                 .flex()
                 .flex_col()
                 .gap_1()
