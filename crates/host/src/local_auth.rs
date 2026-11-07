@@ -85,8 +85,10 @@ impl LocalAuth {
 }
 
 fn unique_temp(target: &PathBuf) -> PathBuf {
-    // Rename target is guaranteed on the same filesystem as this sibling.
-    let name = format!("{}.{}", target.to_string_lossy(), new_id());
+    // Keep arbitrary non-UTF8 Unix filenames and Unicode Windows profiles.
+    // Sibling filename guarantees same-filesystem rename.
+    let mut name = target.as_os_str().to_os_string();
+    name.push(format!(".{}", new_id()));
     PathBuf::from(name)
 }
 
