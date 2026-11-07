@@ -12,8 +12,8 @@ mod actions;
 mod agent_detail;
 mod panes;
 mod render;
-mod state;
 mod sidebar;
+mod state;
 mod toolbar;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -24,9 +24,18 @@ enum DetailTab {
 
 #[derive(Clone)]
 enum PaneAction {
-    Split { pane_id: String, axis: SplitAxis, content: PaneContent },
-    Close { pane_id: String },
-    Resize { split_id: String, ratio: f32 },
+    Split {
+        pane_id: String,
+        axis: SplitAxis,
+        content: PaneContent,
+    },
+    Close {
+        pane_id: String,
+    },
+    Resize {
+        split_id: String,
+        ratio: f32,
+    },
 }
 
 pub(crate) struct Workspace {
