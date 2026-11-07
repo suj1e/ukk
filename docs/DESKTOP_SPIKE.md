@@ -47,7 +47,7 @@ cargo run -p ukk-host -- request terminal.list
 cargo run --manifest-path apps/desktop/Cargo.toml
 ```
 
-Windows support is a first-class goal but Host IPC is not yet implemented there; see [platform support](PLATFORM_SUPPORT.md). The GPUI code is shared across all three desktop operating systems.\n\nThe Desktop and Host use the same `UKK_SOCKET` override or the default `~/.ukk/run/agent-host.sock`. Run `hc ls` and launch test agents via hc before expecting populated agent rows.
+Windows support is a first-class goal. Named Pipe Host IPC code is committed but has not yet been compiled or validated; see [Windows IPC](WINDOWS_IPC.md) and [platform support](PLATFORM_SUPPORT.md). The GPUI code is shared across all three desktop operating systems.\n\nThe Desktop and Host use the same `UKK_SOCKET` override or the default `~/.ukk/run/agent-host.sock`. Run `hc ls` and launch test agents via hc before expecting populated agent rows.
 
 Note that the Host's current socket is created with user-only permissions and **not** a public API; the desktop and Host should run as the same OS user.
 
