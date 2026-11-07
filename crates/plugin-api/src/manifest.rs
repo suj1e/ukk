@@ -5,7 +5,7 @@
 //! and unknown event kinds are rejected rather than silently ignored. A
 //! manifest can only become a [`ValidatedManifest`] after every check passes,
 //! and the host supervisor accepts nothing else.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
@@ -280,6 +280,18 @@ pub enum ContributionSlot {
 }
 
 impl ContributionSlot {
+    /// Slots that render inside one Session and therefore require a
+    /// session-scoped command when they bind one.
+    pub fn is_session_scoped(self) -> bool {
+        matches!(
+            self,
+            Self::SessionAction
+                | Self::SessionTab
+                | Self::SessionOverlay
+                | Self::SessionContextPanel
+        )
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SessionAction => "session.action",
@@ -910,6 +922,11 @@ impl PluginManifest {
             });
         }
 
+        let command_scopes: BTreeMap<&str, CommandScope> = commands
+            .iter()
+            .map(|command| (command.id(), command.scope()))
+            .collect();
+
         if self.views.len() > limits::MAX_VIEWS {
             return Err(ManifestError::new(
                 ManifestErrorCode::LimitExceeded,
@@ -929,10 +946,19 @@ impl PluginManifest {
             }
             let slot = ContributionSlot::parse(&raw.slot)?;
             if let Some(command) = &raw.command {
-                if !command_ids.contains(command) {
+                let Some(scope) = command_scopes.get(command.as_str()) else {
                     return Err(ManifestError::new(
                         ManifestErrorCode::UnknownCommandReference,
                         format!("view `{}` binds to undeclared command `{command}`", raw.id),
+                    ));
+                };
+                if slot.is_session_scoped() && *scope != CommandScope::Session {
+                    return Err(ManifestError::new(
+                        ManifestErrorCode::CommandScopeMismatch,
+                        format!(
+                            "view `{}` uses slot `{slot}` and must bind a session-scoped command, but `{command}` is `{scope}`",
+                            raw.id
+                        ),
                     ));
                 }
             }

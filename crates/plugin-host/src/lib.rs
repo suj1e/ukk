@@ -51,6 +51,7 @@ mod grant;
 mod helper;
 mod in_process;
 mod messages;
+mod redact;
 mod state;
 mod supervisor;
 
@@ -65,5 +66,6 @@ pub use grant::{
 pub use helper::{HelperCommand, HelperError, HelperLimits, HelperProcess, ShutdownReport};
 pub use in_process::{EchoInProcessPlugin, InProcessPlugin, InvokeContext, PluginFailure};
 pub use messages::{HostEvent, InvokeOutcome, InvokeRequest, PublishReport};
+pub use redact::{redact, MAX_TRUSTED_TEXT_CHARS};
 pub use state::{PluginState, PluginStatus};
 pub use supervisor::{PluginHost, PluginInstall};

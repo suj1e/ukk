@@ -26,6 +26,7 @@ use ukk_plugin_api::wire::{
 use ukk_plugin_api::{limits, HELPER_PROTOCOL_VERSION};
 
 use crate::audit::lock;
+use crate::redact::redact;
 
 /// Environment variables a helper may inherit. Everything else is cleared so a
 /// plugin cannot read host credentials from the environment.
@@ -133,6 +134,9 @@ pub enum HelperError {
     Crashed { detail: String },
     /// The helper wrote a frame larger than the configured limit.
     FrameTooLarge { limit: usize },
+    /// A host-side frame (for example command arguments) exceeded the limit
+    /// before it was sent. This is a caller error, never a plugin failure.
+    RequestTooLarge { limit: usize, what: &'static str },
     /// The helper wrote something that is not a valid protocol frame.
     Protocol { detail: String },
     /// The helper answered with `ok = false`.
@@ -156,10 +160,19 @@ impl fmt::Display for HelperError {
             Self::FrameTooLarge { limit } => {
                 write!(f, "helper sent a frame larger than {limit} bytes")
             }
-            Self::Protocol { detail } => write!(f, "helper protocol violation: {detail}"),
-            Self::Remote { code, message } => {
-                write!(f, "helper rejected the request (`{code}`): {message}")
+            Self::RequestTooLarge { limit, what } => {
+                write!(f, "{what} exceeds the {limit}-byte frame limit")
             }
+            Self::Protocol { detail } => {
+                write!(f, "helper protocol violation: {}", redact(detail))
+            }
+            // `code` and `message` are helper-authored: one line, bounded.
+            Self::Remote { code, message } => write!(
+                f,
+                "helper rejected the request (`{}`): {}",
+                redact(code),
+                redact(message)
+            ),
             Self::Io { detail } => write!(f, "helper io error: {detail}"),
         }
     }
@@ -177,6 +190,7 @@ impl HelperError {
             Self::Timeout { .. } => "timeout",
             Self::Crashed { .. } => "crashed",
             Self::FrameTooLarge { .. } => "frame_too_large",
+            Self::RequestTooLarge { .. } => "request_too_large",
             Self::Protocol { .. } => "protocol_violation",
             Self::Remote { .. } => "remote_error",
             Self::Io { .. } => "io_error",
@@ -187,6 +201,7 @@ impl HelperError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CloseReason {
     Exited { code: Option<i32> },
+    Timeout,
     Protocol { detail: String },
     FrameTooLarge { limit: usize },
     WriteFailed { detail: String },
@@ -206,6 +221,10 @@ impl CloseReason {
                 detail: detail.clone(),
             },
             Self::FrameTooLarge { limit } => HelperError::FrameTooLarge { limit: *limit },
+            Self::Timeout => HelperError::Timeout {
+                method: "plugin.health".to_owned(),
+                timeout_ms: 0,
+            },
             Self::WriteFailed { detail } => HelperError::Crashed {
                 detail: format!("stdin closed: {detail}"),
             },
@@ -241,6 +260,8 @@ pub struct HelperProcess {
     outbox: Mutex<Outbox>,
     outbox_signal: Condvar,
     closed: AtomicBool,
+    /// Set once the host has signaled the process to die.
+    killed: AtomicBool,
     next_id: AtomicU64,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
     writer_thread: Mutex<Option<JoinHandle<()>>>,
@@ -316,6 +337,7 @@ impl HelperProcess {
             }),
             outbox_signal: Condvar::new(),
             closed: AtomicBool::new(false),
+            killed: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
             reader_thread: Mutex::new(None),
             writer_thread: Mutex::new(None),
@@ -367,8 +389,15 @@ impl HelperProcess {
                                     // authority.
                                 }
                                 Err(error) => {
+                                    // Log only the serde category: the raw
+                                    // message embeds helper-provided fragments.
                                     process.close(CloseReason::Protocol {
-                                        detail: format!("invalid frame: {error}"),
+                                        detail: format!(
+                                            "invalid frame ({} at line {}, column {})",
+                                            category_name(error.classify()),
+                                            error.line(),
+                                            error.column()
+                                        ),
                                     });
                                     return;
                                 }
@@ -482,6 +511,57 @@ impl HelperProcess {
         matches!(lock(&self.child).try_wait(), Ok(None))
     }
 
+    /// Kill and reap the process without the graceful `plugin.shutdown` round
+    /// trip. Used on timeout and by [`Self::shutdown`] after the grace period.
+    fn kill_child(&self) {
+        self.killed.store(true, Ordering::SeqCst);
+        let mut child = lock(&self.child);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// Whether the host killed the process rather than seeing it exit.
+    pub fn was_killed(&self) -> bool {
+        self.killed.load(Ordering::SeqCst)
+    }
+
+    /// Immediate containment: close, kill, reap and join both I/O threads.
+    ///
+    /// Callers use this when a helper already violated a hard contract (for
+    /// example a missed deadline). It performs no `plugin.shutdown` round trip,
+    /// so it is bounded by the OS, not by the helper.
+    pub fn kill_now(&self) -> ShutdownReport {
+        self.close(CloseReason::Timeout);
+        self.kill_child();
+        self.finish_threads();
+        ShutdownReport {
+            killed: true,
+            exit_code: self.exit_code(),
+        }
+    }
+
+    fn finish_threads(&self) {
+        // Dropping stdin makes a blocked writer observe EOF/EPIPE.
+        let _ = lock(&self.stdin).take();
+        self.outbox_signal.notify_all();
+        let writer = lock(&self.writer_thread).take();
+        if let Some(writer) = writer {
+            let _ = writer.join();
+        }
+        let reader = lock(&self.reader_thread).take();
+        if let Some(reader) = reader {
+            let _ = reader.join();
+        }
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        lock(&self.child)
+            .try_wait()
+            .ok()
+            .flatten()
+            .and_then(|status| status.code())
+    }
+
     /// Last close reason mapped to an error, for supervision and audit.
     pub fn last_error(&self) -> HelperError {
         self.close_error()
@@ -503,7 +583,13 @@ impl HelperProcess {
     }
 
     fn encode(&self, frame: &RequestFrame) -> Result<Vec<u8>, HelperError> {
-        encode_json(frame, self.limits.max_frame_bytes)
+        encode_json(frame, self.limits.max_frame_bytes).map_err(|error| match error {
+            HelperError::FrameTooLarge { limit } => HelperError::RequestTooLarge {
+                limit,
+                what: "request frame",
+            },
+            other => other,
+        })
     }
 
     fn round_trip(
@@ -539,6 +625,11 @@ impl HelperProcess {
         };
         lock(&self.pending).remove(&frame.id);
         let Some(response) = response else {
+            // A helper that misses a deadline is broken. Close and kill it here
+            // so `is_alive()` is immediately false, the reader/writer threads
+            // unblock, and the supervisor can reap the handle deterministically.
+            self.close(CloseReason::Timeout);
+            self.kill_child();
             return Err(HelperError::Timeout {
                 method: method.to_owned(),
                 timeout_ms: timeout.as_millis() as u64,
@@ -565,7 +656,13 @@ impl HelperProcess {
         )?;
         let result = response.result.unwrap_or(serde_json::Value::Null);
         serde_json::from_value::<HelloResult>(result).map_err(|error| HelperError::Protocol {
-            detail: format!("invalid hello result: {error}"),
+            // Never log the raw serde message: it embeds helper-provided input.
+            detail: format!(
+                "invalid hello result ({} at line {}, column {})",
+                category_name(error.classify()),
+                error.line(),
+                error.column()
+            ),
         })
     }
 
@@ -640,36 +737,24 @@ impl HelperProcess {
             let _ = self.round_trip(RequestFrame::shutdown(id), "plugin.shutdown", grace);
         }
         self.wait_for_exit(grace);
-        let mut killed = false;
+        let mut killed_after_grace = false;
         {
             let mut child = lock(&self.child);
-            match child.try_wait() {
-                Ok(Some(_)) => {}
-                _ => {
-                    killed = true;
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                killed_after_grace = true;
+                let _ = child.kill();
+                let _ = child.wait();
             }
         }
+        if killed_after_grace {
+            self.killed.store(true, Ordering::SeqCst);
+        }
         self.close(CloseReason::Stopped);
-        // Drop stdin so a blocked writer sees EOF/EPIPE promptly.
-        let _ = lock(&self.stdin).take();
-        self.outbox_signal.notify_all();
-        let writer = lock(&self.writer_thread).take();
-        if let Some(writer) = writer {
-            let _ = writer.join();
+        self.finish_threads();
+        ShutdownReport {
+            killed: self.was_killed(),
+            exit_code: self.exit_code(),
         }
-        let reader = lock(&self.reader_thread).take();
-        if let Some(reader) = reader {
-            let _ = reader.join();
-        }
-        let exit_code = lock(&self.child)
-            .try_wait()
-            .ok()
-            .flatten()
-            .and_then(|status| status.code());
-        ShutdownReport { killed, exit_code }
     }
 
     fn wait_for_exit(&self, grace: Duration) {
@@ -690,6 +775,15 @@ impl Drop for HelperProcess {
         let mut child = lock(&self.child);
         let _ = child.kill();
         let _ = child.wait();
+    }
+}
+
+fn category_name(category: serde_json::error::Category) -> &'static str {
+    match category {
+        serde_json::error::Category::Io => "io",
+        serde_json::error::Category::Syntax => "syntax",
+        serde_json::error::Category::Data => "data",
+        serde_json::error::Category::Eof => "eof",
     }
 }
 

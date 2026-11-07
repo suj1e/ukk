@@ -6,6 +6,8 @@
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::redact::redact;
+
 /// Result of the audited operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuditOutcome {
@@ -72,7 +74,9 @@ impl AuditKind {
     }
 }
 
-/// One audit record. `detail` is a short, redaction-safe explanation.
+/// One audit record. `detail` is a short, redaction-safe explanation: it is
+/// passed through [`redact`] on construction, so a helper-authored string can
+/// never inject newlines, ANSI escapes or unbounded text into a log sink.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditRecord {
     pub at_ms: i64,
@@ -94,7 +98,7 @@ impl AuditRecord {
             plugin_id: plugin_id.map(str::to_owned),
             kind,
             outcome,
-            detail: detail.into(),
+            detail: redact(&detail.into()),
         }
     }
 }
@@ -161,6 +165,12 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Wall-clock milliseconds since the Unix epoch.
+///
+/// Grants use wall-clock expiry so a lease survives a suspend/resume cycle the
+/// way a user expects. The trade-off is explicit: a backwards clock step can
+/// extend an expired lease. Callers that need strict monotonicity must revoke
+/// on resume; this is documented as a residual limitation, not a guarantee.
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -42,7 +42,8 @@ cleared environment, bounded framing, deadlines and kill-on-disable.
 | `crates/plugin-host/src/messages.rs` | Invoke requests, outcomes, events, publish report |
 | `crates/plugin-host/src/helper.rs` | Child-process spawn, bounded framing, deadlines, kill |
 | `crates/plugin-host/src/grant.rs` | Scoped grants, TTL rules, revocation |
-| `crates/plugin-host/src/audit.rs` | `AuditSink` and redaction rules |
+| `crates/plugin-host/src/audit.rs` | `AuditSink`, record model and redaction on write |
+| `crates/plugin-host/src/redact.rs` | Single redaction helper for untrusted text |
 | `crates/plugin-host/src/contributions.rs` | Read-only UI descriptors and command index |
 | `crates/plugin-host/src/in_process.rs` | Trusted in-process contribution trait |
 | `crates/plugin-host/src/bin/*` | Reference sample helper and a fault-injection helper |
@@ -97,8 +98,9 @@ Validation is strict and non-negotiable:
 - a view may only bind to a declared command;
 - an overlay descriptor is required for `session.overlay` and forbidden elsewhere;
 - event subscriptions require `session.observe` to be declared;
-- an `entrypoint` is a **bare file name** (no `/`, `\`, `..`): the installer, not
-  the manifest, decides which absolute executable runs;
+- an `entrypoint` is a **bare file name** (no `/`, `\`, `..`) and it is
+  **bound to the executable that runs**: installing a helper whose program file
+  stem differs from the declared entrypoint fails with `invalid_helper`;
 - `sandboxed-wasm` is parsed but rejected with an explicit reason.
 
 Limits (see `ukk_plugin_api::limits`): 32 commands, 32 views, 16 event
@@ -167,6 +169,11 @@ any ──uninstall──> removed (+ helper killed, grants revoked, command ids
   fails the plugin with `protocol_violation` and kills the process.
 - `disable` sends `plugin.shutdown`, waits the grace period, then kills. The
   host process is untouched, so enable/disable is repeatable without restart.
+- A plugin that misses a request deadline is **closed, killed and reaped
+  immediately**, and its runtime handle is taken out of the supervisor before
+  the state becomes `failed`. Later `disable`, `restart`, `uninstall` and host
+  teardown therefore cannot orphan it or spawn a second copy. Tested against the
+  OS (`kill -0` / `tasklist`), not against the supervisor's own bookkeeping.
 - There is **no automatic restart**. `supervise()` detects unexpected exits and
   moves exactly that plugin to `failed`; recovery is an explicit `restart` or
   `enable` by the user/operator.
@@ -192,8 +199,11 @@ Enforcement on the host side:
 
 - frames are bounded (`max_frame_bytes`, 64 KiB default); an endless line is cut
   off instead of buffered;
-- every request has a deadline (2 s default); a hung helper is killed and the
-  plugin marked failed;
+- every request has a deadline (2 s default). On expiry the host closes the
+  connection, kills and reaps the child, and the plugin becomes `failed`;
+- command arguments are size-checked against the frame budget **before** sending.
+  Oversized arguments are a caller error (`invalid_args`) and never fail or kill
+  the plugin;
 - the environment is cleared except an allowlist (`SYSTEMROOT`, `WINDIR`,
   `TEMP`, `TMP`, `TMPDIR`, `HOME`, `USERPROFILE`, `LANG`, `LC_ALL`) plus
   `UKK_PLUGIN_ID`/`UKK_PLUGIN_PROTOCOL`; stderr is discarded;
@@ -245,11 +255,31 @@ duplicate registration, enable, disable, enable failure, command invoked,
 command denied, unknown command, forged request, helper crashed, helper timeout,
 protocol violation, event dropped, grant granted, grant revoked. Records carry
 `at_ms`, `plugin_id`, `kind`, `outcome` and a short detail. Details contain ids,
-capability names and reasons only — **never** command arguments, event payloads,
-file content or screen data. `MemoryAuditSink` exists for tests; a durable sink
-is not wired yet.
+capability names, scope/session and, for grants, the issuing principal
+(`by=<granted_by>`) — **never** command arguments, event payloads, file content
+or screen data.
+
+Every detail is passed through `redact()` on construction: control characters
+(including newline, TAB, ESC/ANSI) and bidi overrides are escaped, and the text
+is capped at 200 characters. Helper-authored strings (wire error code/message,
+hello identity, frame parse failures) therefore cannot forge log lines, inject
+terminal escapes or grow a record without bound. Serde parse failures are
+reported by category/line/column instead of echoing the offending input.
+
+`EventDropped` records are **coalesced**: one record for a plugin's first drop
+and one per further 64 drops; the authoritative total stays in
+`PluginStatus::dropped_events`. A hostile plugin can overflow its own bounded
+queue but cannot drive unbounded audit growth.
+
+`MemoryAuditSink` exists for tests; a durable sink is not wired yet.
 
 ## Integration seam for GPUI / Host
+
+`InvokeOutcome` carries `provenance: TrustLevel`, so a renderer can tell
+helper-authored output (`first-party`/`third-party`, untrusted text) from
+`builtin` in-process output. An overlay declared with `session.overlay` is
+bounded in absolute pixels only; the renderer **must** clamp it to the hosting
+Session view (no full-view takeover, no chrome occlusion).
 
 The adapter surface is intentionally four calls:
 
@@ -270,6 +300,12 @@ host.invoke(InvokeRequest::new(plugin_id, command).in_session(session_id))?;
 host.publish_event(HostEvent::new(EventKind::AgentStatus, payload).in_session(session_id));
 host.supervise();
 ```
+
+Grant issuance has exactly one door: `PluginHost::grant` checks the manifest,
+mints an `AuthorizedGrant` token and writes the audit record. `GrantStore::upsert`
+requires that token (no public constructor), so a settings UI or a future
+SQLite store cannot create authority on its own; `grant_store()` exposes only
+listing and revocation.
 
 Remaining wiring, deliberately **not** in this PR:
 
@@ -296,7 +332,7 @@ Threats considered in this PR and how they are addressed:
 | Plugin claims another plugin's action | Global command ownership index; `forged_command` denial + audit | `forged_and_unknown_commands_are_denied` |
 | Helper invents extra contributions | `plugin.hello` ids validated as a subset of the manifest; mismatch kills it | `hello_forgery_identity_mismatch_and_handshake_timeout_are_rejected` |
 | Helper impersonates another plugin | Identity in `plugin.hello` must equal the manifest id | same test (`bad-identity`) |
-| Hung helper blocks the host | Request deadline, then kill + `failed` transition | `helper_timeout_is_bounded_and_marks_the_plugin_failed` |
+| Hung helper blocks the host or survives as an orphan | Request deadline, then close + kill + reap + runtime removal; verified against the OS | `helper_timeout_is_bounded_and_marks_the_plugin_failed` |
 | Helper floods the host | Bounded frame reader cuts off at the limit | `oversize_helper_output_is_cut_off` |
 | Helper corrupts the protocol | Non-JSON / unsolicited response → `protocol_violation` + kill | `non_json_and_unsolicited_frames_are_protocol_violations` |
 | One plugin crash kills the app | Process separation; `supervise` scopes failure to one plugin | `helper_crash_is_contained_and_other_plugins_keep_working` |
@@ -304,6 +340,12 @@ Threats considered in this PR and how they are addressed:
 | Open-ended screen/approval authority | Sensitive capabilities require a ≤1 h TTL lease | `sensitive_capabilities_require_a_bounded_expiry` |
 | Grant leaks across sessions | Scope matching, session isolation | `a_grant_authorizes_only_its_scope_and_revocation_is_immediate` |
 | Secrets in logs | Audit details exclude arguments/payloads | `audit_records_never_contain_command_arguments` |
+| Log forgery via helper text | `redact()` on every audit detail and helper-authored error; serde errors reduced to category | `helper_authored_text_cannot_forge_audit_lines`, `redact` unit tests |
+| Unbounded audit growth from queue overflow | Coalesced `EventDropped` records + counter in status | `event_delivery_needs_a_grant_and_a_bounded_queue` |
+| Expired lease still authorizing | Use-time `is_active(now)` check, tested with a 1 ms lease and a pause | `expired_sensitive_leases_stop_authorizing` |
+| Caller input fails the plugin | Argument budget checked before dispatch → `invalid_args`; encoding overflow is non-fatal | `oversized_arguments_are_a_caller_error_and_do_not_fail_the_plugin` |
+| Manifest describes helper A, install runs helper B | `entrypoint` must equal the executed file stem | `entrypoint_must_match_the_helper_that_runs` |
+| Session UI bound to a host-wide command | Session slots must bind `session`-scoped commands | `session_slots_must_bind_session_scoped_commands` |
 | `PATH` hijack of the helper | Absolute program required | `trust_and_runtime_must_match` (`invalid_helper`) |
 | Credential leakage via environment | Environment cleared except allowlist | code review; no test asserts env contents yet |
 
@@ -314,13 +356,23 @@ Residual risks and honest gaps:
 - **No signature/origin verification.** The embedding host must not install a
   path it has not verified; there is no allowlist implementation yet.
 - **No durable grants.** Restart drops grants (fail-closed) and audit records.
+- **No orphan cleanup on an abnormal host death.** There is no
+  `PR_SET_PDEATHSIG`, process group kill or Windows job object, so a SIGKILL or
+  crash of the host itself leaves helpers running with the host user's identity.
+  Normal `disable`/`uninstall`/timeout/teardown paths all kill and reap; the
+  host-crash path needs an OS mechanism and is a follow-up. Runbook today: check
+  `ps`/`tasklist` for `ukk-*-helper` after a host crash.
 - **In-process plugins are trusted code.** `builtin` must only be used for code
   compiled into the release; capability checks still apply, but there is no
   memory isolation.
 - **Denial-of-service within limits remains possible**: a helper can consume CPU
   or spawn its own children. Process/CPU quotas need OS support.
 - Session→Space grant inheritance is intentionally unsupported, so a
-  space-scoped grant currently authorizes no session command.
+  space-scoped grant currently authorizes no session command; this is tested
+  (`space_grants_authorize_nothing_and_mutate_ttl_is_bounded`).
+- Grant expiry uses wall-clock time so a lease survives suspend/resume. A
+  backwards clock step can extend an expired lease; hosts that need strictness
+  must revoke on resume.
 
 ## Not verified in this PR
 

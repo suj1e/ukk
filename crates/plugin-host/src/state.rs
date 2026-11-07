@@ -5,6 +5,7 @@
 //! overlap. Dispatch reads the map without the life-cycle lock.
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use ukk_plugin_api::{PluginId, TrustLevel, ValidatedManifest};
@@ -84,7 +85,13 @@ pub(crate) fn status_of(plugin_id: &PluginId, slot: &Slot) -> PluginStatus {
 
 pub(crate) fn stop_runtime(runtime: Runtime) {
     if let Runtime::Helper(process) = runtime {
-        let _ = process.shutdown();
+        if process.is_closed() {
+            // Already failed (crash, protocol violation or missed deadline):
+            // skip the graceful round trip and reap immediately.
+            let _ = process.kill_now();
+        } else {
+            let _ = process.shutdown();
+        }
     }
 }
 
@@ -136,6 +143,9 @@ pub(crate) struct Slot {
     /// Bumped on every transition; prevents a stale enable from overwriting a
     /// concurrent disable.
     pub(crate) generation: u64,
+    /// Highest dropped-event count already written to the audit sink; keeps a
+    /// hostile plugin from turning queue overflow into unbounded log growth.
+    pub(crate) dropped_audited: AtomicU64,
 }
 
 pub(crate) struct HostInner {

@@ -51,6 +51,8 @@ pub enum ManifestErrorCode {
     DuplicateEventKind,
     /// A view binds to a command that the manifest does not declare.
     UnknownCommandReference,
+    /// A session-scoped view slot binds a command with a different scope.
+    CommandScopeMismatch,
     /// A `session.overlay` view has no overlay descriptor.
     OverlayMissing,
     /// A non-overlay view carries an overlay descriptor.
@@ -93,6 +95,7 @@ impl ManifestErrorCode {
             Self::DuplicateEventSubscription => "duplicate_event_subscription",
             Self::DuplicateEventKind => "duplicate_event_kind",
             Self::UnknownCommandReference => "unknown_command_reference",
+            Self::CommandScopeMismatch => "command_scope_mismatch",
             Self::OverlayMissing => "overlay_missing",
             Self::OverlayNotAllowed => "overlay_not_allowed",
             Self::OverlayBounds => "overlay_bounds",

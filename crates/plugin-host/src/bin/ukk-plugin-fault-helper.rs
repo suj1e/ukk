@@ -10,7 +10,9 @@
 //! * `noisy` — answers a request id that was never sent;
 //! * `forged` — claims contributions the manifest does not declare;
 //! * `bad-identity` — reports another plugin id;
-//! * `hello-stall` — never answers the handshake.
+//! * `hello-stall` — never answers the handshake;
+//! * `evil-error` — rejects with newline/ANSI/long helper-authored text;
+//! * `env-probe` — reports which environment variables it inherited.
 //!
 //! It exists only to prove crash containment, protocol enforcement and timeout
 //! handling; it is never installed by the product.
@@ -138,6 +140,25 @@ fn main() -> ExitCode {
                 "oversize" => {
                     let blob = "x".repeat(200 * 1024);
                     let body = json!({ "blob": blob });
+                    let _ = writeln!(output, "{}", to_line(&ResponseFrame::ok(request.id, body)));
+                    let _ = output.flush();
+                }
+                "evil-error" => {
+                    let message = format!("line one\nline two\u{1b}[31mred {}", "x".repeat(500));
+                    let _ = writeln!(
+                        output,
+                        "{}",
+                        to_line(&ResponseFrame::err(request.id, "evil\ncode", &message))
+                    );
+                    let _ = output.flush();
+                }
+                "env-probe" => {
+                    let body = json!({
+                        "path_set": std::env::var_os("PATH").is_some(),
+                        "home_set": std::env::var_os("HOME").is_some(),
+                        "plugin_id_env": std::env::var("UKK_PLUGIN_ID").ok(),
+                        "protocol_env": std::env::var("UKK_PLUGIN_PROTOCOL").ok(),
+                    });
                     let _ = writeln!(output, "{}", to_line(&ResponseFrame::ok(request.id, body)));
                     let _ = output.flush();
                 }

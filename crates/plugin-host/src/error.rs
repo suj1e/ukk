@@ -51,6 +51,12 @@ pub enum HostError {
         plugin_id: String,
         command: String,
     },
+    /// Caller-supplied command arguments exceed the frame budget. This is a
+    /// caller error and never fails the plugin.
+    InvalidArgs {
+        plugin_id: String,
+        detail: String,
+    },
     CapabilityDenied {
         plugin_id: String,
         capability: String,
@@ -84,6 +90,7 @@ impl HostError {
             Self::NotEnabled { .. } => "not_enabled",
             Self::Busy { .. } => "busy",
             Self::MissingSession { .. } => "missing_session",
+            Self::InvalidArgs { .. } => "invalid_args",
             Self::CapabilityDenied { .. } => "capability_denied",
             Self::UndeclaredCapability { .. } => "undeclared_capability",
             Self::Grant(_) => "grant_rejected",
@@ -136,6 +143,11 @@ impl fmt::Display for HostError {
                 f,
                 "command `{command}` of plugin `{plugin_id}` is session-scoped and needs a session id"
             ),
+            Self::InvalidArgs { plugin_id, detail } => write!(
+                f,
+                "arguments for plugin `{plugin_id}` are invalid: {}",
+                crate::redact::redact(detail)
+            ),
             Self::CapabilityDenied {
                 plugin_id,
                 capability,
@@ -156,11 +168,18 @@ impl fmt::Display for HostError {
             ),
             Self::Grant(error) => write!(f, "grant rejected: {error}"),
             Self::Helper(error) => write!(f, "{error}"),
+            // `code`/`message` can be helper-authored: never let them break
+            // out of a log line.
             Self::PluginFailed {
                 plugin_id,
                 code,
                 message,
-            } => write!(f, "plugin `{plugin_id}` failed (`{code}`): {message}"),
+            } => write!(
+                f,
+                "plugin `{plugin_id}` failed (`{}`): {}",
+                crate::redact::redact(code),
+                crate::redact::redact(message)
+            ),
         }
     }
 }

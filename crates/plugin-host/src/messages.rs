@@ -1,7 +1,7 @@
 //! Requests and reports exchanged with UI and Host adapters.
 use serde_json::Value;
 
-use ukk_plugin_api::{EventKind, PluginId};
+use ukk_plugin_api::{EventKind, PluginId, TrustLevel};
 
 /// A host event offered to subscribed plugins.
 #[derive(Debug, Clone)]
@@ -73,4 +73,8 @@ pub struct InvokeOutcome {
     pub plugin_id: PluginId,
     pub command: String,
     pub value: Value,
+    /// Where `value` came from. A renderer must treat
+    /// [`TrustLevel::FirstParty`]/[`TrustLevel::ThirdParty`] output as
+    /// untrusted text, never as host-authored content.
+    pub provenance: TrustLevel,
 }

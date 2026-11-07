@@ -217,3 +217,50 @@ pub fn test_host(config: HostConfig) -> TestHost {
 pub fn test_host_default() -> TestHost {
     test_host(fast_config())
 }
+
+/// OS-level liveness probe for a pid captured earlier.
+///
+/// This is deliberately *not* `helper_pid().is_none()`: reading the slot only
+/// proves the host forgot the handle, which is exactly the failure mode a
+/// containment bug produces. `kill -0` / `tasklist` asks the OS.
+#[cfg(unix)]
+pub fn process_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+pub fn process_alive(pid: u32) -> bool {
+    let filter = format!("PID eq {pid}");
+    std::process::Command::new("tasklist")
+        .args(["/FI", &filter, "/NH"])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
+}
+
+/// Wait briefly for the OS to report the process gone, then assert it.
+///
+/// Reaping is synchronous in the host, so this normally succeeds on the first
+/// probe; the retry only absorbs CI scheduler noise.
+pub fn assert_process_dead(pid: u32, context: &str) {
+    for _ in 0..50 {
+        if !process_alive(pid) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("process {pid} is still alive after {context}");
+}
+
+pub fn assert_process_alive(pid: u32, context: &str) {
+    assert!(
+        process_alive(pid),
+        "process {pid} should be alive ({context})"
+    );
+}

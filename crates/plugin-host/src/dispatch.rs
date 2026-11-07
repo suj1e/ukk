@@ -3,6 +3,8 @@
 //! Every command goes through the same authorization order: plugin installed,
 //! command owned by that plugin, plugin ready, session scope satisfied, every
 //! required capability granted. UI adapters cannot bypass it.
+use std::sync::atomic::Ordering;
+
 use ukk_plugin_api::{Capability, ClientPlatform, CommandScope, ContributionSlot, PluginId};
 
 use crate::audit::{now_ms, AuditKind, AuditOutcome};
@@ -12,6 +14,7 @@ use crate::grant::is_authorized;
 use crate::helper::HelperError;
 use crate::in_process::InvokeContext;
 use crate::messages::{HostEvent, InvokeOutcome, InvokeRequest, PublishReport};
+use crate::redact::redact;
 use crate::state::{read, PluginState, Runtime};
 use crate::supervisor::{audit_kind_for_helper_error, session_label, PluginHost};
 
@@ -25,7 +28,39 @@ impl PluginHost {
             args,
         } = request;
 
-        let (runtime, requires) = {
+        // Caller-side input guard: an oversized argument blob is a UI/adapter
+        // error, never a reason to kill the plugin. Keep room for the envelope
+        // so the frame we would send stays under the helper limit.
+        let arg_budget = self.inner.config.max_frame_bytes.saturating_sub(1024);
+        match serde_json::to_vec(&args) {
+            Ok(encoded) if encoded.len() > arg_budget => {
+                self.record(
+                    Some(&plugin_id),
+                    AuditKind::CommandDenied,
+                    AuditOutcome::Failed,
+                    format!(
+                        "command `{command}` arguments are {} bytes (limit {arg_budget})",
+                        encoded.len()
+                    ),
+                );
+                return Err(HostError::InvalidArgs {
+                    plugin_id: plugin_id.to_string(),
+                    detail: format!(
+                        "arguments are {} bytes; the limit is {arg_budget}",
+                        encoded.len()
+                    ),
+                });
+            }
+            Ok(_) => {}
+            Err(error) => {
+                return Err(HostError::InvalidArgs {
+                    plugin_id: plugin_id.to_string(),
+                    detail: format!("arguments are not serializable ({:?})", error.classify()),
+                })
+            }
+        }
+
+        let (runtime, requires, trust) = {
             let plugins = read(&self.inner.plugins);
             let Some(slot) = plugins.get(&plugin_id) else {
                 drop(plugins);
@@ -78,7 +113,7 @@ impl PluginHost {
                     command,
                 });
             }
-            (runtime, declared.requires().clone())
+            (runtime, declared.requires().clone(), slot.manifest.trust())
         };
 
         if !requires.is_empty() {
@@ -128,16 +163,22 @@ impl PluginHost {
                     Some(&plugin_id),
                     AuditKind::CommandInvoked,
                     AuditOutcome::Allowed,
-                    format!("command `{command}`"),
+                    format!(
+                        "command `{command}` scope={}",
+                        session_label(session_id.as_deref())
+                    ),
                 );
                 Ok(InvokeOutcome {
                     plugin_id,
                     command,
                     value,
+                    provenance: trust,
                 })
             }
             Err(error) => {
                 let kind = audit_kind_for_helper_error(&error);
+                // `RequestTooLarge` originates from encoding our own frame:
+                // that is a caller bug, not evidence the plugin is broken.
                 let fatal = matches!(
                     error,
                     HelperError::Timeout { .. }
@@ -159,8 +200,8 @@ impl PluginHost {
                 Err(match error {
                     HelperError::Remote { code, message } => HostError::PluginFailed {
                         plugin_id: plugin_id.to_string(),
-                        code,
-                        message,
+                        code: redact(&code),
+                        message: redact(&message),
                     },
                     other => HostError::Helper(other),
                 })
@@ -232,12 +273,35 @@ impl PluginHost {
                         Ok(true) => report.delivered += 1,
                         Ok(false) => {
                             report.dropped += 1;
-                            self.record(
-                                Some(plugin_id),
-                                AuditKind::EventDropped,
-                                AuditOutcome::Failed,
-                                format!("event `{}` dropped: queue full", event.kind),
-                            );
+                            // One audit record for the first drop and then one
+                            // per further 64 drops: a hostile plugin cannot
+                            // turn queue overflow into unbounded log growth.
+                            // The authoritative total stays in
+                            // `PluginStatus::dropped_events`.
+                            let total = process.dropped_events();
+                            let last = slot.dropped_audited.load(Ordering::Relaxed);
+                            let due = last == 0 || total >= last.saturating_add(64);
+                            if due
+                                && slot
+                                    .dropped_audited
+                                    .compare_exchange(
+                                        last,
+                                        total,
+                                        Ordering::SeqCst,
+                                        Ordering::Relaxed,
+                                    )
+                                    .is_ok()
+                            {
+                                self.record(
+                                    Some(plugin_id),
+                                    AuditKind::EventDropped,
+                                    AuditOutcome::Failed,
+                                    format!(
+                                        "event `{}` dropped: queue full (total {total})",
+                                        event.kind
+                                    ),
+                                );
+                            }
                         }
                         Err(_) => report.skipped += 1,
                     }

@@ -256,6 +256,33 @@ fn rejects_view_bound_to_undeclared_command() {
 }
 
 #[test]
+fn session_slots_must_bind_session_scoped_commands() {
+    let text = manifest(
+        "[[contributions.commands]]\nid = \"test.global\"\ntitle = \"Global\"\nscope = \"global\"\n\n[[contributions.views]]\nid = \"test.tab\"\nslot = \"session.tab\"\ntitle = \"Tab\"\ncommand = \"test.global\"\n",
+    );
+    let error = error(&text);
+    assert_eq!(error.code(), ManifestErrorCode::CommandScopeMismatch);
+
+    let text = manifest(
+        "[[contributions.commands]]\nid = \"test.workspace\"\ntitle = \"Workspace\"\nscope = \"workspace\"\n\n[[contributions.views]]\nid = \"test.action\"\nslot = \"session.action\"\ntitle = \"Action\"\ncommand = \"test.workspace\"\n",
+    );
+    assert_code(&text, ManifestErrorCode::CommandScopeMismatch);
+
+    // A settings section may legitimately bind a host-wide command.
+    let text = manifest(
+        "[[contributions.commands]]\nid = \"test.global\"\ntitle = \"Global\"\nscope = \"global\"\n\n[[contributions.views]]\nid = \"test.settings\"\nslot = \"settings.section\"\ntitle = \"Settings\"\ncommand = \"test.global\"\n",
+    );
+    let validated = ValidatedManifest::from_toml_str(&text).unwrap();
+    assert_eq!(validated.views().len(), 1);
+
+    // Session slot with a session command stays valid.
+    let text = manifest(
+        "[[contributions.commands]]\nid = \"test.session\"\ntitle = \"Session\"\nscope = \"session\"\n\n[[contributions.views]]\nid = \"test.tab\"\nslot = \"session.tab\"\ntitle = \"Tab\"\ncommand = \"test.session\"\n",
+    );
+    assert!(ValidatedManifest::from_toml_str(&text).is_ok());
+}
+
+#[test]
 fn overlay_descriptor_rules() {
     let text = manifest("[[contributions.views]]\nid = \"test.overlay\"\nslot = \"session.overlay\"\ntitle = \"Overlay\"\n");
     assert_code(&text, ManifestErrorCode::OverlayMissing);

@@ -83,7 +83,8 @@ impl Grant {
 }
 
 /// Request to issue a grant. Constructed by the user-facing surface (desktop
-/// settings, mobile approval) — never by a plugin.
+/// settings, mobile approval) — never by a plugin. A request alone grants
+/// nothing: only [`crate::PluginHost::grant`] can turn it into authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantRequest {
     pub plugin_id: PluginId,
@@ -131,7 +132,10 @@ impl std::error::Error for GrantError {}
 
 impl GrantRequest {
     /// Validate the request and materialize a [`Grant`].
-    pub fn into_grant(self, now_ms: i64) -> Result<Grant, GrantError> {
+    ///
+    /// Crate-private: producing a `Grant` value is the first half of issuing
+    /// authority, and only [`crate::PluginHost::grant`] may do it.
+    pub(crate) fn into_grant(self, now_ms: i64) -> Result<Grant, GrantError> {
         let text = self.capability.to_text();
         let max_ttl = if self.capability.risk() == RiskLevel::Sensitive {
             MAX_SENSITIVE_GRANT_TTL_MS
@@ -188,12 +192,33 @@ impl GrantScope {
     }
 }
 
-/// Persistence boundary for grants. The host only ever calls these four
-/// methods, so a SQLite-backed store can replace the in-memory one without
-/// touching dispatch logic.
+/// Proof that a capability was checked against an installed manifest and that
+/// the grant passed the TTL rules.
+///
+/// The token has no public constructor, so external code — including a future
+/// GPUI settings surface holding a [`PluginHost`](crate::PluginHost) or the
+/// grant store itself — cannot insert authority. Only
+/// [`crate::PluginHost::grant`] mints one, after the declared-capability check
+/// and before the `GrantGranted` audit record.
+#[derive(Debug)]
+pub struct AuthorizedGrant(());
+
+impl AuthorizedGrant {
+    pub(crate) fn mint() -> Self {
+        Self(())
+    }
+}
+
+/// Persistence boundary for grants. The host only ever calls these methods, so
+/// a SQLite-backed store can replace the in-memory one without touching
+/// dispatch logic.
+///
+/// Revocation and listing are safe to expose; `upsert` requires an
+/// [`AuthorizedGrant`] token that only the host can mint.
 pub trait GrantStore: Send + Sync {
     /// Insert or replace the grant for its (plugin, capability, scope) key.
-    fn upsert(&self, plugin_id: &PluginId, grant: Grant);
+    /// Requires an [`AuthorizedGrant`] proof.
+    fn upsert(&self, plugin_id: &PluginId, grant: Grant, authorized: AuthorizedGrant);
     /// Remove one grant; returns whether it existed.
     fn revoke(&self, plugin_id: &PluginId, capability: &Capability, scope: &GrantScope) -> bool;
     /// Remove every grant for a plugin (used on uninstall); returns the count.
@@ -216,29 +241,10 @@ impl InMemoryGrantStore {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Issue a grant for `request.plugin_id`, applying TTL and sensitivity
-    /// rules. Callers in [`crate::PluginHost`] additionally check that the
-    /// capability is declared by the installed manifest.
-    pub fn grant(&self, request: GrantRequest) -> Result<Grant, GrantError> {
-        let plugin_id = request.plugin_id.clone();
-        let grant = request.into_grant(now_ms())?;
-        self.upsert(&plugin_id, grant.clone());
-        Ok(grant)
-    }
-
-    pub fn active_for(
-        &self,
-        plugin_id: &PluginId,
-        capability: &Capability,
-        session_id: Option<&str>,
-    ) -> bool {
-        is_authorized(&self.list(plugin_id), capability, session_id, now_ms())
-    }
 }
 
 impl GrantStore for InMemoryGrantStore {
-    fn upsert(&self, plugin_id: &PluginId, grant: Grant) {
+    fn upsert(&self, plugin_id: &PluginId, grant: Grant, _authorized: AuthorizedGrant) {
         let key = (
             plugin_id.clone(),
             grant.capability.clone(),
@@ -303,13 +309,16 @@ impl PluginHost {
             }
         }
         let scope = request.scope.clone();
+        let granted_by = request.granted_by.clone();
         let grant = request.into_grant(now_ms()).map_err(HostError::Grant)?;
-        self.inner.grants.upsert(&plugin_id, grant.clone());
+        self.inner
+            .grants
+            .upsert(&plugin_id, grant.clone(), AuthorizedGrant::mint());
         self.record(
             Some(&plugin_id),
             AuditKind::GrantGranted,
             AuditOutcome::Allowed,
-            format!("{capability_text} scope={scope}"),
+            format!("{capability_text} scope={scope} by={granted_by}"),
         );
         Ok(grant)
     }

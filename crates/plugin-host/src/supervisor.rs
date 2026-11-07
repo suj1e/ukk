@@ -24,6 +24,7 @@ use crate::error::HostError;
 use crate::grant::GrantStore;
 use crate::helper::{HelperCommand, HelperError, HelperProcess, ShutdownReport};
 use crate::in_process::InProcessPlugin;
+use crate::redact::redact;
 use crate::state::{
     read, status_of, stop_runtime, write, HostInner, PluginState, PluginStatus, Runtime, Slot,
 };
@@ -65,6 +66,24 @@ impl PluginInstall {
                 detail: format!(
                     "helper program `{}` must be an absolute path",
                     helper.program().display()
+                ),
+            });
+        }
+        // The manifest names the program; the installer supplies its absolute
+        // path. Refuse a mismatch so a manifest cannot describe one helper and
+        // have another executed (file stem drops `.exe` on Windows).
+        let declared = manifest.entrypoint().unwrap_or_default();
+        let actual = helper
+            .program()
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        if actual != declared {
+            return Err(HostError::InvalidHelper {
+                detail: format!(
+                    "helper `{}` does not match manifest entrypoint `{}`",
+                    redact(actual),
+                    declared
                 ),
             });
         }
@@ -230,6 +249,7 @@ impl PluginHost {
                 state: PluginState::Disabled,
                 runtime: None,
                 generation: 0,
+                dropped_audited: std::sync::atomic::AtomicU64::new(0),
             },
         );
         drop(plugins);
@@ -511,7 +531,11 @@ impl PluginHost {
     }
 
     /// Transition to `Failed` only when the runtime that failed is still the
-    /// installed one and the plugin is ready; returns whether it happened.
+    /// installed one and the plugin is ready. Returns whether it happened.
+    ///
+    /// The runtime handle is *taken out of the slot and stopped*, not merely
+    /// dropped: helper reader/writer threads hold an `Arc<HelperProcess>`, so a
+    /// dropped slot reference would leave the child running and untracked.
     pub(crate) fn mark_failed(
         &self,
         plugin_id: &PluginId,
@@ -519,26 +543,31 @@ impl PluginHost {
         kind: AuditKind,
         detail: String,
     ) -> bool {
-        let mut changed = false;
-        {
+        let (changed, taken) = {
             let mut plugins = write(&self.inner.plugins);
-            if let Some(slot) = plugins.get_mut(plugin_id) {
-                let same_runtime = slot
-                    .runtime
-                    .as_ref()
-                    .map(|current| current.same(runtime))
-                    .unwrap_or(false);
-                if same_runtime && slot.state.is_ready() {
-                    slot.generation += 1;
-                    slot.state = PluginState::Failed(detail.clone());
-                    // Dropping the runtime kills the helper.
-                    slot.runtime = None;
-                    changed = true;
+            match plugins.get_mut(plugin_id) {
+                Some(slot) => {
+                    let same_runtime = slot
+                        .runtime
+                        .as_ref()
+                        .map(|current| current.same(runtime))
+                        .unwrap_or(false);
+                    if same_runtime && slot.state.is_ready() {
+                        slot.generation += 1;
+                        slot.state = PluginState::Failed(detail.clone());
+                        (true, slot.runtime.take())
+                    } else {
+                        (false, None)
+                    }
                 }
+                None => (false, None),
             }
-        }
+        };
         if changed {
             self.record(Some(plugin_id), kind, AuditOutcome::Failed, detail);
+            if let Some(runtime) = taken {
+                stop_runtime(runtime);
+            }
         }
         changed
     }
@@ -610,18 +639,24 @@ fn validate_hello(manifest: &ValidatedManifest, hello: &HelloResult) -> Result<(
     if hello.plugin_id != manifest.id().as_str() {
         return Err(format!(
             "helper identified as `{}` but manifest is `{}`",
-            hello.plugin_id,
+            redact(&hello.plugin_id),
             manifest.id()
         ));
     }
     for command in &hello.contributions.commands {
         if manifest.command(command).is_none() {
-            return Err(format!("helper declared undeclared command `{command}`"));
+            return Err(format!(
+                "helper declared undeclared command `{}`",
+                redact(command)
+            ));
         }
     }
     for view in &hello.contributions.views {
         if manifest.view(view).is_none() {
-            return Err(format!("helper declared undeclared view `{view}`"));
+            return Err(format!(
+                "helper declared undeclared view `{}`",
+                redact(view)
+            ));
         }
     }
     Ok(())

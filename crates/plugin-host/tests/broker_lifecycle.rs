@@ -31,7 +31,8 @@ fn sample_plugin_enable_disable_without_host_restart() {
     assert_eq!(status.state, PluginState::Ready);
     assert_eq!(status.command_count, 1);
     assert_eq!(status.view_count, 3);
-    assert!(host.helper_pid(&plugin_id).is_some());
+    let enabled_pid = host.helper_pid(&plugin_id).expect("helper pid");
+    assert_process_alive(enabled_pid, "after enable");
 
     let snapshot = host.session_snapshot(ClientPlatform::Desktop);
     assert_eq!(snapshot.session_actions.len(), 1);
@@ -79,6 +80,7 @@ fn sample_plugin_enable_disable_without_host_restart() {
     let status = host.disable(&plugin_id).expect("disable");
     assert_eq!(status.state, PluginState::Disabled);
     assert!(host.helper_pid(&plugin_id).is_none());
+    assert_process_dead(enabled_pid, "disable");
     assert!(host.session_snapshot(ClientPlatform::Desktop).is_empty());
     let denied = host
         .invoke(InvokeRequest::new(plugin_id.clone(), "sample.session.ping").in_session("s"))
@@ -88,6 +90,9 @@ fn sample_plugin_enable_disable_without_host_restart() {
     // Re-enable in the same host instance: no host restart involved.
     let status = host.enable(&plugin_id).expect("re-enable");
     assert_eq!(status.state, PluginState::Ready);
+    let reenabled_pid = host.helper_pid(&plugin_id).expect("new helper pid");
+    assert_ne!(reenabled_pid, enabled_pid);
+    assert_process_alive(reenabled_pid, "after re-enable");
     let outcome = host
         .invoke(InvokeRequest::new(plugin_id.clone(), "sample.session.ping").in_session("s2"))
         .expect("invoke after re-enable");
@@ -234,9 +239,10 @@ fn uninstall_stops_helper_and_releases_command_ids() {
     host.install(PluginInstall::for_helper(sample_manifest(), sample_helper()).unwrap())
         .unwrap();
     host.enable(&plugin_id).unwrap();
-    assert!(host.helper_pid(&plugin_id).is_some());
+    let pid = host.helper_pid(&plugin_id).expect("helper pid");
 
     host.uninstall(&plugin_id).expect("uninstall");
+    assert_process_dead(pid, "uninstall");
     assert!(host.status(&plugin_id).is_none());
     assert!(host.session_snapshot(ClientPlatform::Desktop).is_empty());
     assert_eq!(host.installed(), Vec::new());
@@ -265,9 +271,12 @@ fn helper_shutdown_is_cooperative_or_killed() {
     .expect("spawn");
     assert!(process.is_alive());
     assert!(process.health().is_ok());
+    let cooperative_pid = process.pid();
+    assert_process_alive(cooperative_pid, "helper running");
     let report = process.shutdown();
     assert!(!report.killed, "cooperative helper must not be killed");
     assert!(!process.is_alive());
+    assert_process_dead(cooperative_pid, "cooperative shutdown");
 
     // A helper that stops reading cannot answer shutdown and is killed.
     let stalled = HelperProcess::spawn(
@@ -287,9 +296,11 @@ fn helper_shutdown_is_cooperative_or_killed() {
         .invoke("sample.session.ping", None, serde_json::Value::Null)
         .unwrap_err();
     assert_eq!(error.code(), "timeout");
+    let stalled_pid = stalled.pid();
     let report = stalled.shutdown();
     assert!(report.killed, "stalled helper must be killed after grace");
     assert!(!stalled.is_alive());
+    assert_process_dead(stalled_pid, "stalled shutdown");
 }
 
 #[test]
