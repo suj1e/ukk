@@ -355,6 +355,7 @@ pub enum LayoutError {
     NotTabGroup,
     TabNotFound,
     InvalidTabOrder,
+    SameTabGroup,
 }
 
 impl fmt::Display for LayoutError {
