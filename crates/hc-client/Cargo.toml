@@ -1,0 +1,9 @@
+[package]
+name = "ukk-hc-client"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "First read-only OpenRPC integration spike for herdr-core"
+
+[dependencies]
+serde_json = "1.0"
