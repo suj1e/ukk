@@ -299,8 +299,8 @@ describes:
 
 **Compatibility status: NOT VERIFIED.** No relay process was started, no WSS
 connection or TLS handshake ran, no alma frame was exchanged, no relay
-credential was issued and no TURN credential was requested. Tests use only the
-in-memory mock below; they are not interoperability evidence.
+credential was issued and no TURN credential was requested. Tests use only the in-memory mock in
+`crates/remote/tests/relay.rs`; they are not interoperability evidence.
 
 ## Crypto and dependency record
 
