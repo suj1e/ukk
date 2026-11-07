@@ -146,6 +146,30 @@ pub(crate) fn retry_delay(attempt: usize) {
     std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
 }
 
+/// Runs one `IMMEDIATE` transaction, retrying only transient lock contention.
+/// The operation commits on `Ok` and rolls back on `Err`; conflict semantics
+/// are unchanged.
+pub(crate) fn with_immediate<T>(
+    conn: &mut Connection,
+    operation: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    let mut attempt = 0;
+    loop {
+        match conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate) {
+            Ok(tx) => {
+                let value = operation(&tx)?;
+                tx.commit()?;
+                return Ok(value);
+            }
+            Err(error) if attempt + 1 < SQLITE_RETRY_ATTEMPTS && is_retryable_sqlite(&error) => {
+                attempt += 1;
+                retry_delay(attempt);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 pub struct Store {
     conn: Connection,
     limits: ukk_protocol::Limits,
