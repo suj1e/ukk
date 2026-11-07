@@ -18,7 +18,7 @@ Architecture-first documentation repository. The code layout is a proposal, not 
 ```text
 apps/desktop/               Rust GPUI app
 apps/ios/                   SwiftUI app
-crates/domain/              stable IDs and data model
+crates/domain/              stable IDs, sessions, Agent binding and pane tree (implemented)
 crates/protocol/            versioned command/event envelopes
 crates/host/                background agent service
 crates/hc-client/           OpenRPC and terminal framing
@@ -26,7 +26,7 @@ crates/agent-adapters/      structured provider events
 crates/plugin-api/          manifest and extension contract
 crates/plugin-host/         supervisor and permission broker
 crates/remote/              pairing and relay transport
-crates/persistence/         SQLite migrations, host metadata
+crates/store/               SQLite migrations, Host metadata (implemented)
 plugins/remote-screen/      privileged Mac screen helper
 docs/                       architecture, product, ADR and roadmap
 ```
@@ -56,3 +56,5 @@ docs/                       architecture, product, ADR and roadmap
 Unit: command validation, entity mapping, grant checks, idempotency. Integration: hc API/event restart; plugin crash; protocol cursor gaps; multi-client read/write. E2E: Mac/iPhone pairing, revoked device, denied screen permissions, local sleep, relay disconnect and TURN fallback.
 
 See [roadmap](ROADMAP.md).
+
+Implemented source and CLI usage: [Workspace Persistence](WORKSPACE_PERSISTENCE.md).
