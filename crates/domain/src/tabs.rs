@@ -144,7 +144,25 @@ impl PaneNode {
             return Err(LayoutError::SameTabGroup);
         }
         self.validate()?;
-        let mut moved: Option<PaneTab> = None;
+        let moved = self.leaves()
+            .into_iter()
+            .find(|(id, _)| *id == tab_id)
+            .and_then(|_| {
+                // Require exact source membership even when tab IDs are valid
+                // somewhere else in this Session.
+                fn find<'a>(node: &'a PaneNode, group: &str) -> Option<&'a [PaneTab]> {
+                    match node {
+                        PaneNode::Tabs { id, tabs } if id == group => Some(tabs),
+                        PaneNode::Split { first, second, .. } =>
+                            find(first, group).or_else(|| find(second, group)),
+                        _ => None,
+                    }
+                }
+                find(self, source_group_id)
+                    .and_then(|tabs| tabs.iter().find(|tab| tab.id == tab_id))
+                    .cloned()
+            })
+            .ok_or(LayoutError::TabNotFound)?;
         let without_source = rewrite_target(self, source_group_id, &|node| {
             let PaneNode::Tabs { id, tabs } = node else {
                 return Err(LayoutError::NotTabGroup);
@@ -175,22 +193,6 @@ impl PaneNode {
             }
         })?
         .ok_or(LayoutError::PaneNotFound)?;
-
-        // Extract from original source (rather than storing mutable state
-        // in the edit closure). This makes operation atomic and retry-safe.
-        fn find_group<'a>(node: &'a PaneNode, id: &str) -> Option<&'a [PaneTab]> {
-            match node {
-                PaneNode::Tabs { id: group_id, tabs } if group_id == id => Some(tabs),
-                PaneNode::Split { first, second, .. } => {
-                    find_group(first, id).or_else(|| find_group(second, id))
-                }
-                _ => None,
-            }
-        }
-        if let Some(group) = find_group(self, source_group_id) {
-            moved = group.iter().find(|tab| tab.id == tab_id).cloned();
-        }
-        let moved = moved.ok_or(LayoutError::TabNotFound)?;
 
         let updated = rewrite_target(&without_source, destination_pane_id, &|node| {
             match node {
