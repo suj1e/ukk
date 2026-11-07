@@ -141,15 +141,21 @@ Automated equivalents (macOS, run locally):
 
 | Claim | macOS | Linux | Windows |
 |---|---|---|---|
-| Source compiles | Yes (`cargo check/test --workspace`, local) | Expected via existing CI matrix | `ukk-host-client` cross-checked for `x86_64-pc-windows-msvc`; full `ukk-host` binary needs the Windows C toolchain (CI) |
-| Framing/JSON/auth/oversize/quota/connection-cap tests | Yes (`crates/host/tests/ipc_hardening.rs`, local) | Same test source; **CI pending** | Unix-only test file; Windows equivalents are `windows_named_pipe.rs` |
-| Socket dir 0700 / socket 0600 | Yes (local test) | Same test source; **CI pending** | N/A (Named Pipe ACL instead) |
-| Peer identity check | `getpeereid` unit tests (local) | `SO_PEERCRED` source; **CI pending** | Server/client SID source; **CI pending** |
-| Stale socket + SIGTERM + restart | Yes (local, real process) | Same test source; **CI pending** | Pipe vanishes with last handle; second-instance test source, **CI pending** |
-| Overlapped read/write deadline + cancellation | N/A | N/A | Unit-test source (`windows_pipe.rs`); **CI pending** |
+| Source compiles | Yes (`cargo test --workspace`, local) | Yes, CI `42391205944` | Yes, CI `42391205944` |
+| Framing/JSON/auth/oversize/quota/connection-cap tests | Yes (`crates/host/tests/ipc_hardening.rs`, local) | Yes, CI `42391205944` | Unix-only test file; Windows equivalents are `windows_named_pipe.rs` |
+| Socket dir 0700 / socket 0600 | Yes (local test) | Yes, CI `42391205944` | N/A (Named Pipe ACL instead) |
+| Peer identity check | `getpeereid` unit tests (local) | `SO_PEERCRED` tests, CI `42391205944` | Server/client SID tests, CI `42391205944` |
+| Stale socket + SIGTERM + restart | Yes (local, real process) | Yes, CI `42391205944` | Pipe vanishes with last handle; second-instance test, CI `42391205944` |
+| Overlapped read/write deadline + cancellation | N/A | N/A | Unit tests (`windows_pipe.rs`) pass in CI `42391205944` |
 | Service template content | Yes (unit tests compile/run on all OS) | Yes (same) | Yes (same) |
 | Real `install`/`uninstall`/`restart` on a machine | **NOT VERIFIED** (commands not executed to avoid registering a real user service during development) | **NOT VERIFIED** | **NOT VERIFIED** |
 | Different-user denial | **NOT VERIFIED** (see runbook) | **NOT VERIFIED** (mode check + peer uid source) | **NOT VERIFIED** (see runbook) |
+
+**Cross-platform CI:** Rust core/Host workflow run `42391205944` passed
+formatting, workspace tests and Clippy on `ubuntu-latest`, `macos-latest` and
+`windows-latest` at commit `a40e3a3` (the code commit preceding the docs-only
+CI evidence update). Real service-manager execution and cross-user denial are
+still not covered.
 
 ## Different-user denial (NOT VERIFIED) — runbook
 
@@ -192,9 +198,9 @@ mode is the primary barrier.
   boundary; the Host must not run as LocalSystem.
 - `install`/`uninstall`/`restart` were not executed against a real service
   manager in this change; template tests and source review only.
-- Windows Named Pipe tests, including the overlapped deadline tests, are
-  committed but must be confirmed in Windows CI before claiming Windows
-  runtime evidence.
+- Windows Named Pipe tests, including the overlapped deadline tests, now pass
+  in Windows CI, but a real Windows machine and different-user denial remain
+  unverified.
 - No mounted remote transport and no TCP listener exists here by design.
 
 ## Related

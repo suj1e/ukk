@@ -34,8 +34,6 @@ use transport::{request, serve};
 use transport::{request_windows, serve_windows};
 use ukk_domain::{PaneContent, SplitAxis};
 use ukk_hc_client::HcClient;
-#[cfg(windows)]
-use ukk_host_client::windows_pipe;
 use ukk_store::Store;
 
 type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;

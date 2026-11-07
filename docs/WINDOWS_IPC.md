@@ -1,9 +1,10 @@
 # Windows local Host IPC — Named Pipe and cross-platform Host lifecycle
 
 > Updated 2026-11-08. Windows is a first-class GPUI Desktop target. Source is
-> committed and `ukk-host-client` is type-checked for
-> `x86_64-pc-windows-msvc`; **Windows CI and real-device validation have not
-> been observed yet**. Do not present this as production-ready authorization.
+> committed and all three OS jobs of Rust core/Host CI run `42391205944`
+> passed at code commit `a40e3a3`. **Real-device validation and cross-user
+> denial have not been observed.** Do not present this as production-ready
+> authorization.
 
 ## Architecture
 
@@ -107,8 +108,8 @@ this local IPC endpoint. No TCP fallback exists.
   user-owned Host, but the Host itself must never run as SYSTEM.
 - `install`/`uninstall`/`restart` have not been run against real service
   managers in this change; only template/source tests exist.
-- Windows CI has not yet been observed running the Windows-only tests on this
-  exact commit. Do not claim Windows runtime evidence before it is linked.
+- Windows CI ran the Windows-only tests successfully at `a40e3a3`, but this is
+  not real-device evidence and does not prove cross-user denial.
 - Agent mutation and screen control must not be enabled on this interface until
   the above risk review and explicit per-device/app permissions exist.
 
@@ -170,10 +171,10 @@ runtime, not evidence of live Agent integration.
 - [x] macOS local evidence: framing/auth/quota/connection limits, permission
       rejection, SIGTERM → stale socket → restart, live-socket refusal, client
       deadline and reply cap (`cargo test -p ukk-host -p ukk-host-client`).
-- [ ] Windows CI builds and runs `cargo test --workspace` and Clippy on this
-      commit (including `windows_named_pipe.rs` and the overlapped deadline
-      unit tests).
-- [ ] Linux CI runs the Unix hardening tests.
+- [x] Windows CI builds and runs `cargo test --workspace` and Clippy
+      (including `windows_named_pipe.rs` and the overlapped deadline unit
+      tests): run `42391205944` at `a40e3a3`.
+- [x] Linux CI runs the Unix hardening tests: run `42391205944` at `a40e3a3`.
 - [ ] Real `install`/`uninstall`/`restart` on macOS, Linux and Windows.
 - [ ] Different-user access denied on all three platforms.
 - [ ] GPUI UI builds and launches on Windows (not just source present).
