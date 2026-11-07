@@ -393,6 +393,18 @@ mod tests {
     }
 
     #[test]
+    fn activation_keys_are_not_registered_as_global_shortcuts() {
+        // GPUI activates focused Button/Tab elements on Enter/Space key-up.
+        // Registering them here would execute an action twice per key press.
+        for binding in bindings() {
+            for keystroke in binding.keystrokes() {
+                assert_ne!(keystroke.inner().key, "enter");
+                assert_ne!(keystroke.inner().key, "space");
+            }
+        }
+    }
+
+    #[test]
     fn shortcut_help_covers_every_shortcut_once() {
         let help = shortcut_help();
         assert_eq!(help.len(), Shortcut::ALL.len());
