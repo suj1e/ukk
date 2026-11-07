@@ -1,6 +1,7 @@
 //! ukk Agent Host entrypoint. OS transports, RPC authorization, workspace
 //! mutations and developer CLI are separate modules.
 mod broker;
+mod build_info;
 mod cli;
 mod lifecycle;
 mod local_auth;

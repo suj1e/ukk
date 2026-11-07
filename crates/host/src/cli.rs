@@ -135,6 +135,10 @@ pub(super) fn execute() -> AppResult<()> {
             let method = env::args().nth(2).unwrap_or_else(|| "host.ping".into());
             request(&method)
         }
+        "version" | "--version" | "-V" => {
+            println!("{}", build_info::version_line());
+            Ok(())
+        }
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -147,6 +151,7 @@ fn print_help() {
     println!(
         r#"ukk-host — Agent runtime is read-only via this local RPC
 Commands:
+  version              Print build version, commit, profile and target
   doctor               Test hc connect + terminal.list
   list                 Print hc terminal snapshot
   schema               Print hc OpenRPC schema
