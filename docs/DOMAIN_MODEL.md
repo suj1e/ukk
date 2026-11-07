@@ -1,5 +1,17 @@
 # Domain model and ownership
 
+## Implementation baseline (Spike 04 · source, not yet runtime-verified)
+
+The initial portable model lives in [`crates/domain/src/lib.rs`](../crates/domain/src/lib.rs), and SQLite persistence in [`crates/store/src/lib.rs`](../crates/store/src/lib.rs).
+
+- Space, Session, AgentRun and SessionLayout have independently generated IDs.
+- AgentRun binds explicitly to `core_id + terminal_address` and optionally a parent AgentRun within the same Session; its existence is not proof the runtime process is online.
+- PaneNode is a validated `Leaf` or `Split` tree with maximum 16 leaves, at most 8 levels, ratio 0.15–0.85 and explicit AgentRun references.
+- Immutable `split_leaf` and `close_leaf` return new layout trees only, without any process action.
+- SQLite persists Space/Session/bindings/layouts with schema v1, foreign keys and revision compare-and-swap.
+- Desktop currently renders session layout topology; drag handles, tabs, live structured panes and provider adapters remain unimplemented.
+- For the full current implementation and commands, see [Workspace Persistence](WORKSPACE_PERSISTENCE.md).
+
 ## Entities
 
 ```mermaid
