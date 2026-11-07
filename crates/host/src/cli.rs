@@ -70,15 +70,23 @@ pub(super) fn execute() -> AppResult<()> {
             Ok(())
         }
         "backup" => {
-            let mut args = env::args().skip(2);
-            let destination = args.next().ok_or("backup <path> [--force]")?;
+            let mut destination = None;
             let mut force = false;
-            for argument in args {
+            for argument in env::args().skip(2) {
                 match argument.as_str() {
                     "--force" => force = true,
-                    other => return Err(format!("unknown backup option: {other}").into()),
+                    other if other.starts_with('-') => {
+                        return Err(format!("unknown backup option: {other}").into())
+                    }
+                    other => {
+                        if destination.is_some() {
+                            return Err("backup takes exactly one destination path".into());
+                        }
+                        destination = Some(other.to_owned());
+                    }
                 }
             }
+            let destination = destination.ok_or("backup <path> [--force]")?;
             let database = ukk_store::default_database_path()?;
             let report = backup_database(&database, Path::new(&destination), force)?;
             println!("Backup written: {}", report.destination.display());
