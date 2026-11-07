@@ -29,7 +29,7 @@ ukk/
 
 GPUI and `gpui_platform` are pinned to Zed commit `b5cd310b3b54dfc659fcc06453e6358843dfe216`, checked on 2026-11-07 against official `hello_world.rs` and `testing.rs` examples. This is a *source/API pin*, not proof that every version combination compiled in ukk. Native GPUI dependencies are kept in a standalone workspace at `apps/desktop`; root `cargo test --workspace` checks the light Rust libraries without fetching a full GPUI graphics toolchain.
 
-## Run on macOS
+## Run on macOS or Linux (current local IPC transport)
 
 Install Rust stable, the macOS CLI developer tools/Xcode as required by GPUI, and herdr-core's `hc`. From repository root:
 
@@ -47,7 +47,7 @@ cargo run -p ukk-host -- request terminal.list
 cargo run --manifest-path apps/desktop/Cargo.toml
 ```
 
-The Desktop and Host use the same `UKK_SOCKET` override or the default `~/.ukk/run/agent-host.sock`. Run `hc ls` and launch test agents via hc before expecting populated agent rows.
+Windows support is a first-class goal but Host IPC is not yet implemented there; see [platform support](PLATFORM_SUPPORT.md). The GPUI code is shared across all three desktop operating systems.\n\nThe Desktop and Host use the same `UKK_SOCKET` override or the default `~/.ukk/run/agent-host.sock`. Run `hc ls` and launch test agents via hc before expecting populated agent rows.
 
 Note that the Host's current socket is created with user-only permissions and **not** a public API; the desktop and Host should run as the same OS user.
 
