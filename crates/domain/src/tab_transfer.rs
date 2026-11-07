@@ -1,7 +1,7 @@
-//! Atomic cross-Pane transfers. This module preserves tab IDs and all
+            PaneNode::Split { .. } => Err(LayoutError::NotTabGroup),//! Atomic cross-Pane transfers. This module preserves tab IDs and all
 //! AgentRun associations without mutating process state or shared tab focus.
 use crate::tabs::{default_title, rewrite_target};
-use crate::{LayoutError, PaneNode, PaneTab, new_id};
+use crate::{new_id, LayoutError, PaneNode, PaneTab};
 
 impl PaneNode {
     /// Move one view from a tab group into another Pane in a single
@@ -67,28 +67,25 @@ impl PaneNode {
         })?
         .ok_or(LayoutError::PaneNotFound)?;
 
-        let updated = rewrite_target(&without_source, destination_pane_id, &|node| {
-            match node {
-                PaneNode::Leaf { id, content } => Ok(PaneNode::Tabs {
-                    id: new_id(),
-                    tabs: vec![
-                        PaneTab {
-                            id: id.clone(),
-                            title: default_title(content).to_owned(),
-                            content: content.clone(),
-                        },
-                        moved.clone(),
-                    ],
-                }),
-                PaneNode::Tabs { id, tabs } => {
-                    let mut tabs = tabs.clone();
-                    tabs.push(moved.clone());
-                    Ok(PaneNode::Tabs {
+        let updated = rewrite_target(&without_source, destination_pane_id, &|node| match node {
+            PaneNode::Leaf { id, content } => Ok(PaneNode::Tabs {
+                id: new_id(),
+                tabs: vec![
+                    PaneTab {
                         id: id.clone(),
-                        tabs,
-                    })
-                }
-                PaneNode::Split { .. } => Err(LayoutError::NotTabGroup),
+                        title: default_title(content).to_owned(),
+                        content: content.clone(),
+                    },
+                    moved.clone(),
+                ],
+            }),
+            PaneNode::Tabs { id, tabs } => {
+                let mut tabs = tabs.clone();
+                tabs.push(moved.clone());
+                Ok(PaneNode::Tabs {
+                    id: id.clone(),
+                    tabs,
+                })
             }
         })?
         .ok_or(LayoutError::PaneNotFound)?;
@@ -113,7 +110,12 @@ mod tests {
         let source_id = source.id().to_owned();
         let moved_id = source.leaves()[1].0.to_owned();
         let tree = source
-            .split_leaf(source.id(), crate::SplitAxis::Horizontal, 0.6, PaneContent::Diff)
+            .split_leaf(
+                source.id(),
+                crate::SplitAxis::Horizontal,
+                0.6,
+                PaneContent::Diff,
+            )
             .unwrap();
         let dest_id = tree.leaves()[2].0.to_owned();
         let new_tree = tree.move_tab(&source_id, &moved_id, &dest_id).unwrap();
@@ -132,7 +134,9 @@ mod tests {
     #[test]
     fn cross_pane_move_appends_to_existing_tabs_and_rejects_bad_targets() {
         let first = PaneNode::leaf(PaneContent::Activity);
-        let source = first.add_tab(first.id(), "Files".into(), PaneContent::Files).unwrap();
+        let source = first
+            .add_tab(first.id(), "Files".into(), PaneContent::Files)
+            .unwrap();
         let source_id = source.id().to_owned();
         let moving_id = source.leaves()[1].0.to_owned();
         let destination = PaneNode::leaf(PaneContent::Diff);
@@ -150,15 +154,25 @@ mod tests {
         let transferred = tree.move_tab(&source_id, &moving_id, &target_id).unwrap();
         assert_eq!(transferred.leaves().len(), 4);
         assert_eq!(transferred.leaves()[3].0, moving_id);
-        assert_eq!(tree.move_tab(&source_id, &moving_id, &source_id).unwrap_err(),
-            LayoutError::SameTabGroup);
-        assert_eq!(tree.move_tab(&source_id, "not-a-tab", &target_id).unwrap_err(),
-            LayoutError::TabNotFound);
-        assert_eq!(tree.move_tab(&source_id, &moving_id, "missing").unwrap_err(),
-            LayoutError::PaneNotFound);
-        assert_eq!(tree, serde_json::from_value::<PaneNode>(
-            serde_json::to_value(&tree).unwrap()
-        ).unwrap());
+        assert_eq!(
+            tree.move_tab(&source_id, &moving_id, &source_id)
+                .unwrap_err(),
+            LayoutError::SameTabGroup
+        );
+        assert_eq!(
+            tree.move_tab(&source_id, "not-a-tab", &target_id)
+                .unwrap_err(),
+            LayoutError::TabNotFound
+        );
+        assert_eq!(
+            tree.move_tab(&source_id, &moving_id, "missing")
+                .unwrap_err(),
+            LayoutError::PaneNotFound
+        );
+        assert_eq!(
+            tree,
+            serde_json::from_value::<PaneNode>(serde_json::to_value(&tree).unwrap()).unwrap()
+        );
     }
 
     #[test]
@@ -168,11 +182,19 @@ mod tests {
             tabs: vec![PaneTab::new("Only".into(), PaneContent::Activity)],
         };
         let split = root
-            .split_leaf(root.id(), crate::SplitAxis::Vertical, 0.5, PaneContent::Files)
+            .split_leaf(
+                root.id(),
+                crate::SplitAxis::Vertical,
+                0.5,
+                PaneContent::Files,
+            )
             .unwrap();
         let dest = split.leaves()[1].0.to_owned();
         let tab_id = root.leaves()[0].0.to_owned();
-        assert_eq!(split.move_tab(root.id(), &tab_id, &dest).unwrap_err(), LayoutError::LastPane);
+        assert_eq!(
+            split.move_tab(root.id(), &tab_id, &dest).unwrap_err(),
+            LayoutError::LastPane
+        );
         assert_eq!(split.leaves().len(), 2);
     }
 }
