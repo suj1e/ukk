@@ -171,26 +171,26 @@ fn execute() -> AppResult<()> {
 }
 
 fn print_help() {
-    println!(
-        "ukk-host (local metadata actions; Agent runtime read-only)\n\
-        Commands:\n\
-          doctor             Test hc connect + terminal.list\n\
-          list               Print hc terminal snapshot\n\
-          schema             Print hc OpenRPC schema\n\
-          watch              Watch hc events/heartbeat/missed notifications\n\
-          workspace-dump    Print persisted Space / Session / Pane layout JSON\n\
-          space-create       Create Space: <title> <project_root>\n\
-          session-create     Create Session: <space_id> <title>\n\
-          session-archive    Archive Session: <session_id> (never stops Agent)\n\
-          agent-bind         Bind existing terminal: <session_id> <core_id> <address> <adapter> [parent_id]\n\
-          pane-split         Split view: <session_id> <pane_id> <axis> <surface> [agent_run_id]\n\
-          pane-close         Close view: <session_id> <pane_id> (never stops Agent)\n\
-          serve              Start local IPC (Unix socket / Windows Named Pipe)\n\
-          request [method]   Query local Host RPC (default host.ping)\n\
-        Host RPC: host.ping, terminal.list, host.snapshot, host.wait, workspace.snapshot,\n\\
-        workspace.session.create, workspace.pane.split/close/resize (local capability only)\n\
-        Environment: UKK_HC_BIN, UKK_DB_PATH; UKK_SOCKET only on macOS/Linux"
-    );
+    println!(r#"ukk-host — Agent runtime is read-only via this local RPC
+Commands:
+  doctor               Test hc connect + terminal.list
+  list                 Print hc terminal snapshot
+  schema               Print hc OpenRPC schema
+  watch                Watch hc event notifications
+  workspace-dump       Dump persisted Space/Session/Pane JSON
+  space-create         <title> <project_root>
+  session-create       <space_id> <title>
+  session-archive      <session_id> (never stops Agent)
+  agent-bind           <session_id> <core_id> <address> <adapter> [parent_id]
+  pane-split           <session_id> <pane_id> <horizontal|vertical> <surface> [agent_run_id]
+  pane-close           <session_id> <pane_id> (never stops Agent)
+  serve                Start private local Unix socket / Named Pipe
+  request [method]     Read local Host RPC (default host.ping)
+Local-only RPC metadata editing:
+  workspace.session.create; workspace.pane.split/close/resize
+  Requires rotated per-Host capability; never enables Agent commands.
+Environment:
+  UKK_HC_BIN, UKK_DB_PATH; UKK_SOCKET on macOS/Linux only"#);
 }
 
 #[cfg(unix)]
