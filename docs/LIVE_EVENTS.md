@@ -41,7 +41,7 @@ sequenceDiagram
 
 ## Local Host API
 
-This is a temporary **local-only smoke-test API** over a private Unix socket. It is **not** the mobile/Relay application protocol.
+This is a temporary **local-only smoke-test API** over a local Unix socket or Windows Named Pipe. It is **not** the mobile/Relay application protocol.
 
 `host.snapshot` has no parameters. `host.wait` accepts:
 
