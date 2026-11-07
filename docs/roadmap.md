@@ -38,7 +38,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** reproduce [main Ubuntu failure](https://github.com/suj1e/ukk/actions/runs/42385779740) at `17fa080` (`watches_snapshot_event_and_missed` EOF error expectation). Distinguish protocol bug from nondeterministic test scheduling or mock process exit. Add a deterministic regression, run repeated tests on Linux, do not simply weaken the assertion. Record the actual cause.
 - **Live matrix:** boot Host + real `hc` on macOS/Windows/Linux where environments are available; open GPUI; create/archive/reopen Session; split/drag/nest panes; reconnect; close window and prove Agent survival. Test dual-window metadata sync and local file permissions. **Where hardware is unavailable, mark NOT VERIFIED** and provide a reproducible runbook.
 - **Exit:** root and Desktop cross-platform jobs green at exact commit; mock protocol deterministic; real-device evidence explicitly separated by OS, with screenshots/logs only where actually captured.
-- **Current (2026-11-08):** the repeated Ubuntu failure was reproduced with a diagnostic assertion and identified as `ETXTBSY`/`ExecutableFileBusy`, **not** a protocol regression. The test wrote a Python mock executable at runtime and parallel test threads could inherit the still-open write descriptor. [PR #14](https://github.com/suj1e/ukk/pull/14) replaces it with a Cargo-built fixture (`CARGO_BIN_EXE_mock_hc`), removes the Python dependency and runs the test on all three OSes. Root CI is green 6/6 on the fix. [PR #15](https://github.com/suj1e/ukk/pull/15) adds a pinned, checksum-verified hc 0.1.18 acceptance job that passed on **macOS, Ubuntu and Windows CI**: two live terminals, `doctor`/`list`, `watch` snapshot + `created`, and terminal survival after the Host viewer stops. Remaining: live GPUI window smoke on each OS (local macOS blocked by a missing Metal Toolchain component) and Host restart socket handling (tracked in H1).
+- **Current (2026-11-08):** the repeated Ubuntu failure was reproduced with a diagnostic assertion and identified as `ETXTBSY`/`ExecutableFileBusy`, **not** a protocol regression. The test wrote a Python mock executable at runtime and parallel test threads could inherit the still-open write descriptor. [PR #14](https://github.com/suj1e/ukk/pull/14) replaces it with a Cargo-built fixture (`CARGO_BIN_EXE_mock_hc`), removes the Python dependency and runs the test on all three OSes. Root CI is green 6/6 on the fix. [PR #15](https://github.com/suj1e/ukk/pull/15) adds a pinned, checksum-verified hc 0.1.18 acceptance job that passed on **macOS, Ubuntu and Windows CI**: two live terminals, `doctor`/`list`, `watch` snapshot + `created`, and terminal survival after the Host viewer stops. Remaining: real mouse/keyboard/screen-reader acceptance and a Windows interactive-desktop check. [PR #22](https://github.com/suj1e/ukk/pull/22) merged a macOS `CGWindowList` + Linux X11 launch smoke that proves a real window is mapped and that Host survives Desktop termination; Host restart socket handling landed in H1.
 
 ### D1 — Finish cross-Pane Tab move (existing PR #12)
 
@@ -54,6 +54,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Edit:** `apps/desktop/src/workspace/{tabs,panes,state,render}.rs`, local settings adapter; use existing Domain CAS only for *shared layout*, never for local focus.
 - **Do:** keyboard tab and Pane traversal, shortcuts for add/close/reorder/move/resize, accessible labels and focus visibility, screen reader/tooltip behavior, focus persistence **per device across restart**, layout recovery from changed remote state, small-window bounds and stale CAS feedback. Support light/dark if relevant to acceptance.
 - **Exit:** keyboard-first flows and focus reconciling tests, explicit macOS/Windows/Linux real-window accessibility checklist; no cross-device focus theft.
+- **Status (2026-11-08):** merged as `8317677` (PR #17) with 39 Desktop tests and three-OS CI. Independent review found a startup focus-wipe blocker plus five majors; all fixed with regression tests. Real-window/screen-reader acceptance remains **NOT VERIFIED**.
 
 ### H1 — Host process lifecycle and local IPC security
 
@@ -62,6 +63,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** user-scoped persistent Host lifecycle for launchd, Windows user process, systemd --user; startup/restart/upgrade logic independent of Desktop windows. Test Windows SID ACL and different-user denial, peer-identity assumptions, pipe hijack/remote rejection, bounded read/write deadlines and cancellation, per-client concurrency/quotas. Secure Unix socket directory/permissions and safe cleanup. No TCP fallback.
 - **Exit:** security tests and denial evidence; offline/reconnect behavior on every desktop OS; clear installation and recovery commands; no Agent kill when Host/Desktop restarts.
 - **Dependency:** coordinates with R1 local mutation permissions; do not widen allowlist implicitly.
+- **Status (2026-11-08):** merged as `e3b112b` (PR #16). Security review fixed a Windows token-rotation ordering regression and stale-socket recovery gaps before merge. SIGTERM→stale→restart verified on macOS with real hc 0.1.18; real service installation and different-user denial remain **NOT VERIFIED**.
 
 ## Wave B — A genuinely useful local Agent Workspace (P0/P1, start contracts in parallel)
 
@@ -80,6 +82,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** capability-detect Codex/Claude-compatible structured turns, messages, tools, progress, artifacts and approvals **only where the provider gives explicit semantics**. Keep raw terminal attachment as a documented fallback. Handle resumed sessions, duplicate IDs, partial streams, redaction, unsupported action types and approval provenance.
 - **Exit:** fixture-driven parse/merge tests; provider/version matrix; one integrated demo wired through R1 with truthful unsupported states.
 - **Dependency:** R1 API/provenance for live integration; fixture-based development independent.
+- **Status (2026-11-08):** crate merged as `5410c9d` (PR #18) after an independent review found and the author fixed four streaming/merge blockers. Fixture/contract tests are green on three OSes; no live provider or Host wiring yet.
 
 ### D3 — Real Session panes: chat, terminal, diff/files/activity
 
@@ -98,6 +101,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** versioned manifest, declared commands/events, narrowly scoped native UI slots (including Session tabs/overlays), user grants, lifecycle, enable/disable, isolated helper supervision, crash containment, audit. Distinguish trusted in-process contributions from untrusted helpers.
 - **Exit:** harmless sample Session action + tab/overlay contribution enabled/disabled without Host restart; permission-denial, forged command and crash tests. No privileged capture plugin before the broker exists.
 - **Dependency:** coordinate future M1 screen plugin and R2 provider adapter surfaces.
+- **Status (2026-11-08):** crates merged as `ef9038c` (PR #20) with the sample Session action/tab/overlay proven in a headless broker and a fixed timed-out-helper containment blocker. Host RPC/GPUI slot wiring, durable grants/audit and OS sandbox remain outstanding; the sample is not yet visible in the Desktop UI.
 
 ### S1 — Remote Host protocol, durable event sync and authorization
 
