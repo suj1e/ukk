@@ -137,14 +137,24 @@ fn serve_one(stream: UnixStream) -> AppResult<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream;
     loop {
-        // Bounded read: do not let a local client allocate unbounded memory.
+        // Bounded line read: cap allocation before the newline arrives.
+        // BufReader makes the single-byte reads cheap in this bootstrap path.
         let mut bytes = Vec::new();
-        let read = reader.by_ref().take((MAX_LINE + 1) as u64).read_until(b'\n', &mut bytes)?;
-        if read == 0 {
-            return Ok(());
-        }
-        if bytes.len() > MAX_LINE || !bytes.ends_with(b"\n") {
-            return Err("Host request too large or not line terminated".into());
+        loop {
+            let mut byte = [0u8; 1];
+            if reader.read(&mut byte)? == 0 {
+                if bytes.is_empty() {
+                    return Ok(());
+                }
+                return Err("Host request not line terminated".into());
+            }
+            bytes.push(byte[0]);
+            if bytes.len() > MAX_LINE {
+                return Err("Host request too large".into());
+            }
+            if byte[0] == b'\n' {
+                break;
+            }
         }
         let input: Value = match serde_json::from_slice(&bytes) {
             Ok(value) => value,
