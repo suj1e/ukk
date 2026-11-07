@@ -18,7 +18,8 @@ ukk/
 
 - Desktop: native toolbar, **Local machine** Space placeholder, terminal/agent sidebar with dynamic parent-child grouping, selected-agent overview/runtime metadata, connection state, refresh button and side inspector.
 - Reads real `terminal.list` response through **ukk Host**, not directly from herdr-core. Uses fields `address`, `name`, `title`, `argv`, `cwd`, `state`, `parent`, `status` from the published hc schema. No fake sessions or fixed Agent roles.
-- The Agent tree is derived from actual hc `parent` links (including orphan/cycle-safe fallback); roles are never preassigned.\n- Input and stream processing stays off the foreground/UI thread. Refresh performs an IPC request through a background executor.
+- The Agent tree is derived from actual hc `parent` links (including orphan/cycle-safe fallback); roles are never preassigned.
+- Input and stream processing stays off the foreground/UI thread. Refresh performs an IPC request through a background executor.
 - Explicit **read-only** interface. No agent launch, approvals, chat or terminal input yet.
 - Displays `Live · status unknown` when hc has no OSC 7501 status rather than inferring `Working` from text.
 - On IPC error, the UI labels Host offline; prior metadata, if retained, must not be mistaken for live status.
