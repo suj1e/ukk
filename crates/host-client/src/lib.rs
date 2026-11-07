@@ -1,0 +1,312 @@
+//! Safe, read-only local IPC adapter for ukk Agent Host.
+//!
+//! The Host's current JSON-RPC Unix socket is a bootstrap interface, not the
+//! versioned remote protocol. Do not expose this socket on a TCP listener.
+//! A connection is opened for every request and is bounded by time and size.
+
+use serde_json::{json, Value};
+use std::env;
+use std::error::Error;
+use std::fmt;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::PathBuf;
+use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+
+const MAX_REPLY_BYTES: usize = 4 * 1024 * 1024;
+const TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Debug)]
+pub enum HostError {
+    Io(std::io::Error),
+    Json(serde_json::Error),
+    Protocol(String),
+    Remote(Value),
+    UnsupportedPlatform,
+}
+
+impl fmt::Display for HostError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "Host I/O error: {error}"),
+            Self::Json(error) => write!(f, "Host JSON error: {error}"),
+            Self::Protocol(error) => write!(f, "Host protocol error: {error}"),
+            Self::Remote(error) => write!(f, "Host RPC error: {error}"),
+            Self::UnsupportedPlatform => write!(f, "local Unix socket is not supported on this platform"),
+        }
+    }
+}
+
+impl Error for HostError {}
+
+impl From<std::io::Error> for HostError {
+    fn from(error: std::io::Error) -> Self { Self::Io(error) }
+}
+
+impl From<serde_json::Error> for HostError {
+    fn from(error: serde_json::Error) -> Self { Self::Json(error) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Terminal {
+    pub address: String,
+    pub name: Option<String>,
+    pub title: String,
+    pub cwd: String,
+    pub argv: Vec<String>,
+    pub lifecycle: String,
+    pub parent: Option<String>,
+    /// Application-reported OSC 7501 state, NOT inferred from terminal text.
+    pub reported_status: Option<String>,
+    pub reported_app: Option<String>,
+}
+
+impl Terminal {
+    pub fn display_name(&self) -> &str {
+        self.name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| (!self.title.is_empty()).then_some(self.title.as_str()))
+            .unwrap_or(&self.address)
+    }
+
+    pub fn state_label(&self) -> &str {
+        if self.lifecycle == "finished" {
+            "Finished"
+        } else {
+            match self.reported_status.as_deref() {
+                Some("working") => "Working",
+                Some("blocked") => "Needs you",
+                Some("idle") => "Idle",
+                Some("done") => "Done",
+                Some("error") => "Error",
+                _ => "Live · status unknown",
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct HostSnapshot {
+    pub terminals: Vec<Terminal>,
+    pub hidden_finished: u64,
+    /// Number of machine records advertised by hc; not interpreted as hosts
+    /// managed by ukk yet.
+    pub machine_count: usize,
+}
+
+impl HostSnapshot {
+    pub fn from_result(result: &Value) -> Result<Self, HostError> {
+        let rows = result
+            .get("terminals")
+            .and_then(Value::as_array)
+            .ok_or_else(|| HostError::Protocol("terminal.list result missing terminals array".into()))?;
+
+        let mut terminals = Vec::with_capacity(rows.len());
+        for row in rows {
+            let address = required_str(row, "address")?.to_owned();
+            let lifecycle = required_str(row, "state")?.to_owned();
+            let status = row.get("status").filter(|status| !status.is_null());
+            let reported_status = status
+                .and_then(|record| record.get("state"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let reported_app = status
+                .and_then(|record| record.get("app"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let argv = row
+                .get("argv")
+                .and_then(Value::as_array)
+                .ok_or_else(|| HostError::Protocol(format!("terminal {address} missing argv array")))?
+                .iter()
+                .map(|entry| entry.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| HostError::Protocol(format!("terminal {address} has invalid argv")))?;
+
+            terminals.push(Terminal {
+                address,
+                name: optional_str(row, "name"),
+                title: optional_str(row, "title").unwrap_or_default(),
+                cwd: required_str(row, "cwd")?.to_owned(),
+                argv,
+                lifecycle,
+                parent: optional_str(row, "parent"),
+                reported_status,
+                reported_app,
+            });
+        }
+
+        Ok(Self {
+            terminals,
+            hidden_finished: result
+                .get("hidden_finished")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            machine_count: result
+                .get("machines")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+        })
+    }
+}
+
+fn optional_str(row: &Value, key: &str) -> Option<String> {
+    row.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn required_str<'a>(row: &'a Value, key: &str) -> Result<&'a str, HostError> {
+    row.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| HostError::Protocol(format!("terminal missing required field: {key}")))
+}
+
+#[derive(Clone, Debug)]
+pub struct HostClient {
+    path: PathBuf,
+}
+
+impl HostClient {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn from_env() -> Self {
+        let path = env::var_os("UKK_SOCKET")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| {
+                PathBuf::from(home).join(".ukk").join("run").join("agent-host.sock")
+            }))
+            .unwrap_or_else(|| PathBuf::from("/nonexistent/ukk/agent-host.sock"));
+        Self::new(path)
+    }
+
+    pub fn socket_path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    pub fn ping(&self) -> Result<bool, HostError> {
+        let value = self.request("host.ping")?;
+        Ok(value.get("status").and_then(Value::as_str) == Some("ok"))
+    }
+
+    pub fn list_terminals(&self) -> Result<HostSnapshot, HostError> {
+        HostSnapshot::from_result(&self.request("terminal.list")?)
+    }
+
+    #[cfg(unix)]
+    fn request(&self, method: &str) -> Result<Value, HostError> {
+        let mut stream = UnixStream::connect(&self.path)?;
+        stream.set_read_timeout(Some(TIMEOUT))?;
+        stream.set_write_timeout(Some(TIMEOUT))?;
+        serde_json::to_writer(
+            &mut stream,
+            &json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}),
+        )?;
+        stream.write_all(b"\n")?;
+        stream.flush()?;
+
+        let mut reader = BufReader::new(stream);
+        let mut bytes = Vec::with_capacity(2048);
+        loop {
+            let mut byte = [0u8; 1];
+            if reader.read(&mut byte)? == 0 {
+                return Err(HostError::Protocol("Host closed before full response".into()));
+            }
+            bytes.push(byte[0]);
+            if bytes.len() > MAX_REPLY_BYTES {
+                return Err(HostError::Protocol("Host reply exceeded size cap".into()));
+            }
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        let response: Value = serde_json::from_slice(&bytes)?;
+        if response.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+            || response.get("id") != Some(&json!(1))
+        {
+            return Err(HostError::Protocol("invalid Host JSON-RPC reply".into()));
+        }
+        if let Some(error) = response.get("error") {
+            return Err(HostError::Remote(error.clone()));
+        }
+        response.get("result").cloned().ok_or_else(|| {
+            HostError::Protocol("Host reply missing result".into())
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn request(&self, _method: &str) -> Result<Value, HostError> {
+        Err(HostError::UnsupportedPlatform)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_result() -> Value {
+        json!({
+            "terminals": [
+                {
+                    "address": "t3",
+                    "name": "codex",
+                    "title": "Codex agent",
+                    "cwd": "/work/project",
+                    "argv": ["codex"],
+                    "state": "live",
+                    "parent": null,
+                    "status": {"app":"codex","state":"working"}
+                },
+                {
+                    "address": "t4",
+                    "name": null,
+                    "title": "Claude Code",
+                    "cwd": "/work/project",
+                    "argv": ["claude"],
+                    "state": "live",
+                    "parent": "t3",
+                    "status": null
+                }
+            ],
+            "hidden_finished": 2,
+            "machines": []
+        })
+    }
+
+    #[test]
+    fn parses_real_hc_schema_fields() {
+        let parsed = HostSnapshot::from_result(&valid_result()).unwrap();
+        assert_eq!(parsed.terminals[0].address, "t3");
+        assert_eq!(parsed.terminals[0].state_label(), "Working");
+        assert_eq!(parsed.terminals[1].state_label(), "Live · status unknown");
+        assert_eq!(parsed.terminals[1].parent.as_deref(), Some("t3"));
+        assert_eq!(parsed.hidden_finished, 2);
+    }
+
+    #[test]
+    fn never_invents_terminal_status() {
+        let mut result = valid_result();
+        result["terminals"][0]["status"] = Value::Null;
+        assert_eq!(
+            HostSnapshot::from_result(&result).unwrap().terminals[0].state_label(),
+            "Live · status unknown"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_snapshot_schema() {
+        let mut result = valid_result();
+        result["terminals"][0].as_object_mut().unwrap().remove("address");
+        assert!(HostSnapshot::from_result(&result).is_err());
+    }
+
+    #[test]
+    fn prefers_explicit_name_to_terminal_title() {
+        let first = &HostSnapshot::from_result(&valid_result()).unwrap().terminals[0];
+        assert_eq!(first.display_name(), "codex");
+    }
+}
