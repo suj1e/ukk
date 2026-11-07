@@ -10,6 +10,7 @@ use gpui::{
 use gpui_platform::application;
 use std::time::Duration;
 use ukk_host_client::{HostClient, HostSnapshot, LiveHostState, Terminal};
+use ukk_domain::{DomainSnapshot, PaneContent, PaneNode, Session, SplitAxis};
 
 const INK: u32 = 0x242730;
 const MUTED: u32 = 0x858b97;
@@ -28,6 +29,8 @@ enum DetailTab {
 struct Workspace {
     snapshot: HostSnapshot,
     selected: Option<String>,
+    selected_session: Option<String>,
+    domain: DomainSnapshot,
     tab: DetailTab,
     loading: bool,
     online: bool,
@@ -41,6 +44,8 @@ impl Workspace {
         let mut view = Self {
             snapshot: HostSnapshot::default(),
             selected: None,
+            selected_session: None,
+            domain: DomainSnapshot::default(),
             tab: DetailTab::Overview,
             loading: false,
             online: false,
@@ -49,6 +54,7 @@ impl Workspace {
             host_revision: 0,
         };
         view.watch_updates(cx);
+        view.refresh(cx);
         view
     }
 
@@ -135,16 +141,37 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { HostClient::from_env().host_snapshot() })
+                .spawn(async move {
+                    let client = HostClient::from_env();
+                    (client.host_snapshot(), client.workspace_snapshot())
+                })
                 .await;
             this.update(cx, |view, cx| {
                 view.loading = false;
-                match result {
+                let (host, domain) = result;
+                match host {
                     Ok(live) => view.apply_host_state(live),
                     Err(error) => {
                         view.online = false;
                         view.message = Some(error.to_string());
                         // Keep last known metadata, but visibly label it stale.
+                    }
+                }
+                match domain {
+                    Ok(domain) => {
+                        if view.selected_session.as_ref().is_some_and(
+                            |id| !domain.sessions.iter().any(|s| &s.id == id)
+                        ) {
+                            view.selected_session = None;
+                        }
+                        if view.selected_session.is_none() && view.selected.is_none() {
+                            view.selected_session = domain.sessions.iter()
+                                .find(|s| !s.archived).map(|s| s.id.clone());
+                        }
+                        view.domain = domain;
+                    }
+                    Err(error) => {
+                        view.message = Some(format!("Workspace storage unavailable: {error}"));
                     }
                 }
                 cx.notify();
@@ -231,6 +258,132 @@ impl Workspace {
             )
     }
 
+    fn session_row(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.selected_session.as_deref() == Some(session.id.as_str());
+        let id = session.id.clone();
+        let title = session.title.clone();
+        div()
+            .id(format!("session-{id}"))
+            .px_3()
+            .py_2()
+            .rounded_lg()
+            .cursor_pointer()
+            .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
+            .hover(|style| style.bg(rgb(SURFACE)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.selected_session = Some(id.clone());
+                this.selected = None;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(if session.archived { MUTED } else { INK }))
+                    .child(title),
+            )
+    }
+
+    fn session_pane(&self, node: &PaneNode) -> gpui::AnyElement {
+        match node {
+            PaneNode::Leaf { id, content } => {
+                let (heading, description) = match content {
+                    PaneContent::Activity => (
+                        "Activity".to_string(),
+                        "No structured activity events have been connected yet.".to_string(),
+                    ),
+                    PaneContent::Files => (
+                        "Files".to_string(),
+                        "Project file browser is not connected yet.".to_string(),
+                    ),
+                    PaneContent::Diff => (
+                        "Diff".to_string(),
+                        "Git diff integration is the next stage.".to_string(),
+                    ),
+                    PaneContent::Agent { agent_run_id } => {
+                        let binding = self.domain.agent_runs.iter().find(|a| &a.id == agent_run_id);
+                        match binding {
+                            Some(run) => (
+                                format!("Agent · {}", run.adapter),
+                                format!("Bound to {} / {}. Runtime remains in herdr-core.",
+                                    run.core_id, run.terminal_address),
+                            ),
+                            None => ("Unresolved Agent pane".into(), "Binding not found in this Session.".into()),
+                        }
+                    }
+                    PaneContent::Terminal { agent_run_id } => {
+                        let binding = self.domain.agent_runs.iter().find(|a| &a.id == agent_run_id);
+                        match binding {
+                            Some(run) => (
+                                "Terminal".into(),
+                                format!("{} · PTY attachment not implemented yet.", run.terminal_address),
+                            ),
+                            None => ("Unresolved Terminal pane".into(), "Binding not found.".into()),
+                        }
+                    }
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .p_4()
+                    .bg(rgb(WHITE))
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(LINE))
+                    .child(div().text_sm().font_semibold().text_color(rgb(INK)).child(heading))
+                    .child(div().mt_2().text_xs().text_color(rgb(MUTED)).child(description))
+                    .child(div().mt_4().text_xs().text_color(rgb(MUTED)).child(format!("Pane: {id}")))
+                    .into_any_element()
+            }
+            PaneNode::Split { axis, first, second, .. } => {
+                let base = div().flex().flex_1().min_w_0().min_h_0().gap_3();
+                let base = if *axis == SplitAxis::Vertical {
+                    base.flex_col()
+                } else {
+                    base.flex_row()
+                };
+                base.child(self.session_pane(first))
+                    .child(self.session_pane(second))
+                    .into_any_element()
+            }
+        }
+    }
+
+    fn session_detail(&self, session: &Session) -> impl IntoElement {
+        let root = self.domain.layouts.iter()
+            .find(|layout| layout.session_id == session.id)
+            .map(|layout| &layout.root);
+        let title = session.title.clone();
+        let scope = self.domain.spaces.iter()
+            .find(|space| space.id == session.space_id)
+            .map(|space| space.title.clone())
+            .unwrap_or_else(|| "Unknown Space".to_owned());
+        let status = if session.archived { "ARCHIVED" } else { "ACTIVE" };
+        let mut view = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .bg(rgb(BG))
+            .child(
+                div().px_6().pt_6().pb_4()
+                    .child(div().text_xs().text_color(rgb(MUTED))
+                        .child(format!("{scope}  /  SESSION  /  {status}")))
+                    .child(div().mt_2().text_2xl().font_semibold().text_color(rgb(INK)).child(title))
+                    .child(div().mt_2().text_sm().text_color(rgb(MUTED))
+                        .child("Pane layout is restored from SQLite; no view owns an Agent process.")),
+            );
+        if let Some(root) = root {
+            view = view.child(div().flex().flex_1().min_h_0().p_5().child(self.session_pane(root)));
+        } else {
+            view = view.child(div().p_6().text_color(rgb(MUTED)).child("Session layout unavailable"));
+        }
+        view
+    }
+
     fn terminal_row(&self, terminal: &Terminal, depth: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.selected.as_deref() == Some(terminal.address.as_str());
         let address = terminal.address.clone();
@@ -259,6 +412,7 @@ impl Workspace {
             .hover(|style| style.bg(rgb(if active { 0xe9ebf7 } else { SURFACE })))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.selected = Some(address.clone());
+                this.selected_session = None;
                 this.tab = DetailTab::Overview;
                 cx.notify();
             }))
@@ -303,6 +457,8 @@ impl Workspace {
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entries: Vec<(Terminal, usize)> = self.snapshot.hierarchy().into_iter().map(|(t, depth)| (t.clone(), depth)).collect();
+        let sessions = self.domain.sessions.clone();
+        let spaces = self.domain.spaces.clone();
         div()
             .flex()
             .flex_col()
@@ -341,6 +497,19 @@ impl Workspace {
                             .child("Local machine"),
                     ),
             )
+            .child(
+                div().mt_4().text_xs().font_semibold().text_color(rgb(MUTED))
+                    .child("PROJECT SPACES"),
+            )
+            .children(spaces.into_iter().map(|space| {
+                div().px_3().py_2().text_sm().text_color(rgb(INK))
+                    .child(space.title)
+            }))
+            .child(
+                div().mt_5().mb_2().text_xs().font_semibold().text_color(rgb(MUTED))
+                    .child("SESSIONS"),
+            )
+            .children(sessions.iter().map(|session| self.session_row(session, cx)))
             .child(
                 div()
                     .flex()
@@ -410,7 +579,12 @@ impl Workspace {
             .child(label)
     }
 
-    fn detail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn detail(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if let Some(id) = self.selected_session.as_deref() {
+            if let Some(session) = self.domain.sessions.iter().find(|session| session.id == id) {
+                return self.session_detail(session).into_any_element();
+            }
+        }
         let selected = self.selected_terminal().cloned();
         let title = selected.as_ref().map(|t| t.display_name()).unwrap_or("No agents running").to_string();
 
@@ -481,7 +655,7 @@ impl Workspace {
             );
         }
 
-        body
+        body.into_any_element()
     }
 
     fn terminal_detail(&self, term: &Terminal) -> impl IntoElement {
