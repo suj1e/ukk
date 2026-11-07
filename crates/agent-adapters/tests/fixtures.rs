@@ -438,6 +438,39 @@ fn claude_fixture_parses_and_merges_turn() {
 }
 
 #[test]
+fn claude_resume_preserves_history() {
+    let mut adapter = claude_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::ClaudeStreamJson, Limits::default());
+    run_fixture(
+        adapter.as_mut(),
+        &mut merge,
+        "claude-initial",
+        fixtures::CLAUDE_STREAM_JSON_TURN,
+    );
+    let message_count = merge.session().messages.len();
+    assert!(message_count >= 1);
+
+    let mut resumed = claude_adapter(
+        AdapterConfig::default().with_resume_session(SessionId::from("sess_fixture")),
+    );
+    let outcomes = run_fixture(
+        resumed.as_mut(),
+        &mut merge,
+        "claude-resumed",
+        fixtures::CLAUDE_STREAM_JSON_TURN,
+    );
+
+    assert!(matches!(
+        outcomes[0].events[0].payload,
+        EventPayload::SessionResumed { .. }
+    ));
+    let session = merge.session();
+    assert!(session.resumed);
+    assert_eq!(session.messages.len(), message_count);
+    assert_eq!(session.messages["msg_1"].text(), "I will check the tests.");
+}
+
+#[test]
 fn claude_partial_stream_is_replaced_by_the_authoritative_message() {
     let mut adapter = claude_adapter(AdapterConfig::default());
     let mut merge = MergeEngine::new(ProviderKind::ClaudeStreamJson, Limits::default());
