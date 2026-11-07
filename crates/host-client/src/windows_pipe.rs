@@ -21,15 +21,13 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER, SECURITY_ATTRIBUTES};
+use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE,
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-/// Windows FILE_FLAG_FIRST_PIPE_INSTANCE from winbase.h. A malicious or stale
-/// server must not be silently treated as ukk's first instance.
-const FIRST_INSTANCE_FLAG: u32 = 0x0008_0000;
 /// SECURITY_IDENTIFICATION: the server may identify, but not impersonate,
 /// the local client during pipe opening.
 const SECURITY_IDENTIFICATION: u32 = 0x0001_0000;
@@ -161,7 +159,7 @@ pub fn create_server_pipe(name: &str, first_instance: bool) -> io::Result<File> 
     };
     let mut flags = PIPE_ACCESS_DUPLEX;
     if first_instance {
-        flags |= FIRST_INSTANCE_FLAG;
+        flags |= FILE_FLAG_FIRST_PIPE_INSTANCE;
     }
     let name = wide(name);
     // SAFETY: all pointers refer to live stack/heap objects during call.
