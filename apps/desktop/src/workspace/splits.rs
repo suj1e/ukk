@@ -57,88 +57,88 @@ impl Workspace {
         second: &PaneNode,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-                let shown_ratio = self.displayed_split_ratio(id, ratio);
-                let smaller = (shown_ratio - 0.1).max(0.15);
-                let larger = (shown_ratio + 0.1).min(0.85);
-                let controls = div()
-                    .flex()
-                    .justify_end()
-                    .items_center()
-                    .gap_2()
-                    .mb_2()
-                    .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                        "{}% / {}%",
-                        (shown_ratio * 100.0).round() as i32,
-                        ((1.0 - shown_ratio) * 100.0).round() as i32
-                    )))
-                    .child(self.pane_button(
-                        cx,
-                        format!("{id}-smaller"),
-                        "−",
-                        PaneAction::Resize {
-                            split_id: id.to_owned(),
-                            ratio: smaller,
-                        },
-                    ))
-                    .child(self.pane_button(
-                        cx,
-                        format!("{id}-larger"),
-                        "+",
-                        PaneAction::Resize {
-                            split_id: id.to_owned(),
-                            ratio: larger,
-                        },
-                    ));
-                let first_view = div()
-                    .flex()
-                    .flex_shrink_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .flex_basis(gpui::DefiniteLength::Fraction(shown_ratio))
-                    .child(self.session_pane(first, cx));
-                let second_view = div()
-                    .flex()
-                    .flex_shrink_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .flex_basis(gpui::DefiniteLength::Fraction(1.0 - shown_ratio))
-                    .child(self.session_pane(second, cx));
-                let split_id_for_move = id.to_owned();
-                let split_id_for_drop = id.to_owned();
-                let split_axis = axis;
-                let columns = div()
-                    .id(format!("split-content-{id}"))
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .gap_1()
-                    .on_drag_move::<DraggedSplitHandle>(cx.listener(
-                        move |this, event: &gpui::DragMoveEvent<DraggedSplitHandle>, _, cx| {
-                            this.preview_split_drag(&split_id_for_move, split_axis, event, cx);
-                        },
-                    ))
-                    .on_drop::<DraggedSplitHandle>(cx.listener(
-                        move |this, payload: &DraggedSplitHandle, _, cx| {
-                            if payload.split_id == split_id_for_drop {
-                                this.finish_split_drag(&split_id_for_drop, cx);
-                            }
-                        },
-                    ));
-                let columns = if axis == SplitAxis::Vertical {
-                    columns.flex_col()
-                } else {
-                    columns.flex_row()
-                };
-                let handle = self.split_resize_handle(id, axis, cx);
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .child(controls)
-                    .child(columns.child(first_view).child(handle).child(second_view))
-                    .into_any_element()
+        let shown_ratio = self.displayed_split_ratio(id, ratio);
+        let smaller = (shown_ratio - 0.1).max(0.15);
+        let larger = (shown_ratio + 0.1).min(0.85);
+        let controls = div()
+            .flex()
+            .justify_end()
+            .items_center()
+            .gap_2()
+            .mb_2()
+            .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                "{}% / {}%",
+                (shown_ratio * 100.0).round() as i32,
+                ((1.0 - shown_ratio) * 100.0).round() as i32
+            )))
+            .child(self.pane_button(
+                cx,
+                format!("{id}-smaller"),
+                "−",
+                PaneAction::Resize {
+                    split_id: id.to_owned(),
+                    ratio: smaller,
+                },
+            ))
+            .child(self.pane_button(
+                cx,
+                format!("{id}-larger"),
+                "+",
+                PaneAction::Resize {
+                    split_id: id.to_owned(),
+                    ratio: larger,
+                },
+            ));
+        let first_view = div()
+            .flex()
+            .flex_shrink_1()
+            .min_w_0()
+            .min_h_0()
+            .flex_basis(gpui::DefiniteLength::Fraction(shown_ratio))
+            .child(self.session_pane(first, cx));
+        let second_view = div()
+            .flex()
+            .flex_shrink_1()
+            .min_w_0()
+            .min_h_0()
+            .flex_basis(gpui::DefiniteLength::Fraction(1.0 - shown_ratio))
+            .child(self.session_pane(second, cx));
+        let split_id_for_move = id.to_owned();
+        let split_id_for_drop = id.to_owned();
+        let split_axis = axis;
+        let columns = div()
+            .id(format!("split-content-{id}"))
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .gap_1()
+            .on_drag_move::<DraggedSplitHandle>(cx.listener(
+                move |this, event: &gpui::DragMoveEvent<DraggedSplitHandle>, _, cx| {
+                    this.preview_split_drag(&split_id_for_move, split_axis, event, cx);
+                },
+            ))
+            .on_drop::<DraggedSplitHandle>(cx.listener(
+                move |this, payload: &DraggedSplitHandle, _, cx| {
+                    if payload.split_id == split_id_for_drop {
+                        this.finish_split_drag(&split_id_for_drop, cx);
+                    }
+                },
+            ));
+        let columns = if axis == SplitAxis::Vertical {
+            columns.flex_col()
+        } else {
+            columns.flex_row()
+        };
+        let handle = self.split_resize_handle(id, axis, cx);
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(controls)
+            .child(columns.child(first_view).child(handle).child(second_view))
+            .into_any_element()
     }
 }
