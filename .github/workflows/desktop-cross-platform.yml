@@ -6,6 +6,8 @@ on:
     paths:
       - 'apps/desktop/**'
       - 'crates/host-client/**'
+      - 'crates/domain/**'
+      - 'crates/store/**'
       - '.github/workflows/desktop-cross-platform.yml'
   pull_request:
     paths:
