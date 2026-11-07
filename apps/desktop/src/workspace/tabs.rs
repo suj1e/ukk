@@ -14,9 +14,13 @@ pub(super) fn find_tab_group<'a>(node: &'a PaneNode, group_id: &str) -> Option<&
 
 impl Workspace {
     fn selected_tab_id<'a>(&self, group_id: &str, tabs: &'a [PaneTab]) -> &'a str {
-        let key = (self.selected_session.as_deref().unwrap_or("").to_owned(), group_id.to_owned());
+        let key = (
+            self.selected_session.as_deref().unwrap_or("").to_owned(),
+            group_id.to_owned(),
+        );
         let focused = self.tab_focus.get(&key).map(String::as_str);
-        tabs.iter().find(|tab| Some(tab.id.as_str()) == focused)
+        tabs.iter()
+            .find(|tab| Some(tab.id.as_str()) == focused)
             .or_else(|| tabs.first())
             .map(|tab| tab.id.as_str())
             .unwrap_or("")
@@ -63,10 +67,8 @@ impl Workspace {
                         // Do not let an old click from a different Session
                         // steal focus after switching Workspace context.
                         if this.selected_session.as_deref() == Some(&session) {
-                            this.tab_focus.insert(
-                                (session.clone(), group.clone()),
-                                tab_id.clone(),
-                            );
+                            this.tab_focus
+                                .insert((session.clone(), group.clone()), tab_id.clone());
                             cx.notify();
                         }
                     }))
@@ -79,7 +81,9 @@ impl Workspace {
             .gap_1()
             .when(active_index > 0, |row| {
                 row.child(self.pane_button(
-                    cx, format!("{group_id}-tab-left"), "←",
+                    cx,
+                    format!("{group_id}-tab-left"),
+                    "←",
                     PaneAction::TabReorder {
                         group_id: group_id_owned.clone(),
                         tab_id: active_id.clone(),
@@ -89,7 +93,9 @@ impl Workspace {
             })
             .when(active_index + 1 < tabs.len(), |row| {
                 row.child(self.pane_button(
-                    cx, format!("{group_id}-tab-right"), "→",
+                    cx,
+                    format!("{group_id}-tab-right"),
+                    "→",
                     PaneAction::TabReorder {
                         group_id: group_id_owned.clone(),
                         tab_id: active_id.clone(),
@@ -98,14 +104,18 @@ impl Workspace {
                 ))
             })
             .child(self.pane_button(
-                cx, format!("{group_id}-tab-close"), "Close tab",
+                cx,
+                format!("{group_id}-tab-close"),
+                "Close tab",
                 PaneAction::TabClose {
                     group_id: group_id_owned.clone(),
                     tab_id: active_id.clone(),
                 },
             ))
             .child(self.pane_button(
-                cx, format!("{group_id}-tab-add-files"), "+ Files",
+                cx,
+                format!("{group_id}-tab-add-files"),
+                "+ Files",
                 PaneAction::TabAdd {
                     pane_id: group_id_owned.clone(),
                     title: "Files".into(),
@@ -113,7 +123,9 @@ impl Workspace {
                 },
             ))
             .child(self.pane_button(
-                cx, format!("{group_id}-tab-add-diff"), "+ Diff",
+                cx,
+                format!("{group_id}-tab-add-diff"),
+                "+ Diff",
                 PaneAction::TabAdd {
                     pane_id: group_id_owned.clone(),
                     title: "Diff".into(),
@@ -157,9 +169,13 @@ mod tests {
     #[test]
     fn nested_tab_lookup_ignores_unrelated_split_branches() {
         let root = PaneNode::leaf(PaneContent::Activity);
-        let tabs = root.add_tab(root.id(), "Files".into(), PaneContent::Files).unwrap();
+        let tabs = root
+            .add_tab(root.id(), "Files".into(), PaneContent::Files)
+            .unwrap();
         let group_id = tabs.id().to_owned();
-        let split = tabs.split_leaf(tabs.id(), SplitAxis::Vertical, 0.5, PaneContent::Diff).unwrap();
+        let split = tabs
+            .split_leaf(tabs.id(), SplitAxis::Vertical, 0.5, PaneContent::Diff)
+            .unwrap();
         assert_eq!(find_tab_group(&split, &group_id).unwrap().len(), 2);
         assert!(find_tab_group(&split, "missing").is_none());
     }
