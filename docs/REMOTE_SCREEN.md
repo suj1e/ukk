@@ -99,7 +99,8 @@ Proven by code and tests (build/test evidence in CI; real capture excluded):
   write behaviour are unit-tested;
 - ScreenCaptureKit permission and error codes map to explicit exit states;
 - the capture path is real ScreenCaptureKit (`SCScreenshotManager`), not a stub;
-- no audio path and no persistent frame storage exist in the helper.
+- no audio path and no frame storage beyond the requested owner-only PNG exist
+  in the helper.
 
 **Not implemented and not claimed:**
 
