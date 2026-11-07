@@ -17,6 +17,8 @@ use std::sync::Arc;
 use ukk_host_client::windows_pipe;
 
 use ukk_hc_client::HcClient;
+use ukk_domain::{PaneContent, SplitAxis};
+use ukk_store::Store;
 
 #[cfg(unix)]
 use std::os::unix::{
@@ -63,6 +65,85 @@ fn execute() -> AppResult<()> {
                 Ok(())
             })
             .map_err(Into::into),
+        "workspace-dump" => {
+            let snapshot = Store::open_default()?.snapshot()?;
+            println!("{}", serde_json::to_string_pretty(&snapshot)?);
+            Ok(())
+        }
+        "space-create" => {
+            let mut args = env::args().skip(2);
+            let title = args.next().ok_or("space-create <title> <project_root>")?;
+            let root = args.next().ok_or("space-create <title> <project_root>")?;
+            let space = Store::open_default()?.create_space(&title, &root)?;
+            println!("{}", serde_json::to_string_pretty(&space)?);
+            Ok(())
+        }
+        "session-create" => {
+            let mut args = env::args().skip(2);
+            let space_id = args.next().ok_or("session-create <space_id> <title>")?;
+            let title = args.next().ok_or("session-create <space_id> <title>")?;
+            let session = Store::open_default()?.create_session(&space_id, &title)?;
+            println!("{}", serde_json::to_string_pretty(&session)?);
+            Ok(())
+        }
+        "session-archive" => {
+            let id = env::args().nth(2).ok_or("session-archive <session_id>")?;
+            Store::open_default()?.archive_session(&id)?;
+            println!("Session archived; all herdr-core agents continue running.");
+            Ok(())
+        }
+        "agent-bind" => {
+            let mut args = env::args().skip(2);
+            let session_id = args.next().ok_or("agent-bind <session_id> <core_id> <terminal_address> <adapter> [parent_run_id]")?;
+            let core_id = args.next().ok_or("missing herdr-core identity")?;
+            let address = args.next().ok_or("missing hc terminal address")?;
+            let adapter = args.next().ok_or("missing agent adapter")?;
+            let parent_id = args.next();
+            let run = Store::open_default()?.bind_agent(
+                &session_id, &core_id, &address, &adapter, parent_id.as_deref(),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&run)?);
+            Ok(())
+        }
+        "pane-split" => {
+            let mut args = env::args().skip(2);
+            let session_id = args.next().ok_or("pane-split <session_id> <pane_id> <horizontal|vertical> <activity|files|diff|agent|terminal> [agent_run_id]")?;
+            let pane_id = args.next().ok_or("missing pane_id")?;
+            let axis = match args.next().as_deref() {
+                Some("horizontal") => SplitAxis::Horizontal,
+                Some("vertical") => SplitAxis::Vertical,
+                _ => return Err("axis must be horizontal or vertical".into()),
+            };
+            let content = match args.next().as_deref() {
+                Some("activity") => PaneContent::Activity,
+                Some("files") => PaneContent::Files,
+                Some("diff") => PaneContent::Diff,
+                Some("agent") => PaneContent::Agent {
+                    agent_run_id: args.next().ok_or("agent pane requires agent_run_id")?,
+                },
+                Some("terminal") => PaneContent::Terminal {
+                    agent_run_id: args.next().ok_or("terminal pane requires agent_run_id")?,
+                },
+                _ => return Err("unknown pane surface".into()),
+            };
+            let mut store = Store::open_default()?;
+            let layout = store.get_layout(&session_id)?;
+            let root = layout.root.split_leaf(&pane_id, axis, 0.5, content)?;
+            let updated = store.set_layout(&session_id, layout.revision, root)?;
+            println!("{}", serde_json::to_string_pretty(&updated)?);
+            Ok(())
+        }
+        "pane-close" => {
+            let mut args = env::args().skip(2);
+            let session_id = args.next().ok_or("pane-close <session_id> <pane_id>")?;
+            let pane_id = args.next().ok_or("missing pane_id")?;
+            let mut store = Store::open_default()?;
+            let layout = store.get_layout(&session_id)?;
+            let root = layout.root.close_leaf(&pane_id)?;
+            let updated = store.set_layout(&session_id, layout.revision, root)?;
+            println!("{}", serde_json::to_string_pretty(&updated)?);
+            Ok(())
+        }
         #[cfg(unix)]
         "serve" => serve(),
         #[cfg(windows)]
@@ -93,10 +174,17 @@ fn print_help() {
           list               Print hc terminal snapshot\n\
           schema             Print hc OpenRPC schema\n\
           watch              Watch hc events/heartbeat/missed notifications\n\
+          workspace-dump    Print persisted Space / Session / Pane layout JSON\n\
+          space-create       Create Space: <title> <project_root>\n\
+          session-create     Create Session: <space_id> <title>\n\
+          session-archive    Archive Session: <session_id> (never stops Agent)\n\
+          agent-bind         Bind existing terminal: <session_id> <core_id> <address> <adapter> [parent_id]\n\
+          pane-split         Split view: <session_id> <pane_id> <axis> <surface> [agent_run_id]\n\
+          pane-close         Close view: <session_id> <pane_id> (never stops Agent)\n\
           serve              Start local IPC (Unix socket / Windows Named Pipe)\n\
           request [method]   Query local Host RPC (default host.ping)\n\
         Supported Host RPC methods: host.ping, terminal.list, host.snapshot, host.wait\n\
-        Environment: UKK_HC_BIN; UKK_SOCKET applies to macOS/Linux only"
+        Environment: UKK_HC_BIN, UKK_DB_PATH; UKK_SOCKET only on macOS/Linux"
     );
 }
 
@@ -130,7 +218,7 @@ fn serve() -> AppResult<()> {
     let broker = Broker::new();
     broker.start();
     println!("ukk Host listening on {}", path.display());
-    println!("Read-only methods: host.ping, terminal.list, host.snapshot, host.wait");
+    println!("Read-only methods: host.ping, terminal.list, host.snapshot, host.wait, workspace.snapshot");
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
@@ -224,6 +312,13 @@ fn handle_request(req: &Value, broker: &Broker) -> Value {
             "jsonrpc":"2.0","id":id,
             "result":{"status":"ok","protocol":"ukk-local-spike-1","read_only":true}
         }),
+        "workspace.snapshot" => {
+            match Store::open_default().and_then(|store| store.snapshot()) {
+                Ok(snapshot) => json!({"jsonrpc":"2.0","id":id,"result":snapshot}),
+                Err(error) => json!({"jsonrpc":"2.0","id":id,
+                    "error":{"code":-32011,"message":error.to_string()}}),
+            }
+        },
         "host.snapshot" => json!({"jsonrpc":"2.0","id":id,"result":broker.snapshot()}),
         "host.wait" => {
             let params = req.get("params");
