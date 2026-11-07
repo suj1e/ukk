@@ -165,18 +165,27 @@ fn apply_notification(state: &mut State, notification: &Value) -> Result<bool, S
             Ok(true)
         }
         "heartbeat" => {
-            // No content revision: heartbeats only confirm stream liveness.
+            // An advanced heartbeat without matching events means we missed
+            // state changes; a regressed seq can indicate core restart.
+            if state.hc_seq != Some(seq) {
+                return Err("hc heartbeat sequence mismatch; resubscribe".into());
+            }
             Ok(false)
         }
         "event" => {
             let last = state.hc_seq.ok_or("event before snapshot")?;
-            if seq <= last {
-                return Ok(false); // already applied / replayed
+            if seq == last {
+                return Ok(false); // exact duplicate on the same stream
             }
             if seq != last.saturating_add(1) {
-                return Err(format!("hc event gap: expected {}, received {seq}", last + 1));
+                return Err(format!("hc sequence mismatch: expected {}, received {seq}", last.saturating_add(1)));
             }
             let event_kind = params.get("type").and_then(Value::as_str).ok_or("missing event type")?;
+            if event_kind == "doc" {
+                // Document events do not necessarily identify a terminal.
+                state.hc_seq = Some(seq);
+                return Ok(false);
+            }
             let address = params.get("terminal").and_then(Value::as_str).ok_or("missing terminal address")?;
             let data = params.get("data").unwrap_or(&Value::Null);
             let changed = apply_terminal_delta(&mut state.terminals, event_kind, address, data)?;
@@ -309,6 +318,34 @@ mod tests {
         assert!(error.contains("gap"));
         assert_eq!(broker.snapshot()["terminals"].as_array().unwrap().len(), 1);
         assert_eq!(broker.snapshot()["hc_seq"], 10);
+    }
+
+    #[test]
+    fn heartbeat_gap_forces_resubscribe() {
+        let broker = Broker::new();
+        broker.apply(&snapshot(5)).unwrap();
+        let message = json!({"kind":"notification","data":{
+            "method":"heartbeat","params":{"seq":7}}});
+        assert!(broker.apply(&message).unwrap_err().contains("mismatch"));
+    }
+
+    #[test]
+    fn document_event_without_terminal_advances_cursor_safely() {
+        let broker = Broker::new();
+        broker.apply(&snapshot(5)).unwrap();
+        let message = json!({"kind":"notification","data":{
+            "method":"event","params":{"seq":6,"type":"doc","data":{}}}});
+        broker.apply(&message).unwrap();
+        assert_eq!(broker.snapshot()["hc_seq"], 6);
+        assert_eq!(broker.snapshot()["revision"], 1);
+    }
+
+    #[test]
+    fn regressed_event_sequence_forces_new_snapshot() {
+        let broker = Broker::new();
+        broker.apply(&snapshot(100)).unwrap();
+        let problem = broker.apply(&event(2, "removed", "t3", json!({})));
+        assert!(problem.unwrap_err().contains("mismatch"));
     }
 
     #[test]
