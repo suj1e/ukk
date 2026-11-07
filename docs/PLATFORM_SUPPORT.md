@@ -4,7 +4,7 @@
 
 ## Product decisions
 
-**One Rust + GPUI Desktop codebase** targets macOS, Windows and Linux equally. Platform-specific code is isolated behind interfaces, not forked UIs. Native SwiftUI is used for iOS/iPadOS; Android will use Jetpack Compose. Web/TUI can reuse the application protocol without sharing GPUI presentation code.
+**One Rust + GPUI Desktop codebase** targets macOS, Windows and Linux equally. Platform-specific code is isolated behind interfaces, not forked UIs. Native SwiftUI is used for iOS/iPadOS in the active delivery track. Android/Jetpack Compose and Web/TUI are deferred client candidates, with no current implementation tasks; the architecture keeps their eventual protocol access possible.
 
 herdr-core itself supports macOS/Linux and Windows. `hc connect` exposes the same JSON-RPC text protocol across platforms; Unix uses local sockets under the hood and Windows uses named pipes. https://github.com/herdrdev/herdr-core/blob/master/schema/README.md
 
