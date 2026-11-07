@@ -38,9 +38,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-/// Current ukk workspace schema. Kept here so this module does not need to
-/// edit `schema.rs`; `schema_version_matches_migrated_store` guards drift.
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+/// Current ukk workspace schema. Re-exported from the migration source so
+/// backup, restore and diagnostics cannot drift from `schema::SCHEMA_VERSION`.
+pub const CURRENT_SCHEMA_VERSION: i64 = crate::schema::SCHEMA_VERSION;
 /// Oldest schema that can be backed up or restored. The Host migrates it on
 /// the next normal open.
 pub const MIN_SUPPORTED_SCHEMA_VERSION: i64 = 1;
@@ -430,7 +430,20 @@ fn schema_version(connection: &Connection) -> rusqlite::Result<i64> {
 }
 
 fn has_required_tables(connection: &Connection, version: i64) -> rusqlite::Result<bool> {
-    let required: &[&str] = if version >= 2 {
+    let required: &[&str] = if version >= 3 {
+        &[
+            "spaces",
+            "sessions",
+            "agent_runs",
+            "session_layouts",
+            "workspace_revision",
+            "event_streams",
+            "event_log",
+            "devices",
+            "device_grants",
+            "idempotency_records",
+        ]
+    } else if version == 2 {
         &[
             "spaces",
             "sessions",
@@ -955,6 +968,41 @@ mod tests {
         (space.id, session.id)
     }
 
+    /// Drop the v3 protocol tables (children first) so a test can recreate a
+    /// genuine v1 or v2 database for restore compatibility coverage.
+    fn drop_v3_tables(connection: &Connection) {
+        for table in [
+            "idempotency_records",
+            "device_grants",
+            "devices",
+            "event_log",
+            "event_streams",
+        ] {
+            connection
+                .execute_batch(&format!("DROP TABLE IF EXISTS {table};"))
+                .unwrap();
+        }
+    }
+
+    fn downgrade_to_v1(connection: &Connection) {
+        drop_v3_tables(connection);
+        for table in ["spaces", "sessions", "agent_runs", "session_layouts"] {
+            for suffix in ["insert", "update", "delete"] {
+                connection
+                    .execute_batch(&format!("DROP TRIGGER IF EXISTS ukk_rev_{table}_{suffix};"))
+                    .unwrap();
+            }
+        }
+        connection
+            .execute_batch("DROP TABLE IF EXISTS workspace_revision; PRAGMA user_version=1;")
+            .unwrap();
+    }
+
+    fn downgrade_to_v2(connection: &Connection) {
+        drop_v3_tables(connection);
+        connection.execute_batch("PRAGMA user_version=2;").unwrap();
+    }
+
     #[test]
     fn schema_version_matches_migrated_store() {
         let store = Store::open_memory().unwrap();
@@ -1301,22 +1349,48 @@ mod tests {
 
         {
             let connection = Connection::open(&source).unwrap();
-            for table in ["spaces", "sessions", "agent_runs", "session_layouts"] {
-                for suffix in ["insert", "update", "delete"] {
-                    connection
-                        .execute_batch(&format!("DROP TRIGGER ukk_rev_{table}_{suffix};"))
-                        .unwrap();
-                }
-            }
-            connection
-                .execute_batch("DROP TABLE workspace_revision; PRAGMA user_version=1;")
-                .unwrap();
+            downgrade_to_v1(&connection);
         }
 
         let report = restore_database(&database, &source).unwrap();
         assert_eq!(report.schema_version, 1);
 
         // Restore itself does not migrate; the next normal Host open does.
+        let restored = Store::open(&database).unwrap();
+        assert_eq!(
+            schema_version(&restored.conn).unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(restored.snapshot().unwrap().spaces[0].id, space_id);
+
+        drop(restored);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn restore_accepts_v2_and_the_host_migrates_it_on_open() {
+        let directory = temp_dir("v2");
+        let source = directory.join("v2.sqlite3");
+        let database = directory.join("workspace.sqlite3");
+        let (space_id, _) = create_database(&source, "legacy-v2");
+
+        {
+            let connection = Connection::open(&source).unwrap();
+            downgrade_to_v2(&connection);
+            // v2 keeps the workspace revision and its triggers.
+            let revision_table: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_revision'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(revision_table, 1);
+        }
+
+        let report = restore_database(&database, &source).unwrap();
+        assert_eq!(report.schema_version, 2);
+
         let restored = Store::open(&database).unwrap();
         assert_eq!(
             schema_version(&restored.conn).unwrap(),

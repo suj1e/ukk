@@ -9,7 +9,9 @@ use ukk_protocol::Limits;
 
 /// Current schema. v1 is workspace metadata, v2 adds the durable workspace
 /// revision, v3 adds the S1 event log, device trust and idempotency tables.
-const SCHEMA_VERSION: i64 = 3;
+/// `crate::backup::CURRENT_SCHEMA_VERSION` re-exports this value so backup,
+/// restore and diagnostics cannot drift from the migration source.
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 
 /// Local-only configuration. The folder is created by the Host process, not
 /// by the Desktop UI, so closing the window cannot remove persisted metadata.
