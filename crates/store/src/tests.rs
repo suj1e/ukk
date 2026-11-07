@@ -145,3 +145,69 @@ fn binds_parent_only_within_same_session() {
         Err(StoreError::Invalid(_))
     ));
 }
+
+#[test]
+fn workspace_revision_tracks_all_metadata_writes_without_duplicate_retries() {
+    let mut store = Store::open_memory().unwrap();
+    assert_eq!(store.workspace_revision().unwrap(), 0);
+    let space = store.create_space("ukk", "/repo").unwrap();
+    assert_eq!(store.workspace_revision().unwrap(), 1);
+    let id = new_id();
+    let session = store.create_session_with_id(&space.id, "Demo", &id).unwrap();
+    // One INSERT into sessions and another into session_layouts.
+    assert_eq!(store.workspace_revision().unwrap(), 3);
+    store.create_session_with_id(&space.id, "Demo", &id).unwrap();
+    assert_eq!(store.workspace_revision().unwrap(), 3);
+    store.bind_agent(&session.id, "core-1", "t9", "codex", None).unwrap();
+    assert_eq!(store.workspace_revision().unwrap(), 4);
+    let layout = store.get_layout(&session.id).unwrap();
+    store.set_layout(&session.id, layout.revision, layout.root).unwrap();
+    assert_eq!(store.workspace_revision().unwrap(), 5);
+    store.archive_session(&session.id).unwrap();
+    assert_eq!(store.workspace_revision().unwrap(), 6);
+}
+
+#[test]
+fn workspace_revision_observes_writes_from_another_connection() {
+    let dir = env::temp_dir().join(format!("ukk-revision-{}", new_id()));
+    let path = dir.join("workspace.db");
+    let writer = Store::open(&path).unwrap();
+    let mut reader = Store::open(&path).unwrap();
+    assert_eq!(reader.workspace_revision().unwrap(), 0);
+    drop(writer);
+    let mut second = Store::open(&path).unwrap();
+    second.create_space("shared", "/shared").unwrap();
+    assert_eq!(reader.workspace_revision().unwrap(), 1);
+    reader.create_space("readwrite", "/two").unwrap();
+    assert_eq!(second.workspace_revision().unwrap(), 2);
+    drop(reader);
+    drop(second);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn schema_v1_upgrades_without_losing_sessions() {
+    let dir = env::temp_dir().join(format!("ukk-migrate-{}", new_id()));
+    let path = dir.join("workspace.db");
+    let mut original = Store::open(&path).unwrap();
+    let space = original.create_space("legacy", "/legacy").unwrap();
+    let session = original.create_session(&space.id, "Session").unwrap();
+    // Recreate the shape of a deployed v1 DB for the migration test.
+    for table in ["spaces", "sessions", "agent_runs", "session_layouts"] {
+        for suffix in ["insert", "update", "delete"] {
+            original.conn.execute_batch(&format!(
+                "DROP TRIGGER ukk_rev_{table}_{suffix};"
+            )).unwrap();
+        }
+    }
+    original.conn.execute_batch(
+        "DROP TABLE workspace_revision; PRAGMA user_version=1;"
+    ).unwrap();
+    drop(original);
+
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.workspace_revision().unwrap(), 0);
+    assert_eq!(upgraded.snapshot().unwrap().sessions[0].id, session.id);
+    drop(upgraded);
+    fs::remove_dir_all(dir).unwrap();
+}
