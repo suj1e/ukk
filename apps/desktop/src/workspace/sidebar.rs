@@ -18,17 +18,28 @@ impl Workspace {
             .cursor_pointer()
             .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
             .hover(|style| style.bg(rgb(SURFACE)))
+            .role(Role::Button)
+            .aria_label(format!("Space {title}"))
+            .aria_selected(active)
+            .focusable()
+            .focus_visible(|style| style.border_color(rgb(ACCENT)))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.cancel_split_drag(cx);
                 this.selected_space = Some(id.clone());
-                this.selected_session = this
+                let first = this
                     .domain
                     .sessions
                     .iter()
                     .find(|s| s.space_id == id && !s.archived)
                     .map(|s| s.id.clone());
-                this.selected = None;
-                cx.notify();
+                match first {
+                    Some(session_id) => this.select_session(session_id, cx),
+                    None => {
+                        this.cancel_split_drag(cx);
+                        this.selected_session = None;
+                        this.selected = None;
+                        cx.notify();
+                    }
+                }
             }))
             .child(div().text_sm().text_color(rgb(INK)).child(title))
     }
@@ -49,11 +60,20 @@ impl Workspace {
             .cursor_pointer()
             .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
             .hover(|style| style.bg(rgb(SURFACE)))
+            .role(Role::Button)
+            .aria_label(format!(
+                "Session {title}, {}",
+                if session.archived {
+                    "archived"
+                } else {
+                    "active"
+                }
+            ))
+            .aria_selected(active)
+            .focusable()
+            .focus_visible(|style| style.border_color(rgb(ACCENT)))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.cancel_split_drag(cx);
-                this.selected_session = Some(id.clone());
-                this.selected = None;
-                cx.notify();
+                this.select_session(id.clone(), cx);
             }))
             .child(
                 div()
@@ -95,6 +115,11 @@ impl Workspace {
             .cursor_pointer()
             .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
             .hover(|style| style.bg(rgb(if active { 0xe9ebf7 } else { SURFACE })))
+            .role(Role::Button)
+            .aria_label(format!("Agent terminal {display_name}, {status}"))
+            .aria_selected(active)
+            .focusable()
+            .focus_visible(|style| style.border_color(rgb(ACCENT)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.cancel_split_drag(cx);
                 this.selected = Some(address.clone());
@@ -136,7 +161,7 @@ impl Workspace {
             )
     }
 
-    pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn sidebar(&self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let entries: Vec<(Terminal, usize)> = self
             .snapshot
             .hierarchy()
@@ -158,10 +183,14 @@ impl Workspace {
             .collect();
         let spaces = self.domain.spaces.clone();
         div()
+            .id("workspace-sidebar")
+            .role(Role::Navigation)
+            .aria_label("Spaces, Sessions and Agent terminals")
             .flex()
             .flex_col()
-            .w(px(260.0))
+            .w(px(width))
             .h_full()
+            .min_w_0()
             .p_4()
             .bg(rgb(WHITE))
             .border_r_1()
@@ -232,6 +261,10 @@ impl Workspace {
                             .text_color(rgb(ACCENT))
                             .cursor_pointer()
                             .hover(|style| style.bg(rgb(0xe9ebf7)))
+                            .role(Role::Button)
+                            .aria_label("Create a new Session")
+                            .focusable()
+                            .focus_visible(|style| style.border_color(rgb(ACCENT)))
                             .on_click(cx.listener(|this, _, _, cx| this.create_session(cx)))
                             .child(if self.mutation_busy {
                                 "Saving…"

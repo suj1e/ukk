@@ -17,7 +17,7 @@ PaneNode
 
 `PaneTab { id, title, content }` has a unique ID and stable order. Adding a Tab to an existing Leaf preserves the original Leaf ID as the first Tab's ID, with a new Tabs container ID. Removing one of the last two Tabs collapses the group to a legacy Leaf. The last visible Pane is never closed.
 
-**Active/focused Tab remains per GPUI window, in memory.** Clicking an existing tab never writes SQLite or changes another window's focus. The selected tab falls back to the first member if a remote edit removes it. Client-local focus persistence across *application restarts* is not implemented yet.
+**Active/focused Tab is per device.** Clicking an existing tab never writes SQLite or changes another window's focus. The selected tab falls back to a visible member if a remote edit removes it. Selected Session, Pane and Tab now persist across application restarts in a Desktop-local settings file under the user profile; see [Keyboard, accessibility and local focus](GPUI_KEYBOARD_A11Y.md).
 
 ## Mutations and security
 
@@ -53,8 +53,9 @@ Validation counts hidden tabs toward the global 16-surface limit, disallows dupl
 - [ ] Rustfmt, domain/store/Host test suite and strict Clippy across macOS / Windows / Linux.
 - [ ] GPUI native compilation and Desktop unit tests across macOS / Windows / Linux.
 - [ ] Real UI smoke: add/close/reorder Tab, restart app, preserve membership but not force another window's focus; nested splits; keyboard accessibility.
-- [ ] Cross-pane drag-to-move and keyboard-first reorder/focus navigation.
-- [ ] Per-device **restart-persistent** local Tab focus (separate from shared layout membership).
+- [x] Source: cross-pane drag-to-move and keyboard-first reorder/focus/move navigation.
+- [x] Source: per-device **restart-persistent** local Tab/Pane focus (separate from shared layout membership), with stale-target reconciliation.
+- [ ] Real-window keyboard and screen-reader acceptance on macOS / Windows / Linux (see the manual checklist in [GPUI_KEYBOARD_A11Y.md](GPUI_KEYBOARD_A11Y.md)).
 - [ ] Plugin-provided pane/tab surfaces (requires plugin capability API).
 
 This is an incremental step toward [Issue #10](https://github.com/suj1e/ukk/issues/10), not completion of the full Tabs roadmap. Android/Web/TUI are deferred; future SwiftUI iOS will consume the portable domain model.

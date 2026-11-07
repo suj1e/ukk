@@ -2,15 +2,20 @@
 //! herdr-core processes and SQLite data are owned outside this window.
 
 use crate::theme::*;
-use gpui::{div, prelude::*, px, rgb, Context, Render, Window};
+use gpui::{div, prelude::*, px, rgb, Context, Render, Role, Window};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::time::Duration;
-use ukk_domain::{new_id, DomainSnapshot, PaneContent, PaneNode, PaneTab, Session, SplitAxis};
+use ukk_domain::{
+    new_id, DomainSnapshot, PaneContent, PaneNode, PaneTab, Session, SessionLayout, SplitAxis,
+};
 use ukk_host_client::{HostClient, HostSnapshot, LiveHostState, Terminal, WorkspaceUpdate};
 
 mod actions;
 mod agent_detail;
+mod focus_store;
+mod keymap;
+mod navigation;
+mod pane_focus;
 mod panes;
 mod render;
 mod resize;
@@ -45,6 +50,15 @@ struct SplitDragPreview {
     session_id: String,
     split_id: String,
     ratio: f32,
+}
+
+/// A stale SQLite CAS rejection. Retrying is an explicit user decision; the
+/// Desktop never rebases and re-sends a layout write silently.
+#[derive(Clone)]
+struct ConflictNotice {
+    message: String,
+    /// Reapplied once after an explicit reload, never automatically.
+    action: Option<PaneAction>,
 }
 
 #[derive(Clone)]
@@ -93,8 +107,26 @@ pub(crate) struct Workspace {
     mutation_busy: bool,
     mutation_error: Option<String>,
     split_drag_preview: Option<SplitDragPreview>,
-    /// Per-window active tabs; membership/order are shared via SQLite.
-    tab_focus: HashMap<(String, String), String>,
+    /// Per-device focus, persisted under the user profile. Membership and
+    /// ordering remain shared Host layout; focus is never uploaded.
+    local_focus: focus_store::LocalFocus,
+    focused_root: gpui::FocusHandle,
+    focus_path: Option<std::path::PathBuf>,
+    focus_loaded: bool,
+    focus_save_enabled: bool,
+    focus_save_error: Option<String>,
+    focus_save_generation: u64,
+    focus_save_in_flight: bool,
+    focus_save_pending: bool,
+    /// User changed focus before the settings file finished loading.
+    focus_touched: bool,
+    pending_tab_focus: Option<pane_focus::PendingFocus>,
+    pending_pane_focus: Option<String>,
+    /// Explicit retry: applied after one successful reload, never in a loop.
+    retry_after_reload: Option<PaneAction>,
+    /// Action whose Host response is pending, used to offer an explicit retry.
+    in_flight_action: Option<PaneAction>,
+    conflict: Option<ConflictNotice>,
     online: bool,
     message: Option<String>,
     host_epoch: String,
@@ -105,7 +137,9 @@ pub(crate) struct Workspace {
 }
 
 impl Workspace {
-    pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focused_root = cx.focus_handle();
+        window.focus(&focused_root, cx);
         let mut view = Self {
             snapshot: HostSnapshot::default(),
             selected: None,
@@ -117,7 +151,21 @@ impl Workspace {
             mutation_busy: false,
             mutation_error: None,
             split_drag_preview: None,
-            tab_focus: HashMap::new(),
+            local_focus: focus_store::LocalFocus::default(),
+            focused_root,
+            focus_path: None,
+            focus_loaded: false,
+            focus_save_enabled: false,
+            focus_save_error: None,
+            focus_save_generation: 0,
+            focus_save_in_flight: false,
+            focus_save_pending: false,
+            focus_touched: false,
+            pending_tab_focus: None,
+            pending_pane_focus: None,
+            retry_after_reload: None,
+            in_flight_action: None,
+            conflict: None,
             online: false,
             message: None,
             host_epoch: String::new(),
@@ -129,6 +177,12 @@ impl Workspace {
         view.watch_updates(cx);
         view.watch_workspace(cx);
         view.refresh(cx);
+        view.load_local_focus(cx);
         view
     }
+}
+
+/// Registered once at application startup.
+pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
+    keymap::bindings()
 }

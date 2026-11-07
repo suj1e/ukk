@@ -11,6 +11,11 @@ impl Workspace {
         let selected = self.tab == kind;
         div()
             .id(label)
+            .role(Role::Tab)
+            .aria_label(label)
+            .aria_selected(selected)
+            .focusable()
+            .focus_visible(|style| style.border_color(rgb(ACCENT)))
             .px_4()
             .py_3()
             .cursor_pointer()
@@ -238,13 +243,22 @@ impl Workspace {
             .filter(|t| t.reported_status.as_deref() == Some("blocked"))
             .count();
         let message = self.message.clone();
+        let focus_location = self
+            .focus_persisted_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "unavailable".into());
         div()
+            .id("workspace-inspector")
+            .role(Role::Complementary)
+            .aria_label("Runtime and keyboard help")
             .flex()
             .flex_col()
             .w(px(245.0))
             .h_full()
+            .min_h_0()
             .p_5()
             .gap_4()
+            .overflow_y_scroll()
             .bg(rgb(WHITE))
             .border_l_1()
             .border_color(rgb(LINE))
@@ -276,6 +290,57 @@ impl Workspace {
                         .child(error),
                 )
             })
+            .child(
+                div()
+                    .mt_4()
+                    .border_t_1()
+                    .pt_4()
+                    .border_color(rgb(LINE))
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(MUTED))
+                    .child("KEYBOARD"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(super::keymap::shortcut_help().into_iter().map(|help| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(INK))
+                                    .child(help.keys),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(help.description),
+                            )
+                    })),
+            )
+            .child(
+                div()
+                    .mt_2()
+                    .border_t_1()
+                    .pt_4()
+                    .border_color(rgb(LINE))
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Focus is per device and stored under your user profile. It is never sent to the Host or another device."),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(format!("Focus file: {focus_location}")),
+            )
             .child(
                 div()
                     .mt_4()
