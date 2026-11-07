@@ -58,13 +58,18 @@ enum ChannelSink {
     Events(Arc<EventQueue>),
 }
 
+#[derive(Default)]
+struct Routing {
+    channels: HashMap<u32, ChannelSink>,
+    orphans: HashMap<u32, (VecDeque<Frame>, usize)>,
+}
+
 struct Shared {
     hello: Hello,
     writer: Arc<FrameWriter>,
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, SyncSender<Result<Value>>>>,
-    channels: Mutex<HashMap<u32, ChannelSink>>,
-    orphans: Mutex<HashMap<u32, (VecDeque<Frame>, usize)>>,
+    routing: Mutex<Routing>,
     closed: Mutex<Option<String>>,
     send_cache: Mutex<HashMap<String, (SendFingerprint, SendResult)>>,
     send_cache_order: Mutex<VecDeque<String>>,
@@ -82,8 +87,11 @@ impl Shared {
         for (_, sender) in pending.drain() {
             let _ = sender.send(Err(HcError::Closed(reason.clone())));
         }
-        let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
-        for (_, sink) in channels.drain() {
+        let sinks = {
+            let mut routing = self.routing.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut routing.channels)
+        };
+        for (_, sink) in sinks {
             match sink {
                 ChannelSink::Stream(queue) => queue.disconnect(reason.clone()),
                 ChannelSink::Events(queue) => queue.disconnect(reason.clone()),
@@ -98,26 +106,16 @@ impl Shared {
             .clone()
     }
 
-    fn stored_channel(&self, channel: u32) -> Option<ChannelSink> {
-        self.channels
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&channel)
-            .map(|sink| match sink {
-                ChannelSink::Stream(queue) => ChannelSink::Stream(Arc::clone(queue)),
-                ChannelSink::Events(queue) => ChannelSink::Events(Arc::clone(queue)),
-            })
-    }
-
     fn route(&self, frame: Frame) {
         let channel = frame.channel();
-        if let Some(sink) = self.stored_channel(channel) {
-            Self::deliver(&sink, frame);
+        let mut routing = self.routing.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(sink) = routing.channels.get(&channel) {
+            Self::deliver(sink, frame);
             return;
         }
         let cost = frame.payload_len();
-        let mut orphans = self.orphans.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = orphans
+        let entry = routing
+            .orphans
             .entry(channel)
             .or_insert_with(|| (VecDeque::new(), 0));
         if entry.0.len() >= MAX_ORPHAN_FRAMES || entry.1.saturating_add(cost) > MAX_ORPHAN_BYTES {
@@ -141,20 +139,16 @@ impl Shared {
     }
 
     fn register(&self, channel: u32, sink: ChannelSink) {
-        let orphan = self
-            .orphans
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&channel);
-        self.channels
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(channel, sink);
+        // One lock covers orphan removal, sink insertion and draining, so a
+        // frame cannot slip through the gap between registration steps. This
+        // race used to drop the first paint on Windows.
+        let mut routing = self.routing.lock().unwrap_or_else(|e| e.into_inner());
+        let orphan = routing.orphans.remove(&channel);
+        routing.channels.insert(channel, sink);
         if let Some((frames, _)) = orphan {
-            let sink = self.stored_channel(channel);
-            if let Some(sink) = sink {
+            if let Some(sink) = routing.channels.get(&channel) {
                 for frame in frames {
-                    Self::deliver(&sink, frame);
+                    Self::deliver(sink, frame);
                 }
             }
         }
@@ -199,9 +193,10 @@ impl Shared {
 
 impl ChannelLifecycle for Shared {
     fn detach(&self, channel: u32) {
-        self.channels
+        self.routing
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .channels
             .remove(&channel);
     }
 }
@@ -272,8 +267,7 @@ impl FramedConnection {
             writer,
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
-            channels: Mutex::new(HashMap::new()),
-            orphans: Mutex::new(HashMap::new()),
+            routing: Mutex::new(Routing::default()),
             closed: Mutex::new(None),
             send_cache: Mutex::new(HashMap::new()),
             send_cache_order: Mutex::new(VecDeque::new()),
@@ -619,26 +613,21 @@ impl FramedConnection {
     }
 
     fn shutdown(&mut self) {
-        self.shared.fail("client connection closed".into());
-        for channel in self
-            .shared
-            .channels
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .keys()
-            .copied()
-            .collect::<Vec<_>>()
-        {
+        let channels = {
+            let routing = self
+                .shared
+                .routing
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            routing.channels.keys().copied().collect::<Vec<_>>()
+        };
+        for channel in channels {
             let _ = self.shared.writer.send(&Frame::Close {
                 channel,
                 payload: Vec::new(),
             });
         }
-        self.shared
-            .channels
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        self.shared.fail("client connection closed".into());
         if let Some(child) = self.child.as_mut() {
             let _ = child.kill();
             let _ = child.wait();
@@ -924,6 +913,58 @@ mod tests {
             timeout_for_wait(Duration::from_secs(30), false, Some(5.0)),
             Duration::from_secs(30)
         );
+    }
+
+    #[test]
+    fn registration_never_drops_or_reorders_frames() {
+        use crate::stream::StreamQueue;
+        use crate::types::CoreInfo;
+        use std::collections::BTreeSet;
+
+        let shared = Arc::new(Shared {
+            hello: Hello {
+                generation: 1,
+                version: "test".into(),
+                core: CoreInfo {
+                    id: "core".into(),
+                    name: "test".into(),
+                },
+                framed: true,
+                methods: BTreeSet::new(),
+                features: BTreeSet::new(),
+            },
+            writer: Arc::new(FrameWriter::new(Vec::new())),
+            next_id: AtomicU64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            routing: Mutex::new(Routing::default()),
+            closed: Mutex::new(None),
+            send_cache: Mutex::new(HashMap::new()),
+            send_cache_order: Mutex::new(VecDeque::new()),
+        });
+        let queue = Arc::new(StreamQueue::new(1024 * 1024));
+        const TOTAL: usize = 60;
+        let router = {
+            let shared = Arc::clone(&shared);
+            thread::spawn(move || {
+                for index in 0..TOTAL {
+                    shared.route(Frame::Data {
+                        channel: 9,
+                        payload: vec![(index % 251) as u8],
+                    });
+                }
+            })
+        };
+        thread::yield_now();
+        shared.register(9, ChannelSink::Stream(Arc::clone(&queue)));
+        router.join().unwrap();
+        for index in 0..TOTAL {
+            match queue.next_event(Duration::from_millis(10)).unwrap() {
+                crate::stream::StreamEvent::Data(payload) => {
+                    assert_eq!(payload, vec![(index % 251) as u8], "frame {index}");
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
     }
 
     #[test]
