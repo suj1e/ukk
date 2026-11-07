@@ -60,13 +60,19 @@ pub(super) fn execute() -> AppResult<()> {
         }
         "agent-bind" => {
             let mut args = env::args().skip(2);
-            let session_id = args.next().ok_or("agent-bind <session_id> <core_id> <terminal_address> <adapter> [parent_run_id]")?;
+            let session_id = args.next().ok_or(
+                "agent-bind <session_id> <core_id> <terminal_address> <adapter> [parent_run_id]",
+            )?;
             let core_id = args.next().ok_or("missing herdr-core identity")?;
             let address = args.next().ok_or("missing hc terminal address")?;
             let adapter = args.next().ok_or("missing agent adapter")?;
             let parent_id = args.next();
             let run = Store::open_default()?.bind_agent(
-                &session_id, &core_id, &address, &adapter, parent_id.as_deref(),
+                &session_id,
+                &core_id,
+                &address,
+                &adapter,
+                parent_id.as_deref(),
             )?;
             println!("{}", serde_json::to_string_pretty(&run)?);
             Ok(())
@@ -118,7 +124,7 @@ pub(super) fn execute() -> AppResult<()> {
         "request" => {
             let method = env::args().nth(2).unwrap_or_else(|| "host.ping".into());
             request_windows(&method)
-        },
+        }
         #[cfg(unix)]
         "request" => {
             let method = env::args().nth(2).unwrap_or_else(|| "host.ping".into());
@@ -133,7 +139,8 @@ pub(super) fn execute() -> AppResult<()> {
 }
 
 fn print_help() {
-    println!(r#"ukk-host — Agent runtime is read-only via this local RPC
+    println!(
+        r#"ukk-host — Agent runtime is read-only via this local RPC
 Commands:
   doctor               Test hc connect + terminal.list
   list                 Print hc terminal snapshot
@@ -152,5 +159,6 @@ Local-only RPC metadata editing:
   workspace.session.create; workspace.pane.split/close/resize
   Requires rotated per-Host capability; never enables Agent commands.
 Environment:
-  UKK_HC_BIN, UKK_DB_PATH; UKK_SOCKET on macOS/Linux only"#);
+  UKK_HC_BIN, UKK_DB_PATH; UKK_SOCKET on macOS/Linux only"#
+    );
 }
