@@ -283,19 +283,24 @@ pub struct WorkspaceUpdate {
 
 impl WorkspaceUpdate {
     pub fn from_result(result: &Value) -> Result<Self, HostError> {
-        let db_epoch = result.get("db_epoch")
+        let db_epoch = result
+            .get("db_epoch")
             .and_then(Value::as_str)
             .ok_or_else(|| HostError::Protocol("workspace result missing db_epoch".into()))?
             .to_owned();
-        let revision = result.get("revision")
+        let revision = result
+            .get("revision")
             .and_then(Value::as_i64)
             .ok_or_else(|| HostError::Protocol("workspace result missing revision".into()))?;
         let snapshot = match result.get("snapshot") {
-            Some(value) if !value.is_null() =>
-                Some(serde_json::from_value(value.clone())?),
+            Some(value) if !value.is_null() => Some(serde_json::from_value(value.clone())?),
             _ => None,
         };
-        Ok(Self { db_epoch, revision, snapshot })
+        Ok(Self {
+            db_epoch,
+            revision,
+            snapshot,
+        })
     }
 }
 
@@ -695,11 +700,13 @@ mod tests {
         assert_eq!(parsed.snapshot.unwrap().spaces.len(), 0);
         let idle = WorkspaceUpdate::from_result(&serde_json::json!({
             "db_epoch":"local-db-a","revision":2,"snapshot":null
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(idle.snapshot.is_none());
         assert!(WorkspaceUpdate::from_result(&serde_json::json!({
             "revision":1,"snapshot":null
-        })).is_err());
+        }))
+        .is_err());
     }
 
     #[test]
