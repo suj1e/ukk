@@ -182,7 +182,12 @@ impl Workspace {
                     .py_3()
                     .rounded_lg()
                     .bg(rgb(SURFACE))
-                    .child(div().text_color(rgb(ACCENT)).font_weight(gpui::FontWeight::SEMIBOLD).child("⌘"))
+                    .child(
+                        div()
+                            .text_color(rgb(ACCENT))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("⌘"),
+                    )
                     .child(
                         div()
                             .flex_1()
