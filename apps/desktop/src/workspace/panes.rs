@@ -7,10 +7,19 @@ impl Workspace {
         cx: &mut Context<Self>,
         id: String,
         label: &'static str,
+        aria_label: String,
+        keyshortcuts: Option<&'static str>,
         action: PaneAction,
     ) -> impl IntoElement {
         div()
             .id(id)
+            .role(Role::Button)
+            .aria_label(aria_label)
+            .when_some(keyshortcuts, |button, shortcuts| {
+                button.aria_keyshortcuts(shortcuts)
+            })
+            .focusable()
+            .focus_visible(|style| style.border_color(rgb(ACCENT)))
             .px_2()
             .py_1()
             .rounded_md()
@@ -21,6 +30,8 @@ impl Workspace {
             .text_color(rgb(ACCENT))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(SURFACE)))
+            // GPUI activates a focused role=Button element on Enter/Space key
+            // up; adding another key handler here would double-apply actions.
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.mutation_busy {
                     this.pane_action(action.clone(), cx);
@@ -77,17 +88,15 @@ impl Workspace {
                         }
                     }
                 };
-                let new_content = match content {
-                    PaneContent::Agent { agent_run_id } => PaneContent::Terminal {
-                        agent_run_id: agent_run_id.clone(),
-                    },
-                    PaneContent::Diff => PaneContent::Files,
-                    PaneContent::Files => PaneContent::Activity,
-                    PaneContent::Terminal { .. } | PaneContent::Activity => PaneContent::Diff,
-                };
+                let new_content = super::pane_focus::adjacent_content(content);
                 let destination = id.clone();
+                let focused = self.is_focused_pane(id);
+                let click_target = id.clone();
                 div()
                     .id(format!("drop-target-leaf-{id}"))
+                    .role(Role::Pane)
+                    .aria_label(format!("{heading} pane"))
+                    .aria_description(description.clone())
                     .flex()
                     .flex_col()
                     .flex_1()
@@ -96,11 +105,15 @@ impl Workspace {
                     .p_4()
                     .bg(rgb(WHITE))
                     .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(LINE))
+                    .border_2()
+                    .border_color(rgb(if focused { ACCENT } else { LINE }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.focus_pane_click(&click_target, cx);
+                    }))
                     .child(
                         div()
                             .flex()
+                            .flex_wrap()
                             .items_center()
                             .justify_between()
                             .gap_2()
@@ -109,16 +122,19 @@ impl Workspace {
                                     .text_sm()
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(rgb(INK))
-                                    .child(heading),
+                                    .child(heading.clone()),
                             )
                             .child(
                                 div()
                                     .flex()
+                                    .flex_wrap()
                                     .gap_1()
                                     .child(self.pane_button(
                                         cx,
                                         format!("{id}-new-tab"),
                                         "+ Tab",
+                                        format!("Add a Tab to the {heading} pane"),
+                                        Some(super::keymap::Shortcut::AddTab.help_keys()),
                                         PaneAction::TabAdd {
                                             pane_id: id.clone(),
                                             title: "Activity".into(),
@@ -129,6 +145,8 @@ impl Workspace {
                                         cx,
                                         format!("{id}-split-right"),
                                         "Split →",
+                                        "Split this pane horizontally".into(),
+                                        Some(super::keymap::Shortcut::SplitPaneRight.help_keys()),
                                         PaneAction::Split {
                                             pane_id: id.clone(),
                                             axis: SplitAxis::Horizontal,
@@ -139,6 +157,8 @@ impl Workspace {
                                         cx,
                                         format!("{id}-split-down"),
                                         "Split ↓",
+                                        "Split this pane vertically".into(),
+                                        Some(super::keymap::Shortcut::SplitPaneDown.help_keys()),
                                         PaneAction::Split {
                                             pane_id: id.clone(),
                                             axis: SplitAxis::Vertical,
@@ -149,6 +169,8 @@ impl Workspace {
                                         cx,
                                         format!("{id}-close"),
                                         "×",
+                                        "Close this pane".into(),
+                                        Some(super::keymap::Shortcut::ClosePane.help_keys()),
                                         PaneAction::Close {
                                             pane_id: id.clone(),
                                         },

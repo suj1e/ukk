@@ -2,6 +2,7 @@
 //! membership/order are durable Session layout metadata owned by the Host.
 use super::*;
 
+#[cfg(test)]
 pub(super) fn find_tab_group<'a>(node: &'a PaneNode, group_id: &str) -> Option<&'a [PaneTab]> {
     match node {
         PaneNode::Tabs { id, tabs } if id == group_id => Some(tabs),
@@ -38,26 +39,13 @@ impl Workspace {
         );
     }
 
-    fn selected_tab_id<'a>(&self, group_id: &str, tabs: &'a [PaneTab]) -> &'a str {
-        let key = (
-            self.selected_session.as_deref().unwrap_or("").to_owned(),
-            group_id.to_owned(),
-        );
-        let focused = self.tab_focus.get(&key).map(String::as_str);
-        tabs.iter()
-            .find(|tab| Some(tab.id.as_str()) == focused)
-            .or_else(|| tabs.first())
-            .map(|tab| tab.id.as_str())
-            .unwrap_or("")
-    }
-
     pub(super) fn tab_group(
         &self,
         group_id: &str,
         tabs: &[PaneTab],
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let active_id = self.selected_tab_id(group_id, tabs);
+        let active_id = self.active_tab_id(group_id, tabs).unwrap_or("");
         let Some(active) = tabs.iter().find(|tab| tab.id == active_id) else {
             return div().child("Invalid empty tab group").into_any_element();
         };
@@ -68,6 +56,8 @@ impl Workspace {
 
         let tab_strip = div()
             .id(format!("tab-strip-{group_id}"))
+            .role(Role::TabList)
+            .aria_label("Pane tabs")
             .flex()
             .items_center()
             .gap_1()
@@ -80,21 +70,35 @@ impl Workspace {
                 let session = current_session.clone();
                 div()
                     .id(format!("tab-{group}-{tab_id}"))
+                    .role(Role::Tab)
+                    .aria_label(format!("Tab {}", tab.title))
+                    .aria_selected(selected)
+                    .when(selected, |tab| {
+                        tab.aria_keyshortcuts(format!(
+                            "{}, {}",
+                            super::keymap::Shortcut::FocusPrevTab.help_keys(),
+                            super::keymap::Shortcut::FocusNextTab.help_keys()
+                        ))
+                    })
+                    .focusable()
+                    .focus_visible(|style| style.border_color(rgb(ACCENT)))
                     .px_3()
                     .py_2()
                     .rounded_md()
+                    .border_1()
+                    .border_color(rgb(if selected { ACCENT } else { SURFACE }))
                     .bg(rgb(if selected { WHITE } else { SURFACE }))
                     .text_xs()
                     .text_color(rgb(if selected { ACCENT } else { MUTED }))
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(WHITE)))
+                    // Keyboard activation is GPUI's built-in role=Tab
+                    // click-on-key-up; no duplicate local key handler.
                     .on_click(cx.listener(move |this, _, _, cx| {
                         // Do not let an old click from a different Session
                         // steal focus after switching Workspace context.
                         if this.selected_session.as_deref() == Some(&session) {
-                            this.tab_focus
-                                .insert((session.clone(), group.clone()), tab_id.clone());
-                            cx.notify();
+                            this.focus_tab(&group, &tab_id, cx);
                         }
                     }))
                     .on_drag(
@@ -117,6 +121,8 @@ impl Workspace {
                     cx,
                     format!("{group_id}-tab-left"),
                     "←",
+                    "Move the active tab left".into(),
+                    Some(super::keymap::Shortcut::ReorderTabLeft.help_keys()),
                     PaneAction::TabReorder {
                         group_id: group_id_owned.clone(),
                         tab_id: active_id.clone(),
@@ -129,6 +135,8 @@ impl Workspace {
                     cx,
                     format!("{group_id}-tab-right"),
                     "→",
+                    "Move the active tab right".into(),
+                    Some(super::keymap::Shortcut::ReorderTabRight.help_keys()),
                     PaneAction::TabReorder {
                         group_id: group_id_owned.clone(),
                         tab_id: active_id.clone(),
@@ -140,6 +148,8 @@ impl Workspace {
                 cx,
                 format!("{group_id}-tab-close"),
                 "Close tab",
+                "Close the active tab".into(),
+                Some(super::keymap::Shortcut::CloseTab.help_keys()),
                 PaneAction::TabClose {
                     group_id: group_id_owned.clone(),
                     tab_id: active_id.clone(),
@@ -149,6 +159,8 @@ impl Workspace {
                 cx,
                 format!("{group_id}-tab-add-files"),
                 "+ Files",
+                "Add a Files tab".into(),
+                None,
                 PaneAction::TabAdd {
                     pane_id: group_id_owned.clone(),
                     title: "Files".into(),
@@ -159,6 +171,8 @@ impl Workspace {
                 cx,
                 format!("{group_id}-tab-add-diff"),
                 "+ Diff",
+                "Add a Diff tab".into(),
+                None,
                 PaneAction::TabAdd {
                     pane_id: group_id_owned.clone(),
                     title: "Diff".into(),
@@ -173,16 +187,28 @@ impl Workspace {
             content: active.content.clone(),
         };
         let destination = group_id_owned;
+        let focused = self.is_focused_pane(group_id);
+        let click_target = group_id.to_owned();
         div()
             .id(format!("drop-target-tabs-{group_id}"))
+            .role(Role::TabPanel)
+            .aria_label("Tabbed pane")
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
             .min_w_0()
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(if focused { ACCENT } else { LINE }))
+            .overflow_hidden()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.focus_pane_click(&click_target, cx);
+            }))
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .justify_between()
                     .gap_2()

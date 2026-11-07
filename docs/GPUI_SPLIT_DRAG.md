@@ -10,7 +10,8 @@
 - On mouse release/drop, Desktop sends **one** authenticated local `workspace.pane.resize` RPC with the current `expected_revision`.
 - The Host persists with SQLite compare-and-swap and returns a new Workspace snapshot, which also flows to other windows via the durable `workspace.wait` subscription introduced in PR #8.
 - Concurrent layout edits can be rejected as a revision conflict; the user can reload the latest layout. No silent overwrites.
-- The previous “+ / −” resize controls remain usable as a keyboard/mouse fallback while native pointer accessibility is expanded.
+- The previous “+ / −” resize controls remain usable as a keyboard/mouse fallback.
+- Keyboard users can focus the splitter (visible focus ring, `Splitter` role with orientation and 15–85% value) or use `Ctrl+Alt+Arrow` to resize the enclosing split without a pointer. See [Keyboard, accessibility and local focus](GPUI_KEYBOARD_A11Y.md).
 
 ## Structure
 
@@ -35,7 +36,8 @@ Only layout presentation changes: `Pane` is not a terminal, AgentRun or executio
 - [ ] Root `cargo fmt --check`, `cargo test --workspace`, strict Clippy on macOS / Windows / Linux.
 - [ ] GPUI native `cargo check`, **Desktop unit tests and strict Clippy** on all three desktop operating systems.
 - [ ] Actual GUI smoke on macOS/Windows/Linux: drag nested horizontal and vertical splits, release inside/outside bounds, restart Desktop, verify saved ratio and no Agent stop.
-- [ ] Check Windows/Linux mouse cursors, focus behavior, keyboard resizing and accessibility labels.
+- [x] Source: keyboard splitter resize and accessibility labels/value metadata.
+- [ ] Check Windows/Linux mouse cursors, focus behavior, keyboard resizing and accessibility labels in a real window.
 
 The CI build gate is not a replacement for launching a real window. Real-world interaction and accessibility acceptance remain required before release.
 

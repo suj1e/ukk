@@ -8,12 +8,32 @@ impl Workspace {
         &self,
         split_id: &str,
         axis: SplitAxis,
+        stored_ratio: f32,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let id_for_up = split_id.to_owned();
         let id_for_out = split_id.to_owned();
+        let orientation = match axis {
+            // A horizontal split lays children out side by side, so its
+            // separator runs vertically.
+            SplitAxis::Horizontal => gpui::Orientation::Vertical,
+            SplitAxis::Vertical => gpui::Orientation::Horizontal,
+        };
         let handle = div()
             .id(format!("split-drag-handle-{split_id}"))
+            .role(Role::Splitter)
+            .aria_label(format!("Resize split {split_id}"))
+            .aria_orientation(orientation)
+            .aria_numeric_value((self.displayed_split_ratio(split_id, stored_ratio) * 100.0) as f64)
+            .aria_min_numeric_value(15.0)
+            .aria_max_numeric_value(85.0)
+            .aria_keyshortcuts(format!(
+                "{}, {}",
+                super::keymap::Shortcut::ShrinkSplit.help_keys(),
+                super::keymap::Shortcut::GrowSplit.help_keys()
+            ))
+            .focusable()
+            .focus_visible(|style| style.bg(rgb(ACCENT)))
             .flex_shrink_0()
             .bg(rgb(LINE))
             .hover(|style| style.bg(rgb(ACCENT)))
@@ -62,6 +82,7 @@ impl Workspace {
         let larger = (shown_ratio + 0.1).min(0.85);
         let controls = div()
             .flex()
+            .flex_wrap()
             .justify_end()
             .items_center()
             .gap_2()
@@ -75,6 +96,8 @@ impl Workspace {
                 cx,
                 format!("{id}-smaller"),
                 "−",
+                "Shrink the first side of this split".into(),
+                Some(super::keymap::Shortcut::ShrinkSplit.help_keys()),
                 PaneAction::Resize {
                     split_id: id.to_owned(),
                     ratio: smaller,
@@ -84,6 +107,8 @@ impl Workspace {
                 cx,
                 format!("{id}-larger"),
                 "+",
+                "Grow the first side of this split".into(),
+                Some(super::keymap::Shortcut::GrowSplit.help_keys()),
                 PaneAction::Resize {
                     split_id: id.to_owned(),
                     ratio: larger,
@@ -130,7 +155,7 @@ impl Workspace {
         } else {
             columns.flex_row()
         };
-        let handle = self.split_resize_handle(id, axis, cx);
+        let handle = self.split_resize_handle(id, axis, ratio, cx);
         div()
             .flex()
             .flex_col()
