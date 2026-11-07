@@ -215,9 +215,38 @@ impl Store {
     }
 
     pub fn create_session(&mut self, space_id: &str, title: &str) -> Result<Session> {
+        self.create_session_with_id(space_id, title, &new_id())
+    }
+
+    /// Idempotent creation across retries and Host restarts. The client picks
+    /// a fresh UUID per deliberate click and REUSES it when retrying.
+    /// Repeating that UUID with different inputs is rejected (not silently
+    /// interpreted as a new action). This operation never starts a terminal.
+    pub fn create_session_with_id(
+        &mut self, space_id: &str, title: &str, id: &str,
+    ) -> Result<Session> {
         let title = nonempty(title, "Session title")?;
         let space_id = nonempty(space_id, "Space ID")?;
-        let exists: Option<String> = self.conn.query_row(
+        let id = uuid::Uuid::parse_str(id)
+            .map_err(|_| StoreError::Invalid("request_id must be a UUID".into()))?
+            .to_string();
+        let tx = self.conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let previous = tx.query_row(
+            "SELECT id,space_id,title,archived,created_ms,updated_ms FROM sessions WHERE id=?1",
+            params![id],
+            |row| Ok(Session {
+                id: row.get(0)?, space_id: row.get(1)?, title: row.get(2)?,
+                archived: row.get::<_, i64>(3)? != 0,
+                created_ms: row.get(4)?, updated_ms: row.get(5)?,
+            }),
+        ).optional()?;
+        if let Some(existing) = previous {
+            if existing.space_id == space_id && existing.title == title {
+                return Ok(existing);
+            }
+            return Err(StoreError::Conflict);
+        }
+        let exists: Option<String> = tx.query_row(
             "SELECT id FROM spaces WHERE id=?1", params![space_id], |row| row.get(0),
         ).optional()?;
         if exists.is_none() {
@@ -225,16 +254,10 @@ impl Store {
         }
         let created = now_ms();
         let session = Session {
-            id: new_id(),
-            space_id,
-            title,
-            archived: false,
-            created_ms: created,
-            updated_ms: created,
+            id, space_id, title, archived: false, created_ms: created, updated_ms: created,
         };
         let layout = SessionLayout::new(session.id.clone());
         let encoded = serde_json::to_string(&layout.root)?;
-        let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO sessions(id,space_id,title,archived,created_ms,updated_ms) VALUES(?1,?2,?3,0,?4,?5)",
             params![session.id, session.space_id, session.title, session.created_ms, session.updated_ms],
@@ -466,6 +489,27 @@ mod tests {
         assert!(snapshot.sessions[0].archived);
         assert_eq!(snapshot.agent_runs[0].id, agent.id);
         assert_eq!(snapshot.agent_runs[0].terminal_address, "t9");
+    }
+
+    #[test]
+    fn idempotent_session_creation_preserves_layout_on_retry() {
+        let mut store = Store::open_memory().unwrap();
+        let space = store.create_space("ukk", "/work").unwrap();
+        let request_id = new_id();
+        let first = store.create_session_with_id(&space.id, "Draft", &request_id).unwrap();
+        let initial = store.get_layout(&first.id).unwrap();
+        let split = initial.root
+            .split_leaf(initial.root.id(), SplitAxis::Horizontal, 0.5, PaneContent::Diff)
+            .unwrap();
+        store.set_layout(&first.id, 0, split).unwrap();
+        let repeat = store.create_session_with_id(&space.id, "Draft", &request_id).unwrap();
+        assert_eq!(first, repeat);
+        assert_eq!(store.snapshot().unwrap().sessions.len(), 1);
+        assert_eq!(store.get_layout(&first.id).unwrap().revision, 1);
+        assert!(matches!(
+            store.create_session_with_id(&space.id, "Different", &request_id),
+            Err(StoreError::Conflict)
+        ));
     }
 
     #[test]
