@@ -16,16 +16,19 @@ impl Workspace {
         self.mutation_error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let (result, fresh) = cx.background_executor().spawn(async move {
-                let client = HostClient::from_env();
-                let result = client.local_workspace_mutation(method, params);
-                let fresh = if result.is_ok() {
-                    Some(client.workspace_snapshot())
-                } else {
-                    None
-                };
-                (result, fresh)
-            }).await;
+            let (result, fresh) = cx
+                .background_executor()
+                .spawn(async move {
+                    let client = HostClient::from_env();
+                    let result = client.local_workspace_mutation(method, params);
+                    let fresh = if result.is_ok() {
+                        Some(client.workspace_snapshot())
+                    } else {
+                        None
+                    };
+                    (result, fresh)
+                })
+                .await;
             this.update(cx, |view, cx| {
                 view.mutation_busy = false;
                 match result {
@@ -39,7 +42,8 @@ impl Workspace {
                             view.domain = domain;
                         } else {
                             view.mutation_error = Some(
-                                "Change was accepted, but workspace refresh failed; use Refresh.".into()
+                                "Change was accepted, but workspace refresh failed; use Refresh."
+                                    .into(),
                             );
                         }
                     }
@@ -48,37 +52,60 @@ impl Workspace {
                     }
                 }
                 cx.notify();
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(super) fn create_session(&mut self, cx: &mut Context<Self>) {
-        let space_id = self.selected_space.clone()
+        let space_id = self
+            .selected_space
+            .clone()
             .or_else(|| self.domain.spaces.first().map(|s| s.id.clone()));
         let Some(space_id) = space_id else {
-            self.mutation_error = Some(
-                "No Space yet. Create one with ukk-host space-create first.".into()
-            );
+            self.mutation_error =
+                Some("No Space yet. Create one with ukk-host space-create first.".into());
             cx.notify();
             return;
         };
-        let count = self.domain.sessions.iter()
-            .filter(|s| s.space_id == space_id).count();
-        self.mutate("workspace.session.create", json!({
-            "request_id":new_id(),
-            "space_id":space_id,
-            "title":format!("New Session {}", count + 1)
-        }), true, cx);
+        let count = self
+            .domain
+            .sessions
+            .iter()
+            .filter(|s| s.space_id == space_id)
+            .count();
+        self.mutate(
+            "workspace.session.create",
+            json!({
+                "request_id":new_id(),
+                "space_id":space_id,
+                "title":format!("New Session {}", count + 1)
+            }),
+            true,
+            cx,
+        );
     }
 
     pub(super) fn pane_action(&mut self, action: PaneAction, cx: &mut Context<Self>) {
-        let Some(session_id) = self.selected_session.clone() else { return };
-        let Some(layout) = self.domain.layouts.iter()
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        let Some(layout) = self
+            .domain
+            .layouts
+            .iter()
             .find(|layout| layout.session_id == session_id)
-        else { return };
+        else {
+            return;
+        };
         let revision = layout.revision;
         let (method, params) = match action {
-            PaneAction::Split { pane_id, axis, content } => (
+            PaneAction::Split {
+                pane_id,
+                axis,
+                content,
+            } => (
                 "workspace.pane.split",
                 json!({
                     "session_id":session_id,"pane_id":pane_id,
@@ -101,5 +128,4 @@ impl Workspace {
         };
         self.mutate(method, params, false, cx);
     }
-
 }
