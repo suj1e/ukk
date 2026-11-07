@@ -10,6 +10,9 @@ mod local_fs;
 #[cfg(unix)]
 mod peer;
 mod rpc;
+mod runtime;
+mod runtime_api;
+mod runtime_auth;
 mod transport;
 mod workspace_rpc;
 mod workspace_watch;

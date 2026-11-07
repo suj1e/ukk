@@ -15,7 +15,7 @@ pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> 
     match req["method"].as_str().unwrap_or_default() {
         "host.ping" => json!({
             "jsonrpc":"2.0","id":id,
-            "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":true,"workspace_edits":"local-capability-only"}
+            "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":false,"agent_runtime_control":"separate-capability-opt-in","workspace_edits":"local-capability-only"}
         }),
         method @ ("workspace.session.create"
         | "workspace.pane.split"
@@ -84,6 +84,21 @@ pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> 
             json!({"jsonrpc":"2.0","id":id,
                    "result":broker.wait(after_epoch, after_revision, timeout_ms)})
         }
+        method @ ("runtime.status"
+        | "runtime.observe"
+        | "runtime.attach"
+        | "runtime.send"
+        | "runtime.interrupt"
+        | "runtime.stop"
+        | "runtime.detach"
+        | "runtime.archive-finished") => {
+            let params = req.get("params").unwrap_or(&Value::Null);
+            match runtime_api::dispatch(method, params) {
+                Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+                Err(error) => json!({"jsonrpc":"2.0","id":id,
+                    "error":{"code":error.code(),"message":error.message()}}),
+            }
+        }
         "terminal.list" => match HcClient::default().call("terminal.list", json!({})) {
             Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
             Err(error) => json!({
@@ -114,7 +129,11 @@ mod tests {
             &auth,
         );
         assert_eq!(response["id"], 19);
-        assert_eq!(response["result"]["agent_runtime_read_only"], true);
+        assert_eq!(response["result"]["agent_runtime_read_only"], false);
+        assert_eq!(
+            response["result"]["agent_runtime_control"],
+            "separate-capability-opt-in"
+        );
         assert_eq!(
             response["result"]["workspace_edits"],
             "local-capability-only"
@@ -183,6 +202,38 @@ mod tests {
             handle_request(&with_bad_token, &broker, &auth)["error"]["code"],
             -32030
         );
+    }
+
+    #[test]
+    fn runtime_status_is_not_a_workspace_mutation() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        let response = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":60,"method":"runtime.status","params":{}
+            }),
+            &broker,
+            &auth,
+        );
+        assert_eq!(response["result"]["capability"], "separate-agent-control");
+        assert_eq!(response["result"]["view_close_stops_agent"], false);
+    }
+
+    #[test]
+    fn runtime_mutations_are_not_reachable_with_only_workspace_auth() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        let response = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":61,"method":"runtime.stop",
+                "params":{"core_id":"core","terminal":"t1","request_id":"r1",
+                          "intent":"user","auth":auth.test_token()}
+            }),
+            &broker,
+            &auth,
+        );
+        assert!(response.get("result").is_none(), "{response}");
+        assert!(response["error"]["code"].as_i64().unwrap() < 0);
     }
 
     #[test]
