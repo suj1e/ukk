@@ -85,34 +85,41 @@ impl Workspace {
         let Some(domain) = update.snapshot else {
             return; // normal long-poll timeout
         };
-        if self.workspace_epoch == update.db_epoch
-            && update.revision < self.workspace_revision
-        {
+        if self.workspace_epoch == update.db_epoch && update.revision < self.workspace_revision {
             return; // older concurrent response, do not overwrite new layout
         }
         self.workspace_epoch = update.db_epoch;
         self.workspace_revision = update.revision;
         self.workspace_sync_error = None;
 
-        if self.selected_space.as_ref().is_some_and(
-            |id| !domain.spaces.iter().any(|space| &space.id == id)
-        ) {
+        if self
+            .selected_space
+            .as_ref()
+            .is_some_and(|id| !domain.spaces.iter().any(|space| &space.id == id))
+        {
             self.selected_space = None;
         }
         if self.selected_space.is_none() {
             self.selected_space = domain.spaces.first().map(|space| space.id.clone());
         }
-        if self.selected_session.as_ref().is_some_and(
-            |id| !domain.sessions.iter().any(|session| &session.id == id)
-        ) {
+        if self
+            .selected_session
+            .as_ref()
+            .is_some_and(|id| !domain.sessions.iter().any(|session| &session.id == id))
+        {
             self.selected_session = None;
         }
         if self.selected_session.is_none() && self.selected.is_none() {
-            self.selected_session = domain.sessions.iter()
-                .find(|session| !session.archived
-                    && self.selected_space.as_ref().is_none_or(
-                        |space| &session.space_id == space
-                    ))
+            self.selected_session = domain
+                .sessions
+                .iter()
+                .find(|session| {
+                    !session.archived
+                        && self
+                            .selected_space
+                            .as_ref()
+                            .is_none_or(|space| &session.space_id == space)
+                })
                 .map(|session| session.id.clone());
         }
         self.domain = domain;
@@ -126,38 +133,44 @@ impl Workspace {
             let mut revision = -1_i64;
             loop {
                 let last_epoch = epoch.clone();
-                let result = cx.background_executor()
+                let result = cx
+                    .background_executor()
                     .spawn(async move {
-                        HostClient::from_env()
-                            .wait_for_workspace_change(&last_epoch, revision)
+                        HostClient::from_env().wait_for_workspace_change(&last_epoch, revision)
                     })
                     .await;
                 match result {
                     Ok(update) => {
                         epoch = update.db_epoch.clone();
                         revision = update.revision;
-                        if this.update(cx, |view, cx| {
-                            view.apply_workspace_update(update);
-                            view.workspace_sync_error = None;
-                            cx.notify();
-                        }).is_err() {
+                        if this
+                            .update(cx, |view, cx| {
+                                view.apply_workspace_update(update);
+                                view.workspace_sync_error = None;
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }
                     Err(error) => {
-                        if this.update(cx, |view, cx| {
-                            view.workspace_sync_error =
-                                Some(format!("Workspace sync paused: {error}"));
-                            cx.notify();
-                        }).is_err() {
+                        if this
+                            .update(cx, |view, cx| {
+                                view.workspace_sync_error =
+                                    Some(format!("Workspace sync paused: {error}"));
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
                             break;
                         }
-                        cx.background_executor()
-                            .timer(Duration::from_secs(2)).await;
+                        cx.background_executor().timer(Duration::from_secs(2)).await;
                     }
                 }
             }
-        }).detach();
+        })
+        .detach();
     }
 
     /// All native editing actions run off the UI thread and resolve to a
