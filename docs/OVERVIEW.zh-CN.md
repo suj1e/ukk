@@ -16,6 +16,12 @@
 - **不是** Fork herdr-app。ukk 从零构建桌面 UI，但复用 herdr-core 持久终端和 Agent Runtime。
 - **不是**要求所有客户端共享 UI 代码。Desktop 用 GPUI、iOS 用 SwiftUI，通过统一数据协议共享会话。
 
+## 当前实现优先级
+
+**优先完成：** Desktop 原生三端（macOS / Windows / Linux，统一 GPUI 代码）＋ iOS / iPadOS（SwiftUI）；包括完整多 Agent 工作空间、持久会话、插件系统、扫码配对和按需悬浮 Remote Screen。
+
+**暂不开发：** Android、Web、TUI。它们是未来可能接入统一协议的客户端，并非当前开发任务或近期交付承诺。Windows / Linux 不能被一起推迟。
+
 ## 总体架构图
 
 ```mermaid
@@ -23,7 +29,7 @@ flowchart TB
   subgraph Front["原生客户端"]
     D["Desktop：Rust + GPUI<br/>Spaces / Sessions / Agents / Panes"]
     M["iOS / iPadOS：SwiftUI<br/>原生会话 / 审批 / 悬浮远控"]
-    F["未来：Android / Web / TUI"]
+    F["未来候选 · 暂缓开发<br/>Android / Web / TUI"]
   end
   subgraph Control["控制面"]
     R["自托管 Relay 候选：alma-relay<br/>WSS 转发 / 信令"]
@@ -79,7 +85,7 @@ Mac 点击“添加设备”→ 生成短时一次性 QR → iPhone 扫码 → �
 
 ## 完整产品功能
 
-Spaces 多机器/多项目、动态多 Agent、子 Agent、持久会话、原生消息/Plan/工具调用/审批、Tabs/自由分栏、Diff/Files/Git/Worktree、搜索与快捷操作、插件系统、设备扫码与撤销、Push、Remote Screen、自动化、诊断、备份、Windows/Linux/Android/Web/TUI 后续平台。
+Spaces 多机器/多项目、动态多 Agent、子 Agent、持久会话、原生消息/Plan/工具调用/审批、Tabs/自由分栏、Diff/Files/Git/Worktree、搜索与快捷操作、插件系统、设备扫码与撤销、Push、Remote Screen、自动化、诊断、备份，以及 **macOS / Windows / Linux 桌面原生三端与 iOS/iPadOS**。Android/Web/TUI 暂缓。
 
 完整功能不会因为分阶段开发而从产品愿景中删除。
 
