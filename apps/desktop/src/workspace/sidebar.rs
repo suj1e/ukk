@@ -2,7 +2,11 @@
 use super::*;
 
 impl Workspace {
-    pub(super) fn space_row(&self, space: &ukk_domain::Space, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn space_row(
+        &self,
+        space: &ukk_domain::Space,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let id = space.id.clone();
         let title = space.title.clone();
         let active = self.selected_space.as_deref() == Some(id.as_str());
@@ -16,7 +20,10 @@ impl Workspace {
             .hover(|style| style.bg(rgb(SURFACE)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.selected_space = Some(id.clone());
-                this.selected_session = this.domain.sessions.iter()
+                this.selected_session = this
+                    .domain
+                    .sessions
+                    .iter()
                     .find(|s| s.space_id == id && !s.archived)
                     .map(|s| s.id.clone());
                 this.selected = None;
@@ -25,7 +32,11 @@ impl Workspace {
             .child(div().text_sm().text_color(rgb(INK)).child(title))
     }
 
-    pub(super) fn session_row(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn session_row(
+        &self,
+        session: &Session,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let active = self.selected_session.as_deref() == Some(session.id.as_str());
         let id = session.id.clone();
         let title = session.title.clone();
@@ -53,7 +64,12 @@ impl Workspace {
     /// Recursive native composition. Splits are ordinary GPUI layout nodes;
     /// only the Host changes durable layout data. No Pane owns an Agent.
 
-    pub(super) fn terminal_row(&self, terminal: &Terminal, depth: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn terminal_row(
+        &self,
+        terminal: &Terminal,
+        depth: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let active = self.selected.as_deref() == Some(terminal.address.as_str());
         let address = terminal.address.clone();
         let display_name = if depth > 0 {
@@ -90,22 +106,17 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
-                            .size(px(7.0))
-                            .rounded_full()
-                            .bg(rgb(if !self.online {
-                                0xbfc3cc
-                            } else if terminal.lifecycle == "finished" {
-                                0xbfc3cc
-                            } else if terminal.reported_status.as_deref() == Some("blocked") {
-                                0xe4a84e
-                            } else if terminal.reported_status.as_deref() == Some("working") {
-                                0x58ab83
-                            } else {
-                                0xa5aab6
-                            })),
-                    )
+                    .child(div().size(px(7.0)).rounded_full().bg(rgb(if !self.online {
+                        0xbfc3cc
+                    } else if terminal.lifecycle == "finished" {
+                        0xbfc3cc
+                    } else if terminal.reported_status.as_deref() == Some("blocked") {
+                        0xe4a84e
+                    } else if terminal.reported_status.as_deref() == Some("working") {
+                        0x58ab83
+                    } else {
+                        0xa5aab6
+                    })))
                     .child(
                         div()
                             .flex_1()
@@ -125,10 +136,23 @@ impl Workspace {
     }
 
     pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let entries: Vec<(Terminal, usize)> = self.snapshot.hierarchy().into_iter().map(|(t, depth)| (t.clone(), depth)).collect();
-        let sessions: Vec<Session> = self.domain.sessions.iter()
-            .filter(|session| !session.archived &&
-                self.selected_space.as_ref().is_none_or(|space| &session.space_id == space))
+        let entries: Vec<(Terminal, usize)> = self
+            .snapshot
+            .hierarchy()
+            .into_iter()
+            .map(|(t, depth)| (t.clone(), depth))
+            .collect();
+        let sessions: Vec<Session> = self
+            .domain
+            .sessions
+            .iter()
+            .filter(|session| {
+                !session.archived
+                    && self
+                        .selected_space
+                        .as_ref()
+                        .is_none_or(|space| &session.space_id == space)
+            })
             .cloned()
             .collect();
         let spaces = self.domain.spaces.clone();
@@ -158,9 +182,7 @@ impl Workspace {
                     .py_3()
                     .rounded_lg()
                     .bg(rgb(SURFACE))
-                    .child(
-                        div().text_color(rgb(ACCENT)).font_semibold().child("⌘"),
-                    )
+                    .child(div().text_color(rgb(ACCENT)).font_semibold().child("⌘"))
                     .child(
                         div()
                             .flex_1()
@@ -171,28 +193,59 @@ impl Workspace {
                     ),
             )
             .child(
-                div().mt_4().text_xs().font_semibold().text_color(rgb(MUTED))
+                div()
+                    .mt_4()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(rgb(MUTED))
                     .child("PROJECT SPACES"),
             )
             .children(spaces.iter().map(|space| self.space_row(space, cx)))
             .child(
-                div().flex().items_center().justify_between().mt_5().mb_2()
-                    .child(div().text_xs().font_semibold().text_color(rgb(MUTED))
-                        .child("SESSIONS"))
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .mt_5()
+                    .mb_2()
                     .child(
-                        div().id("new-session").px_2().py_1().rounded_md()
-                            .bg(rgb(SURFACE)).text_xs().text_color(rgb(ACCENT))
-                            .cursor_pointer().hover(|style| style.bg(rgb(0xe9ebf7)))
+                        div()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(rgb(MUTED))
+                            .child("SESSIONS"),
+                    )
+                    .child(
+                        div()
+                            .id("new-session")
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(rgb(SURFACE))
+                            .text_xs()
+                            .text_color(rgb(ACCENT))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(0xe9ebf7)))
                             .on_click(cx.listener(|this, _, _, cx| this.create_session(cx)))
-                            .child(if self.mutation_busy { "Saving…" } else { "+ New" }),
+                            .child(if self.mutation_busy {
+                                "Saving…"
+                            } else {
+                                "+ New"
+                            }),
                     ),
             )
             .children(sessions.iter().map(|session| self.session_row(session, cx)))
             .when_some(self.mutation_error.clone(), |element, message| {
                 element.child(
-                    div().mt_2().px_3().py_2().rounded_md()
-                        .bg(rgb(0xffefeb)).text_xs()
-                        .text_color(rgb(0xa14b32)).child(message),
+                    div()
+                        .mt_2()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(rgb(0xffefeb))
+                        .text_xs()
+                        .text_color(rgb(0xa14b32))
+                        .child(message),
                 )
             })
             .child(
@@ -223,7 +276,11 @@ impl Workspace {
                     .flex_col()
                     .gap_1()
                     .overflow_y_scroll()
-                    .children(entries.iter().map(|(term, depth)| self.terminal_row(term, *depth, cx))),
+                    .children(
+                        entries
+                            .iter()
+                            .map(|(term, depth)| self.terminal_row(term, *depth, cx)),
+                    ),
             )
             .child(
                 div()
