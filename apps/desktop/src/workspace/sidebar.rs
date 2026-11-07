@@ -63,9 +63,7 @@ impl Workspace {
             )
     }
 
-    /// Recursive native composition. Splits are ordinary GPUI layout nodes;
-    /// only the Host changes durable layout data. No Pane owns an Agent.
-
+    /// Render a terminal from the live Host snapshot; display only.
     pub(super) fn terminal_row(
         &self,
         terminal: &Terminal,
@@ -109,9 +107,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().size(px(7.0)).rounded_full().bg(rgb(if !self.online {
-                        0xbfc3cc
-                    } else if terminal.lifecycle == "finished" {
+                    .child(div().size(px(7.0)).rounded_full().bg(rgb(if !self.online || terminal.lifecycle == "finished" {
                         0xbfc3cc
                     } else if terminal.reported_status.as_deref() == Some("blocked") {
                         0xe4a84e
