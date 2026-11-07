@@ -171,6 +171,9 @@ runtime, not evidence of live Agent integration.
 - [x] macOS local evidence: framing/auth/quota/connection limits, permission
       rejection, SIGTERM → stale socket → restart, live-socket refusal, client
       deadline and reply cap (`cargo test -p ukk-host -p ukk-host-client`).
+- [x] macOS real herdr-core 0.1.18 connectivity: Host broker reports
+      `connected: true`, `terminal.list` succeeds, stale-socket recovery and
+      cleanup verified; no Agent was signalled.
 - [x] Windows CI builds and runs `cargo test --workspace` and Clippy
       (including `windows_named_pipe.rs` and the overlapped deadline unit
       tests): run `42391205944` at `a40e3a3`.

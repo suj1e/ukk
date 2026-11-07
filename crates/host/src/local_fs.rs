@@ -155,9 +155,10 @@ pub(super) fn socket_state(path: &Path) -> io::Result<SocketState> {
 
 /// Remove a stale socket, but only after the lifecycle lock is held and the
 /// path is still a socket with no live listener. Never removes anything else.
-pub(super) fn remove_stale_socket(path: &Path) -> Result<(), String> {
+/// Returns whether a file was actually removed.
+pub(super) fn remove_stale_socket(path: &Path) -> Result<bool, String> {
     match socket_state(path) {
-        Ok(SocketState::Missing) => Ok(()),
+        Ok(SocketState::Missing) => Ok(false),
         Ok(SocketState::Live) => Err(format!(
             "another ukk Host is already listening on {}; refusing to replace it",
             path.display()
@@ -174,18 +175,13 @@ pub(super) fn remove_stale_socket(path: &Path) -> Result<(), String> {
                     fs::remove_file(path).map_err(|error| {
                         format!("could not remove stale socket {}: {error}", path.display())
                     })?;
-                    eprintln!(
-                        "ukk Host: removed stale socket {} after confirming no live Host \
-                         owns it; herdr-core Agents are unaffected",
-                        path.display()
-                    );
-                    Ok(())
+                    Ok(true)
                 }
                 Ok(_) => Err(format!(
                     "{} changed while recovering the stale socket; refusing to remove it",
                     path.display()
                 )),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
                 Err(error) => Err(format!(
                     "could not re-check stale socket {}: {error}",
                     path.display()
@@ -338,7 +334,7 @@ mod tests {
         assert!(path.exists(), "a live socket must never be unlinked");
         drop(listener);
         assert_eq!(socket_state(&path).unwrap(), SocketState::Stale);
-        remove_stale_socket(&path).unwrap();
+        assert!(remove_stale_socket(&path).unwrap());
         assert!(!path.exists());
         let _ = fs::remove_dir_all(&directory);
     }

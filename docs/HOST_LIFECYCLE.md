@@ -93,6 +93,13 @@ After this change the second start probes the stale socket, confirms no live
 Host, unlinks and binds. While the first Host is **live**, a second Host is
 rejected by the lifecycle lock and the live socket is never unlinked.
 
+Real herdr-core evidence (macOS, local): with the installed herdr-core 0.1.18
+binary (`~/.local/bin/hc`), the hardened Host returned `connected: true`,
+`terminal.list` succeeded, SIGTERM left a stale socket, `status` reported
+live then stale, the next `serve` recovered it, `cleanup` refused while the
+Host was live and removed the socket only after it stopped. No Agent process
+was signalled.
+
 Automated equivalents (macOS, run locally):
 
 - `crates/host/tests/ipc_hardening.rs::sigterm_leaves_a_stale_socket_and_restart_recovers_it`
@@ -149,6 +156,7 @@ Automated equivalents (macOS, run locally):
 | Overlapped read/write deadline + cancellation | N/A | N/A | Unit tests (`windows_pipe.rs`) pass in CI `42391205944` |
 | Service template content | Yes (unit tests compile/run on all OS) | Yes (same) | Yes (same) |
 | Real `install`/`uninstall`/`restart` on a machine | **NOT VERIFIED** (commands not executed to avoid registering a real user service during development) | **NOT VERIFIED** | **NOT VERIFIED** |
+| Real herdr-core connectivity (`connected: true`, `terminal.list`) | Yes, herdr-core 0.1.18 local | **NOT VERIFIED** | **NOT VERIFIED** |
 | Different-user denial | **NOT VERIFIED** (see runbook) | **NOT VERIFIED** (mode check + peer uid source) | **NOT VERIFIED** (see runbook) |
 
 **Cross-platform CI:** Rust core/Host workflow run `42391205944` passed

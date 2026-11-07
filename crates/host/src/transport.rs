@@ -48,8 +48,15 @@ pub(super) fn serve() -> AppResult<()> {
     // This is what makes "remove only if no live Host" race-free between Hosts.
     let _lock = local_fs::HostLock::acquire(parent)
         .map_err(|error| format!("Host lifecycle check failed: {error}"))?;
-    local_fs::remove_stale_socket(&path)
-        .map_err(|error| format!("Host endpoint recovery failed: {error}"))?;
+    if local_fs::remove_stale_socket(&path)
+        .map_err(|error| format!("Host endpoint recovery failed: {error}"))?
+    {
+        println!(
+            "ukk Host: recovered a stale socket at {} after confirming no live Host; \
+             herdr-core Agents are unaffected",
+            path.display()
+        );
+    }
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     local_fs::verify_socket_permissions(&path)
