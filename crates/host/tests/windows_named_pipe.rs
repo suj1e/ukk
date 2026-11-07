@@ -43,6 +43,14 @@ fn windows_host_pipe_allows_read_only_local_snapshot() {
         thread::sleep(Duration::from_millis(80));
     }
 
+    // The next listener must be available while an earlier connection is
+    // being handled. Two independent UI observers should both be able to
+    // complete a read-only ping without sharing handles.
+    let first = thread::spawn(|| HostClient::from_env().ping());
+    let second = thread::spawn(|| HostClient::from_env().ping());
+    assert!(first.join().unwrap().unwrap());
+    assert!(second.join().unwrap().unwrap());
+
     let state = client.host_snapshot().expect("read initial Host snapshot");
     assert!(!state.core_connected, "mock hc is deliberately unavailable");
     assert_eq!(state.snapshot.terminals.len(), 0);
