@@ -120,6 +120,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** short-lived QR challenge, desktop confirmation, device key storage, scoped grants, expiry/rotation/revoke and unauthenticated denial. Spike against **actual** alma-relay behavior before reuse; end-to-end encryption and device trust independent of transport. Outbound Host connection; no unapproved public inbound port.
 - **Exit:** connect iPhone test client outside LAN, resume exact Session, revoke device and prove command denial, rotate keys, handle offline/relay outage; repeatable packet/contract tests and a documented TURN/media signalling boundary.
 - **Dependency:** S1 wire/auth contract. Pairing crypto and relay compatibility spikes can be separate PRs.
+- **Status (2026-11-08):** pairing/device-trust core merged as `8102761` (PR #28) with 62 crate tests and three-OS CI; security review fixed confirmation typing, low-order X25519 rejection, frame bounds and ack completion. No relay networking, OS key storage or WAN proof-of-possession; docs prevent deploying a listener yet.
 
 ### I1 — Native SwiftUI iOS/iPadOS companion (fixture-first)
 
@@ -139,6 +140,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** explicit `view` grant then separate `control` grant; macOS ScreenCaptureKit/VideoToolbox, Windows Graphics Capture and Linux PipeWire/portal integration with honest unsupported cases. Encrypted low-latency WebRTC/media path with STUN/TURN validation; relay is signalling/control-plane only. Show a floating compact preview over Agent chat, expand for pointer/keyboard control, minimize back to the **same Session**. Clearly indicate capture/control, expiring controller lease, device lock pause and immediate stop/revocation.
 - **Exit:** real iPhone and each supported desktop capture adapter demonstrated; permission denied, strict NAT, sleep, disconnect, another controller and stop/revoke tested; no streaming/capture after stop, no permanent screen navigation mode.
 - **Dependencies:** P1 plugin broker, S2 trust, I1 Session UI and H1 secure Host lifecycle. Begin independent codec/capture spikes now but **do not** expose control before the gates.
+- **Status (2026-11-08):** macOS capture spike merged as `b2292d7` (PR #31): schema-validated `screen.view` manifest + real single-frame ScreenCaptureKit helper, bounded output paths, explicit permission/skip states. Control, audio, media transport, iOS overlay and Windows/Linux adapters remain unimplemented; real capture is **NOT VERIFIED**.
 
 ## Wave E — Release engineering and completion (cross-cutting)
 
