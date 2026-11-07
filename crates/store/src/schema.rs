@@ -88,8 +88,8 @@ impl Store {
         }
         if version == 0 {
             let tx = self.conn.transaction()?;
-        tx.execute_batch(
-            r#"
+            tx.execute_batch(
+                r#"
             CREATE TABLE spaces (
                 id TEXT PRIMARY KEY NOT NULL,
                 title TEXT NOT NULL,
@@ -123,7 +123,7 @@ impl Store {
             );
             PRAGMA user_version = 1;
             "#,
-        )?;
+            )?;
             tx.commit()?;
         }
         // v2: a durable, monotonic revision for Spaces, Sessions, AgentRuns
