@@ -186,9 +186,9 @@ mod tests {
 
     #[test]
     fn reads_terminal_list_result() {
-        let line = r#"{"jsonrpc":"2.0","id":1,"result":{"terminals":[{"id":"t3"}],"hidden_finished":0}}"#;
+        let line = r#"{"jsonrpc":"2.0","id":1,"result":{"terminals":[{"address":"t3","argv":["codex"],"cwd":"/work","state":"live","created_ms":1,"screen":"exact","cols":80,"rows":24,"labels":{}}],"hidden_finished":0,"machines":[]}}"#;
         let result = parse_reply(line, 1).expect("valid reply");
-        assert_eq!(result["terminals"][0]["id"], "t3");
+        assert_eq!(result["terminals"][0]["address"], "t3");
     }
 
     #[test]
