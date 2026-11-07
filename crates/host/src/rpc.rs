@@ -17,12 +17,10 @@ pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> 
             "jsonrpc":"2.0","id":id,
             "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":true,"workspace_edits":"local-capability-only"}
         }),
-        method @ (
-            "workspace.session.create"
-            | "workspace.pane.split"
-            | "workspace.pane.close"
-            | "workspace.pane.resize"
-        ) => {
+        method @ ("workspace.session.create"
+        | "workspace.pane.split"
+        | "workspace.pane.close"
+        | "workspace.pane.resize") => {
             let params = req.get("params").unwrap_or(&Value::Null);
             if !auth.authorized(params.get("auth").and_then(Value::as_str)) {
                 json!({"jsonrpc":"2.0","id":id,
@@ -35,12 +33,10 @@ pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> 
                 }
             }
         }
-        "workspace.snapshot" => {
-            match Store::open_default().and_then(|store| store.snapshot()) {
-                Ok(snapshot) => json!({"jsonrpc":"2.0","id":id,"result":snapshot}),
-                Err(error) => json!({"jsonrpc":"2.0","id":id,
+        "workspace.snapshot" => match Store::open_default().and_then(|store| store.snapshot()) {
+            Ok(snapshot) => json!({"jsonrpc":"2.0","id":id,"result":snapshot}),
+            Err(error) => json!({"jsonrpc":"2.0","id":id,
                     "error":{"code":-32011,"message":error.to_string()}}),
-            }
         },
         "host.snapshot" => json!({"jsonrpc":"2.0","id":id,"result":broker.snapshot()}),
         "host.wait" => {
@@ -81,21 +77,32 @@ mod tests {
     fn ping_describes_capability_boundary() {
         let broker = Broker::new();
         let auth = LocalAuth::test();
-        let response = handle_request(&json!({
-            "jsonrpc":"2.0","id":19,"method":"host.ping","params":{}
-        }), &broker, &auth);
+        let response = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":19,"method":"host.ping","params":{}
+            }),
+            &broker,
+            &auth,
+        );
         assert_eq!(response["id"], 19);
         assert_eq!(response["result"]["agent_runtime_read_only"], true);
-        assert_eq!(response["result"]["workspace_edits"], "local-capability-only");
+        assert_eq!(
+            response["result"]["workspace_edits"],
+            "local-capability-only"
+        );
     }
 
     #[test]
     fn rejects_unknown_or_mutating_methods() {
         let broker = Broker::new();
         let auth = LocalAuth::test();
-        let response = handle_request(&json!({
-            "jsonrpc":"2.0","id":20,"method":"terminal.kill","params":{"terminal":"t1"}
-        }), &broker, &auth);
+        let response = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":20,"method":"terminal.kill","params":{"terminal":"t1"}
+            }),
+            &broker,
+            &auth,
+        );
         assert_eq!(response["error"]["code"], -32601);
     }
 
@@ -103,9 +110,13 @@ mod tests {
     fn snapshot_starts_disconnected() {
         let broker = Broker::new();
         let auth = LocalAuth::test();
-        let response = handle_request(&json!({
-            "jsonrpc":"2.0","id":30,"method":"host.snapshot","params":{}
-        }), &broker, &auth);
+        let response = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":30,"method":"host.snapshot","params":{}
+            }),
+            &broker,
+            &auth,
+        );
         assert_eq!(response["result"]["revision"], 0);
         assert_eq!(response["result"]["connected"], false);
         assert_eq!(response["result"]["terminals"].as_array().unwrap().len(), 0);
@@ -115,10 +126,14 @@ mod tests {
     fn wait_returns_immediately_for_new_host_epoch() {
         let broker = Broker::new();
         let auth = LocalAuth::test();
-        let response = handle_request(&json!({
-            "jsonrpc":"2.0","id":31,"method":"host.wait",
-            "params":{"after_epoch":"previous-host","after_revision":0,"timeout_ms":10000}
-        }), &broker, &auth);
+        let response = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":31,"method":"host.wait",
+                "params":{"after_epoch":"previous-host","after_revision":0,"timeout_ms":10000}
+            }),
+            &broker,
+            &auth,
+        );
         assert_eq!(response["result"]["revision"], 0);
     }
 
@@ -135,7 +150,10 @@ mod tests {
         assert_eq!(denied["error"]["code"], -32030);
         let mut with_bad_token = request;
         with_bad_token["params"]["auth"] = json!("wrong");
-        assert_eq!(handle_request(&with_bad_token, &broker, &auth)["error"]["code"], -32030);
+        assert_eq!(
+            handle_request(&with_bad_token, &broker, &auth)["error"]["code"],
+            -32030
+        );
     }
 
     #[test]
