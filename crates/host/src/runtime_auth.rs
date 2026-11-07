@@ -7,7 +7,7 @@
 //! exists, so upgrading ukk does not silently grant runtime control.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -84,6 +84,20 @@ impl AgentControlAuth {
                 problem: Some("capability file must not be a symlink".into()),
             };
         }
+        if !metadata.file_type().is_file() {
+            return Self {
+                path,
+                secret: None,
+                problem: Some("capability path must be a regular file".into()),
+            };
+        }
+        if metadata.len() > 4096 {
+            return Self {
+                path,
+                secret: None,
+                problem: Some("capability file is unexpectedly large".into()),
+            };
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -95,7 +109,16 @@ impl AgentControlAuth {
                 };
             }
         }
-        match fs::read_to_string(&path) {
+        let read = (|| -> io::Result<String> {
+            let file = fs::File::open(&path)?;
+            if !file.metadata()?.is_file() {
+                return Err(io::Error::other("capability path is not a regular file"));
+            }
+            let mut secret = String::new();
+            file.take(4096).read_to_string(&mut secret)?;
+            Ok(secret)
+        })();
+        match read {
             Ok(secret) => {
                 let secret = secret.trim().to_owned();
                 if secret.len() < MIN_SECRET_LEN || !secret.is_ascii() {
@@ -168,9 +191,12 @@ impl AgentControlAuth {
         let parent = path
             .parent()
             .ok_or_else(|| io::Error::other("invalid agent-control token path"))?;
+        let created_parent = !parent.exists();
         fs::create_dir_all(parent)?;
+        // Never chmod an existing directory: an env override may point at a
+        // shared directory such as /tmp or a user's home.
         #[cfg(unix)]
-        {
+        if created_parent {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
         }
@@ -386,6 +412,68 @@ mod tests {
         let auth = AgentControlAuth::load(&path);
         assert!(!auth.is_enabled());
         assert!(auth.problem().unwrap().contains("0600"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_and_symlink_are_not_accepted_as_capabilities() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let directory = scratch("types");
+        fs::create_dir_all(&directory).unwrap();
+        let as_dir = AgentControlAuth::load(&directory);
+        assert!(!as_dir.is_enabled());
+        assert!(as_dir.problem().unwrap().contains("regular file"));
+
+        let real = directory.join("real");
+        fs::write(&real, format!("{}:{}", "a".repeat(36), "b".repeat(36))).unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o600)).unwrap();
+        let link = directory.join("link");
+        symlink(&real, &link).unwrap();
+        let auth = AgentControlAuth::load(&link);
+        assert!(!auth.is_enabled());
+        assert!(auth.problem().unwrap().contains("symlink"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn file_audit_is_jsonl_private_and_contains_no_secret() {
+        let directory = scratch("audit");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("audit.jsonl");
+        let log = AuditLog::file(&path);
+        log.record(AuditEntry {
+            at_ms: 1,
+            request_id: "r1".into(),
+            action: "runtime.send".into(),
+            core_id: "core".into(),
+            terminal: "t7".into(),
+            intent: "user".into(),
+            outcome: "ok".into(),
+        })
+        .unwrap();
+        log.record(AuditEntry {
+            at_ms: 2,
+            request_id: "r2".into(),
+            action: "runtime.stop".into(),
+            core_id: "core".into(),
+            terminal: "t7".into(),
+            intent: "user".into(),
+            outcome: "denied:unauthorized".into(),
+        })
+        .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 2);
+        assert!(!text.contains("secret"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        for line in text.lines() {
+            serde_json::from_str::<serde_json::Value>(line).unwrap();
+        }
         let _ = fs::remove_dir_all(directory);
     }
 

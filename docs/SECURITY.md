@@ -41,9 +41,9 @@ There is **no TCP listener and no TCP fallback**.
 | Windows remote rejection | `PIPE_REJECT_REMOTE_CLIENTS`; pipe name is namespacing, not authentication. |
 | Windows single owner | `FILE_FLAG_FIRST_PIPE_INSTANCE` is created **before** `LocalAuth::install()` and broker start. A refused second Host cannot rotate or temporarily remove the live Host's mutation capability token. |
 | Windows peer identity | Server verifies the client process token SID; client verifies the server process token SID. Both compare against the current user. Client opens with IDENTIFICATION-only QoS. |
-| Deadlines/cancellation | Unix read/write timeouts; Windows overlapped I/O with bounded waits and `CancelIoEx`. A silent or non-reading peer cannot pin a worker. |
+| Deadlines/cancellation | Unix read/write timeouts; Windows overlapped I/O with bounded waits and `CancelIoEx`. A silent or non-reading peer cannot pin a worker. The framed `hc connect` handshake and frame writes also have bounded deadlines and kill/reap the client child on expiry. |
 | Resource bounds | 32 concurrent clients, 256 requests per connection, 64 KiB request, 4 MiB reply, 60s idle read, 10s write. Excess clients get a bounded error and are closed. |
-| Capability separation | Local mutation token authorizes workspace metadata only. Agent mutation, terminal input and screen control remain unauthorized on this interface. |
+| Capability separation | Local mutation token authorizes workspace metadata only. Agent mutation, terminal input and screen control require the separate, default-off `agent-control` capability described below; the workspace token never authorizes them. |
 
 ### Security consequences and residual risks
 

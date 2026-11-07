@@ -15,7 +15,7 @@ pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> 
     match req["method"].as_str().unwrap_or_default() {
         "host.ping" => json!({
             "jsonrpc":"2.0","id":id,
-            "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":true,"workspace_edits":"local-capability-only"}
+            "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":false,"agent_runtime_control":"separate-capability-opt-in","workspace_edits":"local-capability-only"}
         }),
         method @ ("workspace.session.create"
         | "workspace.pane.split"
@@ -129,7 +129,11 @@ mod tests {
             &auth,
         );
         assert_eq!(response["id"], 19);
-        assert_eq!(response["result"]["agent_runtime_read_only"], true);
+        assert_eq!(response["result"]["agent_runtime_read_only"], false);
+        assert_eq!(
+            response["result"]["agent_runtime_control"],
+            "separate-capability-opt-in"
+        );
         assert_eq!(
             response["result"]["workspace_edits"],
             "local-capability-only"

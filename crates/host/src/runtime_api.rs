@@ -47,7 +47,19 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value, RuntimeError> {
             "framed attach streams are not exposed over the line RPC; use the framed client".into(),
         ));
     }
+    if method == "runtime.detach" {
+        // View close is local and must succeed even when herdr-core is down.
+        // Nothing is spawned, connected or called; only the payload shape is
+        // validated.
+        let _ = binding(params)?;
+        return Ok(json!({"runtime_calls": 0, "stopped": false}));
+    }
+
+    // Parse, validate and authorize before any `hc connect` spawn. An
+    // unauthenticated caller must not allocate a child process or worker.
+    let call = parse_call(method, params)?;
     let auth = AgentControlAuth::from_env();
+    RuntimeService::preflight(&auth, &call)?;
     let connection = HcClient::default()
         .framed()
         .map_err(RuntimeError::from_hc)?;
@@ -57,7 +69,8 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value, RuntimeError> {
         AuditLog::file(AgentControlAuth::audit_path()),
         global_cache(),
     );
-    dispatch_with(&mut service, method, params)
+    let execution = service.execute(call)?;
+    execution_json(execution)
 }
 
 fn status_from(auth: &AgentControlAuth) -> Value {
@@ -72,6 +85,7 @@ fn status_from(auth: &AgentControlAuth) -> Value {
 
 /// Executes one parsed request against an injected service. Unit tests use a
 /// mock backend; the live dispatcher above builds a framed one.
+#[cfg(test)]
 pub fn dispatch_with(
     service: &mut RuntimeService,
     method: &str,
@@ -87,42 +101,33 @@ pub fn dispatch_with(
                 "stopped": outcome.stopped
             }))
         }
-        "runtime.observe" => {
-            let call = runtime_call(params, RuntimeAction::Observe, false)?;
-            execution_json(service.execute(call)?)
-        }
-        "runtime.send" => {
-            let text = required_str(params, "text")?.to_owned();
-            let idempotency_key = optional_str(params, "idempotency_key");
-            let call = runtime_call(
-                params,
-                RuntimeAction::SendInput {
-                    text,
-                    idempotency_key,
-                },
-                true,
-            )?;
-            execution_json(service.execute(call)?)
-        }
-        "runtime.interrupt" => {
-            let call = runtime_call(params, RuntimeAction::Interrupt, true)?;
-            execution_json(service.execute(call)?)
-        }
-        "runtime.stop" => {
-            let call = runtime_call(params, RuntimeAction::Stop, true)?;
-            execution_json(service.execute(call)?)
-        }
-        "runtime.archive-finished" => {
-            let call = runtime_call(params, RuntimeAction::RemoveFinished, true)?;
-            execution_json(service.execute(call)?)
-        }
         "runtime.attach" => Err(RuntimeError::Unsupported(
             "framed attach streams are not exposed over the line RPC".into(),
         )),
-        other => Err(RuntimeError::Unsupported(format!(
-            "unknown runtime method {other}"
-        ))),
+        _ => {
+            let call = parse_call(method, params)?;
+            execution_json(service.execute(call)?)
+        }
     }
+}
+
+fn parse_call(method: &str, params: &Value) -> Result<RuntimeCall, RuntimeError> {
+    let action = match method {
+        "runtime.observe" => RuntimeAction::Observe,
+        "runtime.send" => RuntimeAction::SendInput {
+            text: required_str(params, "text")?.to_owned(),
+        },
+        "runtime.interrupt" => RuntimeAction::Interrupt,
+        "runtime.stop" => RuntimeAction::Stop,
+        "runtime.archive-finished" => RuntimeAction::RemoveFinished,
+        other => {
+            return Err(RuntimeError::Unsupported(format!(
+                "unknown runtime method {other}"
+            )))
+        }
+    };
+    let require_request_id = action.is_mutating();
+    runtime_call(params, action, require_request_id)
 }
 
 fn runtime_call(
@@ -184,21 +189,23 @@ fn optional_str(params: &Value, key: &str) -> Option<String> {
 
 fn execution_json(execution: super::runtime::Execution) -> Result<Value, RuntimeError> {
     let replayed = execution.replayed;
-    let mut value = match execution.outcome {
-        RuntimeOutcome::Observed(terminal) => serde_json::to_value(terminal),
-        RuntimeOutcome::InputSent { result, .. } => serde_json::to_value(result),
-        RuntimeOutcome::Interrupted(result) => serde_json::to_value(result),
-        RuntimeOutcome::Stopped(terminal) => serde_json::to_value(terminal),
-        RuntimeOutcome::Removed(result) => serde_json::to_value(result),
+    let (value, include_replayed) = match execution.outcome {
+        RuntimeOutcome::Observed(terminal) => (serde_json::to_value(terminal), false),
+        RuntimeOutcome::InputSent { result, .. } => (serde_json::to_value(result), true),
+        RuntimeOutcome::Interrupted(result) => (serde_json::to_value(result), true),
+        RuntimeOutcome::Stopped(terminal) => (serde_json::to_value(terminal), true),
+        RuntimeOutcome::Removed(result) => (serde_json::to_value(result), true),
         RuntimeOutcome::Attached(_) => {
             return Err(RuntimeError::Unsupported(
                 "attach results cannot be encoded on the line RPC".into(),
             ))
         }
-    }
-    .map_err(|error| RuntimeError::Unavailable(error.to_string()))?;
-    if let Some(object) = value.as_object_mut() {
-        object.insert("replayed".into(), Value::Bool(replayed));
+    };
+    let mut value = value.map_err(|error| RuntimeError::Unavailable(error.to_string()))?;
+    if include_replayed {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("replayed".into(), Value::Bool(replayed));
+        }
     }
     Ok(value)
 }
@@ -283,7 +290,7 @@ mod tests {
         let backend = PanicBackend::new();
         let called = Arc::clone(&backend.called);
         let mut service =
-            RuntimeService::with_backend(AgentControlAuth::test("control"), Box::new(backend));
+            RuntimeService::with_backend(AgentControlAuth::disabled_test(), Box::new(backend));
         let value = dispatch_with(
             &mut service,
             "runtime.detach",
@@ -308,7 +315,12 @@ mod tests {
 
     #[test]
     fn workspace_auth_field_does_not_authorize_control() {
-        let mut service = disabled_service();
+        let backend = PanicBackend::new();
+        let called = Arc::clone(&backend.called);
+        let mut service = RuntimeService::with_backend(
+            AgentControlAuth::test("separate-control-token"),
+            Box::new(backend),
+        );
         let error = dispatch_with(
             &mut service,
             "runtime.stop",
@@ -318,7 +330,8 @@ mod tests {
             }),
         )
         .unwrap_err();
-        assert_eq!(error, RuntimeError::ControlDisabled);
+        assert_eq!(error, RuntimeError::Unauthorized);
+        assert!(!called.load(Ordering::SeqCst));
     }
 
     #[test]

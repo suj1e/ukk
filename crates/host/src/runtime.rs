@@ -1,8 +1,10 @@
 //! Product-level AgentRun runtime actions.
 //!
 //! Metadata operations (Session archive, Pane close) live in `workspace_rpc`.
-//! This module maps an [`AgentRun`] binding to herdr-core lifecycle actions
-//! and enforces:
+//! This module maps the `(core_id, terminal_address)` pair of an
+//! [`AgentRun`] binding to herdr-core lifecycle actions. The pair is supplied
+//! by the caller and checked against the connected core; resolving an
+//! `agent_run_id` through the store is not wired yet. It enforces:
 //!
 //! * the binding's `core_id` must match the connected core before any action;
 //! * terminal input, interrupt, stop and runtime archive require the
@@ -38,9 +40,14 @@ pub struct RunBinding {
 impl RunBinding {
     pub fn new(core_id: impl Into<String>, terminal: &str) -> Result<Self, RuntimeError> {
         let core_id = core_id.into();
-        if core_id.trim().is_empty() {
+        if core_id.is_empty()
+            || core_id.len() > 128
+            || !core_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
             return Err(RuntimeError::InvalidBinding(
-                "core_id must not be empty".into(),
+                "core_id must be 1-128 ASCII letters, digits, '-', '_' or '.'".into(),
             ));
         }
         Ok(Self {
@@ -88,7 +95,6 @@ pub enum RuntimeAction {
     },
     SendInput {
         text: String,
-        idempotency_key: Option<String>,
     },
     Interrupt,
     /// Explicit user stop. Maps to the documented `terminal.kill`.
@@ -132,7 +138,6 @@ impl RuntimeAction {
     }
 }
 
-#[derive(Debug)]
 pub struct RuntimeCall {
     pub request_id: String,
     pub binding: RunBinding,
@@ -140,6 +145,18 @@ pub struct RuntimeCall {
     /// Value of the agent-control token file. Never the workspace token.
     pub control: Option<String>,
     pub action: RuntimeAction,
+}
+
+impl fmt::Debug for RuntimeCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeCall")
+            .field("request_id", &self.request_id)
+            .field("binding", &self.binding)
+            .field("intent", &self.intent)
+            .field("control", &self.control.as_ref().map(|_| "<redacted>"))
+            .field("action", &self.action)
+            .finish()
+    }
 }
 
 impl RuntimeCall {
@@ -219,8 +236,13 @@ impl RuntimeOutcome {
 
 #[derive(Default)]
 pub struct RuntimeCache {
-    entries: HashMap<String, (String, CachedOutcome)>,
+    entries: HashMap<String, CacheEntry>,
     order: VecDeque<String>,
+}
+
+enum CacheEntry {
+    Pending(String),
+    Done(String, CachedOutcome),
 }
 
 impl RuntimeCache {
@@ -228,30 +250,65 @@ impl RuntimeCache {
         Self::default()
     }
 
-    fn lookup(&self, request_id: &str, fingerprint: &str) -> CacheLookup {
+    /// Atomically reserves a request id or reports an existing outcome.
+    fn begin(&mut self, request_id: &str, fingerprint: &str) -> CacheLookup {
         match self.entries.get(request_id) {
-            Some((cached, _)) if cached != fingerprint => CacheLookup::Conflict,
-            Some((_, outcome)) => CacheLookup::Hit(Box::new(outcome.clone())),
-            None => CacheLookup::Miss,
+            Some(CacheEntry::Pending(cached)) | Some(CacheEntry::Done(cached, _))
+                if cached != fingerprint =>
+            {
+                CacheLookup::Conflict
+            }
+            Some(CacheEntry::Pending(_)) => CacheLookup::InFlight,
+            Some(CacheEntry::Done(_, outcome)) => CacheLookup::Hit(outcome.clone()),
+            None if self.entries.len() >= MAX_CACHED_REQUESTS => CacheLookup::Full,
+            None => {
+                self.entries.insert(
+                    request_id.to_owned(),
+                    CacheEntry::Pending(fingerprint.to_owned()),
+                );
+                self.order.push_back(request_id.to_owned());
+                CacheLookup::Miss
+            }
         }
     }
 
-    fn remember(&mut self, request_id: String, fingerprint: String, outcome: CachedOutcome) {
-        if !self.entries.contains_key(&request_id) {
-            self.order.push_back(request_id.clone());
+    fn finish(&mut self, request_id: &str, fingerprint: String, outcome: CachedOutcome) {
+        self.entries.insert(
+            request_id.to_owned(),
+            CacheEntry::Done(fingerprint, outcome),
+        );
+        self.evict_done();
+    }
+
+    fn abandon(&mut self, request_id: &str) {
+        self.entries.remove(request_id);
+        if let Some(position) = self.order.iter().position(|key| key == request_id) {
+            self.order.remove(position);
         }
-        self.entries.insert(request_id, (fingerprint, outcome));
-        while self.order.len() > MAX_CACHED_REQUESTS {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
+    }
+
+    fn evict_done(&mut self) {
+        let mut scanned = 0;
+        while self.order.len() > MAX_CACHED_REQUESTS && scanned < self.order.len() {
+            let Some(key) = self.order.pop_front() else {
+                break;
+            };
+            let done = matches!(self.entries.get(&key), Some(CacheEntry::Done(..)));
+            if done {
+                self.entries.remove(&key);
+            } else {
+                self.order.push_back(key);
             }
+            scanned += 1;
         }
     }
 }
 
 enum CacheLookup {
-    Hit(Box<CachedOutcome>),
+    Hit(CachedOutcome),
     Conflict,
+    InFlight,
+    Full,
     Miss,
 }
 
@@ -321,9 +378,12 @@ pub enum RuntimeError {
     IntentRequired,
     StillLive { terminal: String },
     RequestIdReuse(String),
+    RequestInFlight(String),
+    IdempotencyCacheFull,
     Unsupported(String),
     InvalidParams(String),
     Unavailable(String),
+    Audit(String),
 }
 
 impl RuntimeError {
@@ -336,9 +396,12 @@ impl RuntimeError {
             Self::IntentRequired => -32046,
             Self::StillLive { .. } => -32047,
             Self::RequestIdReuse(_) => -32048,
+            Self::RequestInFlight(_) => -32051,
+            Self::IdempotencyCacheFull => -32052,
             Self::Unsupported(_) => -32049,
             Self::InvalidBinding(_) | Self::InvalidParams(_) => -32602,
             Self::Unavailable(_) => -32040,
+            Self::Audit(_) => -32050,
         }
     }
 
@@ -362,7 +425,15 @@ impl RuntimeError {
             Self::RequestIdReuse(id) => {
                 format!("request id {id} was reused for a different runtime action")
             }
-            Self::Unsupported(message) | Self::Unavailable(message) => message.clone(),
+            Self::RequestInFlight(id) => {
+                format!("request id {id} is already executing; retry after it finishes")
+            }
+            Self::IdempotencyCacheFull => {
+                "runtime idempotency cache is full; retry after earlier requests complete".into()
+            }
+            Self::Unsupported(message) | Self::Unavailable(message) | Self::Audit(message) => {
+                message.clone()
+            }
             Self::InvalidParams(message) => message.clone(),
         }
     }
@@ -385,6 +456,7 @@ impl fmt::Display for RuntimeError {
 
 impl Error for RuntimeError {}
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewCloseOutcome {
     pub runtime_calls: usize,
@@ -423,6 +495,7 @@ impl RuntimeService {
         )
     }
 
+    #[cfg(test)]
     pub fn auth(&self) -> &AgentControlAuth {
         &self.auth
     }
@@ -432,36 +505,45 @@ impl RuntimeService {
         self.audit.entries()
     }
 
-    pub fn execute(&mut self, call: RuntimeCall) -> Result<Execution, RuntimeError> {
+    /// Checks that need no herdr-core connection. The RPC dispatcher runs
+    /// this before spawning `hc connect`, so an unauthorized caller cannot
+    /// allocate a worker or child process.
+    pub fn preflight(auth: &AgentControlAuth, call: &RuntimeCall) -> Result<(), RuntimeError> {
         if call.request_id.trim().is_empty() || call.request_id.len() > 128 {
             return Err(RuntimeError::InvalidParams(
                 "request_id must be 1-128 characters".into(),
             ));
         }
         if call.action.requires_control() {
-            if !self.auth.is_enabled() {
-                self.deny(&call, "control_disabled");
-                return Err(match self.auth.problem() {
+            if !auth.is_enabled() {
+                return Err(match auth.problem() {
                     Some(problem) => RuntimeError::InsecureCapability(problem.to_owned()),
                     None => RuntimeError::ControlDisabled,
                 });
             }
-            if !self.auth.authorized(call.control.as_deref()) {
-                self.deny(&call, "unauthorized");
+            if !auth.authorized(call.control.as_deref()) {
                 return Err(RuntimeError::Unauthorized);
             }
         }
         if call.action.requires_user_intent() && call.intent != Intent::User {
-            self.deny(&call, "intent_required");
             return Err(RuntimeError::IntentRequired);
+        }
+        Ok(())
+    }
+
+    pub fn execute(&mut self, call: RuntimeCall) -> Result<Execution, RuntimeError> {
+        if let Err(error) = Self::preflight(&self.auth, &call) {
+            self.deny(&call, denial_reason(&error))?;
+            return Err(error);
         }
         let actual = self.backend.core_id().to_owned();
         if call.binding.core_id != actual {
-            self.deny(&call, "core_mismatch");
-            return Err(RuntimeError::CoreMismatch {
+            let error = RuntimeError::CoreMismatch {
                 expected: call.binding.core_id.clone(),
                 actual,
-            });
+            };
+            self.deny(&call, "core_mismatch")?;
+            return Err(error);
         }
 
         let fingerprint = call.fingerprint();
@@ -470,18 +552,26 @@ impl RuntimeService {
                 .cache
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .lookup(&call.request_id, &fingerprint);
+                .begin(&call.request_id, &fingerprint);
             match lookup {
                 CacheLookup::Hit(cached) => {
-                    self.audit(&call, "ok_replayed");
+                    self.audit(&call, "ok_replayed")?;
                     return Ok(Execution {
-                        outcome: RuntimeOutcome::from_cached(*cached),
+                        outcome: RuntimeOutcome::from_cached(cached),
                         replayed: true,
                     });
                 }
                 CacheLookup::Conflict => {
-                    self.deny(&call, "request_id_reuse");
+                    self.deny(&call, "request_id_reuse")?;
                     return Err(RuntimeError::RequestIdReuse(call.request_id.clone()));
+                }
+                CacheLookup::InFlight => {
+                    self.deny(&call, "request_in_flight")?;
+                    return Err(RuntimeError::RequestInFlight(call.request_id.clone()));
+                }
+                CacheLookup::Full => {
+                    self.deny(&call, "idempotency_cache_full")?;
+                    return Err(RuntimeError::IdempotencyCacheFull);
                 }
                 CacheLookup::Miss => {}
             }
@@ -490,7 +580,11 @@ impl RuntimeService {
         let outcome = match self.perform(&call) {
             Ok(outcome) => outcome,
             Err(error) => {
-                self.audit(&call, &format!("error:{}", error.code()));
+                self.cache
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .abandon(&call.request_id);
+                self.audit(&call, &format!("error:{}", error.code()))?;
                 return Err(error);
             }
         };
@@ -498,9 +592,9 @@ impl RuntimeService {
             self.cache
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .remember(call.request_id.clone(), fingerprint, cached);
+                .finish(&call.request_id, fingerprint, cached);
         }
-        self.audit(&call, "ok");
+        self.audit(&call, "ok")?;
         Ok(Execution {
             outcome,
             replayed: false,
@@ -510,6 +604,7 @@ impl RuntimeService {
     /// Closing a view or detaching is a local operation. It validates the
     /// binding identity but never calls stop, kill, remove or any backend
     /// action.
+    #[cfg(test)]
     pub fn view_closed(&self, binding: &RunBinding) -> Result<ViewCloseOutcome, RuntimeError> {
         let actual = self.backend.core_id();
         if binding.core_id != actual {
@@ -552,17 +647,11 @@ impl RuntimeService {
                     .map(RuntimeOutcome::Attached)
                     .map_err(RuntimeError::from_hc)
             }
-            RuntimeAction::SendInput {
-                text,
-                idempotency_key,
-            } => {
+            RuntimeAction::SendInput { text } => {
                 let request = SendRequest::new(call.binding.terminal.clone(), text.clone());
-                let key = idempotency_key
-                    .as_deref()
-                    .unwrap_or(call.request_id.as_str());
                 let outcome = self
                     .backend
-                    .send(&request, Some(key))
+                    .send(&request, Some(call.request_id.as_str()))
                     .map_err(RuntimeError::from_hc)?;
                 Ok(RuntimeOutcome::InputSent {
                     result: outcome.result,
@@ -589,7 +678,7 @@ impl RuntimeService {
                     .backend
                     .get(&call.binding.terminal)
                     .map_err(RuntimeError::from_hc)?;
-                if terminal.is_live() {
+                if !terminal.state.is_finished() {
                     return Err(RuntimeError::StillLive {
                         terminal: terminal.address.to_string(),
                     });
@@ -602,9 +691,9 @@ impl RuntimeService {
         }
     }
 
-    fn audit(&self, call: &RuntimeCall, outcome: &str) {
+    fn audit(&self, call: &RuntimeCall, outcome: &str) -> Result<(), RuntimeError> {
         if !call.action.requires_control() {
-            return;
+            return Ok(());
         }
         let entry = AuditEntry {
             at_ms: now_ms(),
@@ -615,13 +704,30 @@ impl RuntimeService {
             intent: call.intent.as_str().to_owned(),
             outcome: outcome.to_owned(),
         };
-        if let Err(error) = self.audit.record(entry) {
-            eprintln!("ukk-host: agent-control audit write failed: {error}");
-        }
+        self.audit.record(entry).map_err(|error| {
+            RuntimeError::Audit(format!("agent-control audit write failed: {error}"))
+        })
     }
 
-    fn deny(&self, call: &RuntimeCall, reason: &str) {
-        self.audit(call, &format!("denied:{reason}"));
+    fn deny(&self, call: &RuntimeCall, reason: &str) -> Result<(), RuntimeError> {
+        self.audit(call, &format!("denied:{reason}"))
+    }
+}
+
+fn denial_reason(error: &RuntimeError) -> &'static str {
+    match error {
+        RuntimeError::ControlDisabled | RuntimeError::InsecureCapability(_) => "control_disabled",
+        RuntimeError::Unauthorized => "unauthorized",
+        RuntimeError::IntentRequired => "intent_required",
+        RuntimeError::InvalidParams(_) | RuntimeError::InvalidBinding(_) => "invalid_params",
+        RuntimeError::CoreMismatch { .. } => "core_mismatch",
+        RuntimeError::RequestIdReuse(_) => "request_id_reuse",
+        RuntimeError::RequestInFlight(_) => "request_in_flight",
+        RuntimeError::IdempotencyCacheFull => "idempotency_cache_full",
+        RuntimeError::StillLive { .. } => "still_live",
+        RuntimeError::Unsupported(_) => "unsupported",
+        RuntimeError::Unavailable(_) => "unavailable",
+        RuntimeError::Audit(_) => "audit_failed",
     }
 }
 
@@ -748,10 +854,11 @@ mod tests {
 
     #[test]
     fn view_close_never_calls_a_runtime_action() {
-        let (service, _) = service(AgentControlAuth::test(CONTROL));
+        let (service, calls) = service(AgentControlAuth::test(CONTROL));
         let outcome = service.view_closed(&binding()).unwrap();
         assert_eq!(outcome.runtime_calls, 0);
         assert!(!outcome.stopped);
+        assert!(calls.lock().unwrap().is_empty());
         assert!(service.audit_entries().is_empty());
     }
 
@@ -760,10 +867,7 @@ mod tests {
         let (mut disabled, _) = service(AgentControlAuth::disabled_test());
         let error = disabled
             .execute(call(
-                RuntimeAction::SendInput {
-                    text: "hi".into(),
-                    idempotency_key: None,
-                },
+                RuntimeAction::SendInput { text: "hi".into() },
                 Intent::User,
                 Some("workspace-token"),
             ))
@@ -855,10 +959,7 @@ mod tests {
     #[test]
     fn duplicate_request_id_never_sends_or_stops_twice() {
         let (mut service, calls) = service(AgentControlAuth::test(CONTROL));
-        let action = RuntimeAction::SendInput {
-            text: "one".into(),
-            idempotency_key: None,
-        };
+        let action = RuntimeAction::SendInput { text: "one".into() };
         let first = service
             .execute(call(action.clone(), Intent::User, Some(CONTROL)))
             .unwrap();
@@ -875,20 +976,14 @@ mod tests {
         let (mut service, calls) = service(AgentControlAuth::test(CONTROL));
         service
             .execute(call(
-                RuntimeAction::SendInput {
-                    text: "one".into(),
-                    idempotency_key: None,
-                },
+                RuntimeAction::SendInput { text: "one".into() },
                 Intent::User,
                 Some(CONTROL),
             ))
             .unwrap();
         let error = service
             .execute(call(
-                RuntimeAction::SendInput {
-                    text: "two".into(),
-                    idempotency_key: None,
-                },
+                RuntimeAction::SendInput { text: "two".into() },
                 Intent::User,
                 Some(CONTROL),
             ))
@@ -911,6 +1006,106 @@ mod tests {
         ));
         assert_eq!(denied.unwrap_err(), RuntimeError::ControlDisabled);
         assert!(calls.lock().unwrap().is_empty());
+    }
+
+    struct BlockingBackend {
+        core: String,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        started: std::sync::mpsc::SyncSender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl RuntimeBackend for BlockingBackend {
+        fn core_id(&self) -> &str {
+            &self.core
+        }
+        fn get(&mut self, _terminal: &TerminalAddress) -> Result<Terminal, HcError> {
+            panic!("concurrent test only sends")
+        }
+        fn attach(&mut self, _request: &AttachRequest) -> Result<Attachment, HcError> {
+            panic!("concurrent test only sends")
+        }
+        fn send(
+            &mut self,
+            _request: &SendRequest,
+            _key: Option<&str>,
+        ) -> Result<SendOutcome, HcError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = self.started.send(());
+            let _ = self.release.lock().unwrap().recv();
+            Ok(SendOutcome {
+                result: SendResult {
+                    turn: 9,
+                    status: Some("working".into()),
+                    started: Some(true),
+                    wait: None,
+                },
+                replayed: false,
+            })
+        }
+        fn interrupt(&mut self, _request: &InterruptRequest) -> Result<InterruptResult, HcError> {
+            panic!("concurrent test only sends")
+        }
+        fn kill(&mut self, _terminal: &TerminalAddress) -> Result<Terminal, HcError> {
+            panic!("concurrent test only sends")
+        }
+        fn remove(&mut self, _terminal: &TerminalAddress) -> Result<RemoveResult, HcError> {
+            panic!("concurrent test only sends")
+        }
+    }
+
+    #[test]
+    fn concurrent_duplicate_request_executes_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let (_idle_tx, idle_rx) = mpsc::sync_channel::<()>(0);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cache = Arc::new(Mutex::new(RuntimeCache::new()));
+        let mut first = RuntimeService::new(
+            AgentControlAuth::test(CONTROL),
+            Box::new(BlockingBackend {
+                core: "core-1".into(),
+                calls: Arc::clone(&calls),
+                started: started_tx,
+                release: Mutex::new(release_rx),
+            }),
+            AuditLog::memory(),
+            Arc::clone(&cache),
+        );
+        let mut second = RuntimeService::new(
+            AgentControlAuth::test(CONTROL),
+            Box::new(BlockingBackend {
+                core: "core-1".into(),
+                calls: Arc::clone(&calls),
+                started: mpsc::sync_channel(1).0,
+                release: Mutex::new(idle_rx),
+            }),
+            AuditLog::memory(),
+            Arc::clone(&cache),
+        );
+        let request = RuntimeAction::SendInput { text: "one".into() };
+        let first_request = request.clone();
+        let handle = std::thread::spawn(move || {
+            first.execute(call(first_request, Intent::User, Some(CONTROL)))
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first send starts");
+
+        let error = second
+            .execute(call(request, Intent::User, Some(CONTROL)))
+            .unwrap_err();
+        assert!(matches!(error, RuntimeError::RequestInFlight(_)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        release_tx.send(()).unwrap();
+        let execution = handle.join().unwrap().unwrap();
+        assert!(!execution.replayed);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
