@@ -213,6 +213,39 @@ fn required_str<'a>(row: &'a Value, key: &str) -> Result<&'a str, HostError> {
         .ok_or_else(|| HostError::Protocol(format!("terminal missing required field: {key}")))
 }
 
+/// Versioned state of the local ukk Host. The epoch changes across
+/// Host restarts; revision only has meaning within one epoch.
+#[derive(Debug, Clone)]
+pub struct LiveHostState {
+    pub host_epoch: String,
+    pub revision: u64,
+    pub core_connected: bool,
+    pub message: Option<String>,
+    pub snapshot: HostSnapshot,
+}
+
+impl LiveHostState {
+    pub fn from_result(value: &Value) -> Result<Self, HostError> {
+        Ok(Self {
+            host_epoch: value
+                .get("host_epoch")
+                .and_then(Value::as_str)
+                .ok_or_else(|| HostError::Protocol("missing host_epoch".into()))?
+                .to_owned(),
+            revision: value
+                .get("revision")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| HostError::Protocol("missing revision".into()))?,
+            core_connected: value
+                .get("connected")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| HostError::Protocol("missing connected flag".into()))?,
+            message: value.get("message").and_then(Value::as_str).map(str::to_owned),
+            snapshot: HostSnapshot::from_result(value)?,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HostClient {
     path: PathBuf,
@@ -246,14 +279,41 @@ impl HostClient {
         HostSnapshot::from_result(&self.request("terminal.list")?)
     }
 
-    #[cfg(unix)]
+    pub fn host_snapshot(&self) -> Result<LiveHostState, HostError> {
+        LiveHostState::from_result(&self.request("host.snapshot")?)
+    }
+
+    /// Long-poll the Host broker. A return with the same epoch/revision means
+    /// no change during the bounded wait. Network/Host failures return Err.
+    pub fn wait_for_change(
+        &self,
+        after_epoch: &str,
+        after_revision: u64,
+    ) -> Result<LiveHostState, HostError> {
+        let value = self.request_with(
+            "host.wait",
+            json!({
+                "after_epoch": after_epoch,
+                "after_revision": after_revision,
+                "timeout_ms": 10_000
+            }),
+            Duration::from_secs(13),
+        )?;
+        LiveHostState::from_result(&value)
+    }
+
     fn request(&self, method: &str) -> Result<Value, HostError> {
+        self.request_with(method, json!({}), TIMEOUT)
+    }
+
+    #[cfg(unix)]
+    fn request_with(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, HostError> {
         let mut stream = UnixStream::connect(&self.path)?;
-        stream.set_read_timeout(Some(TIMEOUT))?;
+        stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(TIMEOUT))?;
         serde_json::to_writer(
             &mut stream,
-            &json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}),
+            &json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}),
         )?;
         stream.write_all(b"\n")?;
         stream.flush()?;
@@ -288,7 +348,7 @@ impl HostClient {
     }
 
     #[cfg(not(unix))]
-    fn request(&self, _method: &str) -> Result<Value, HostError> {
+    fn request_with(&self, _method: &str, _params: Value, _timeout: Duration) -> Result<Value, HostError> {
         Err(HostError::UnsupportedPlatform)
     }
 }
@@ -373,6 +433,28 @@ mod tests {
         let parsed = HostSnapshot::from_result(&result).unwrap();
         let hierarchy = parsed.hierarchy();
         assert_eq!(hierarchy.len(), 2);
+    }
+
+    #[test]
+    fn parses_host_broker_state_with_core_health() {
+        let mut payload = valid_result();
+        payload["host_epoch"] = json!("test-host-1");
+        payload["revision"] = json!(44);
+        payload["connected"] = json!(false);
+        payload["message"] = json!("Connection lost");
+        let live = LiveHostState::from_result(&payload).unwrap();
+        assert_eq!(live.host_epoch, "test-host-1");
+        assert_eq!(live.revision, 44);
+        assert!(!live.core_connected);
+        assert_eq!(live.snapshot.terminals.len(), 2);
+    }
+
+    #[test]
+    fn rejects_broker_snapshot_without_revision() {
+        let mut payload = valid_result();
+        payload["host_epoch"] = json!("test-host-1");
+        payload["connected"] = json!(true);
+        assert!(LiveHostState::from_result(&payload).is_err());
     }
 
     #[test]
