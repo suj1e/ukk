@@ -1,0 +1,93 @@
+name: iOS companion simulator build and unit tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Simulator build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode and simulator runtimes
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Build for generic iOS Simulator
+        run: |
+          xcodebuild -project apps/ios/UkkCompanion.xcodeproj \
+            -scheme UkkCompanion \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            -quiet \
+            build
+
+  unit-tests:
+    name: Simulator unit tests
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode and available simulators
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available
+
+      - name: Select an available iPhone simulator
+        id: simulator
+        run: |
+          DEVICE_ID="$(xcrun simctl list devices available \
+            | grep -E '^[[:space:]]+iPhone' \
+            | head -n 1 \
+            | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/')"
+          if [ -z "$DEVICE_ID" ]; then
+            echo "::error::No available iPhone simulator runtime was found on this runner"
+            exit 1
+          fi
+          echo "Using iPhone simulator $DEVICE_ID"
+          echo "id=$DEVICE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Run unit tests on the selected simulator
+        run: |
+          xcodebuild -project apps/ios/UkkCompanion.xcodeproj \
+            -scheme UkkCompanion \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}" \
+            -configuration Debug \
+            -only-testing:UkkCompanionTests \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 180 \
+            -resultBundlePath "${{ runner.temp }}/UkkCompanionUnitTests.xcresult" \
+            test
+
+      - name: Upload unit test result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unit-test-results
+          path: ${{ runner.temp }}/UkkCompanionUnitTests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7

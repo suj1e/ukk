@@ -1,0 +1,705 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		057F09B28744AA4EF9DFEF25 /* TrustedDeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22EA3D5888F5C6E3BCB71678 /* TrustedDeviceStoreTests.swift */; };
+		077AB0FD8551DF696409D8B4 /* PairingInviteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A32E4278FF5DB7F2B582F39D /* PairingInviteTests.swift */; };
+		08C79B34DDD10469FA46A6C7 /* PairingInvite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B759F81F96D3DEE7C5D87474 /* PairingInvite.swift */; };
+		093815CC35074AD2106AAE4F /* NavigationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A189126131F7D2DD376DAE7 /* NavigationStateTests.swift */; };
+		0F441031CDC504BF62281C8A /* CameraAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 261EBB4A699B2CB8874BB355 /* CameraAvailabilityTests.swift */; };
+		14AFD377C3A04F628850B4E5 /* QRPairingScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E974D2ADEDF74929D873431F /* QRPairingScreen.swift */; };
+		1F7AF540769474A36516510F /* ChatBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75175DDF254EB3B04F933A5A /* ChatBubbleView.swift */; };
+		258A2D8AC02B93C3A424EAAF /* AgentScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8B61AD59CF9034274428910 /* AgentScreen.swift */; };
+		2D45B59EBAADC7F63EF84DC2 /* CameraAvailability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 101AC3DA86CCB01A01F7ADCA /* CameraAvailability.swift */; };
+		35C4F3C0BABA32B7DC61E54B /* SessionCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8ED2FED2CD280957193E9CF /* SessionCards.swift */; };
+		4538B1AD2B32BAA17B57F98C /* FixtureIntegrityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97161AD90134E001CC2FA755 /* FixtureIntegrityTests.swift */; };
+		4E97D6D90626F03DC177E0F2 /* SessionScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7402473975EF5D002E9167D /* SessionScreen.swift */; };
+		4ED0903CC3A78C2BAE197A7C /* PushHintContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCEA28C0547B35795AC8CD4F /* PushHintContractTests.swift */; };
+		54EF6674ED44254F2ED3A70A /* ConnectionStateMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16F1B93D9BD18DCED1F2140B /* ConnectionStateMachineTests.swift */; };
+		5570DE816FD6E38E5436768E /* UkkTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 752406E94E8FF7DC16F26F08 /* UkkTheme.swift */; };
+		56B426ED9DC25BACA51B570F /* Fixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29D4C962EE9B9F241D6FE2D5 /* Fixtures.swift */; };
+		5EDBE7B2BB0F24F68B964CFE /* ConnectionStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF25F58065A5494008E5E26 /* ConnectionStatusView.swift */; };
+		660C7589270BDDA5FE40E497 /* Identifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2925042CA7AB1D5BD0818A24 /* Identifiers.swift */; };
+		71FBB03AD4BE6E0CB431615E /* WorkspaceScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 034EFA0257EA23604971FE77 /* WorkspaceScreens.swift */; };
+		84B6D8274EEEEC5BE5F486F2 /* UkkCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EF718841ACA73110593737D /* UkkCompanionApp.swift */; };
+		8CFF14B4A1357AF0A2243B1F /* ApprovalCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 088BAC136771EBA13D0AB02E /* ApprovalCapabilityTests.swift */; };
+		9B14F85A80771087CA24ACE6 /* FixtureShellUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAAC2D647FB3BF352F0E7B86 /* FixtureShellUITests.swift */; };
+		A6FFE3E5C40E34FB5613FE62 /* ConnectionStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA9AC0CDAFA2208E255ABD1 /* ConnectionStateMachine.swift */; };
+		A76775FEB71673AD6C7AF0F2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5EFBE656060DCD5A53505FCF /* Assets.xcassets */; };
+		AE0FF0BCF6AD4A7266846345 /* AppModelPairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42566F977CE8887B5B1FB21B /* AppModelPairingTests.swift */; };
+		BA955AAED3DB2094A4D2A01C /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51ADA552392D6B74C0A63699 /* QRScannerView.swift */; };
+		C3F3FE40FEBD329DE81B23EB /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 353DB8DFF712A961210E01ED /* AppModel.swift */; };
+		C83FAC0691CB84DA4063E667 /* NavigationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CF8B1A46883A8C60EED20C /* NavigationState.swift */; };
+		C9BA30823D05F0B877908150 /* Rows.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF5CA535F6B55C0570022450 /* Rows.swift */; };
+		DFD3335D5AB830B41DEFB404 /* TrustedDevicesScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91DAE4B8F61C5B5D0297C882 /* TrustedDevicesScreen.swift */; };
+		E29889A5C68B77F60271388B /* TrustedDevices.swift in Sources */ = {isa = PBXBuildFile; fileRef = D551C34414BD948466C6717D /* TrustedDevices.swift */; };
+		E5E7CC298A9DFF7FF332AF70 /* PushHintContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = F707B4D8882CDD5137C1EE49 /* PushHintContracts.swift */; };
+		E92400A25592DE36E6597B69 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03C4CBB774867BD1ED2C5BE8 /* Models.swift */; };
+		F83665E38FB3F88281B2F15A /* SessionPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DB92502683FA5150A18C74A /* SessionPresentation.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		39E216FA57DC63D3196FE437 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6ACED1403DAC872756C6DD6E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 459E8B42B7734148B6D8FD5D;
+			remoteInfo = UkkCompanion;
+		};
+		D6EC3414BDF41CD1B2318439 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6ACED1403DAC872756C6DD6E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 459E8B42B7734148B6D8FD5D;
+			remoteInfo = UkkCompanion;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		034EFA0257EA23604971FE77 /* WorkspaceScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceScreens.swift; sourceTree = "<group>"; };
+		03C4CBB774867BD1ED2C5BE8 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		088BAC136771EBA13D0AB02E /* ApprovalCapabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalCapabilityTests.swift; sourceTree = "<group>"; };
+		101AC3DA86CCB01A01F7ADCA /* CameraAvailability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraAvailability.swift; sourceTree = "<group>"; };
+		16F1B93D9BD18DCED1F2140B /* ConnectionStateMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStateMachineTests.swift; sourceTree = "<group>"; };
+		22EA3D5888F5C6E3BCB71678 /* TrustedDeviceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustedDeviceStoreTests.swift; sourceTree = "<group>"; };
+		261EBB4A699B2CB8874BB355 /* CameraAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraAvailabilityTests.swift; sourceTree = "<group>"; };
+		2925042CA7AB1D5BD0818A24 /* Identifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Identifiers.swift; sourceTree = "<group>"; };
+		29D4C962EE9B9F241D6FE2D5 /* Fixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fixtures.swift; sourceTree = "<group>"; };
+		2EF718841ACA73110593737D /* UkkCompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UkkCompanionApp.swift; sourceTree = "<group>"; };
+		353DB8DFF712A961210E01ED /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		42566F977CE8887B5B1FB21B /* AppModelPairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelPairingTests.swift; sourceTree = "<group>"; };
+		51ADA552392D6B74C0A63699 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
+		5EFBE656060DCD5A53505FCF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		75175DDF254EB3B04F933A5A /* ChatBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBubbleView.swift; sourceTree = "<group>"; };
+		752406E94E8FF7DC16F26F08 /* UkkTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UkkTheme.swift; sourceTree = "<group>"; };
+		7A189126131F7D2DD376DAE7 /* NavigationStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationStateTests.swift; sourceTree = "<group>"; };
+		7DB92502683FA5150A18C74A /* SessionPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPresentation.swift; sourceTree = "<group>"; };
+		8EF25F58065A5494008E5E26 /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
+		9094E7A11FF9FDE653E5C5B9 /* UkkCompanionTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UkkCompanionTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		91DAE4B8F61C5B5D0297C882 /* TrustedDevicesScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustedDevicesScreen.swift; sourceTree = "<group>"; };
+		97161AD90134E001CC2FA755 /* FixtureIntegrityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureIntegrityTests.swift; sourceTree = "<group>"; };
+		A32E4278FF5DB7F2B582F39D /* PairingInviteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingInviteTests.swift; sourceTree = "<group>"; };
+		A9CF8B1A46883A8C60EED20C /* NavigationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationState.swift; sourceTree = "<group>"; };
+		AA9D200EA8EF326AF46250AC /* UkkCompanion.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = UkkCompanion.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B759F81F96D3DEE7C5D87474 /* PairingInvite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingInvite.swift; sourceTree = "<group>"; };
+		C8B61AD59CF9034274428910 /* AgentScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentScreen.swift; sourceTree = "<group>"; };
+		C8ED2FED2CD280957193E9CF /* SessionCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCards.swift; sourceTree = "<group>"; };
+		CF5CA535F6B55C0570022450 /* Rows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Rows.swift; sourceTree = "<group>"; };
+		CF979CD4BE324DFE2287B7FB /* UkkCompanionUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UkkCompanionUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D551C34414BD948466C6717D /* TrustedDevices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustedDevices.swift; sourceTree = "<group>"; };
+		D7402473975EF5D002E9167D /* SessionScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionScreen.swift; sourceTree = "<group>"; };
+		DBA9AC0CDAFA2208E255ABD1 /* ConnectionStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStateMachine.swift; sourceTree = "<group>"; };
+		DCEA28C0547B35795AC8CD4F /* PushHintContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushHintContractTests.swift; sourceTree = "<group>"; };
+		E974D2ADEDF74929D873431F /* QRPairingScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRPairingScreen.swift; sourceTree = "<group>"; };
+		EAAC2D647FB3BF352F0E7B86 /* FixtureShellUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureShellUITests.swift; sourceTree = "<group>"; };
+		F707B4D8882CDD5137C1EE49 /* PushHintContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushHintContracts.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		11E1B3E1D0A7A0EE713D218C /* Screens */ = {
+			isa = PBXGroup;
+			children = (
+				C8B61AD59CF9034274428910 /* AgentScreen.swift */,
+				E974D2ADEDF74929D873431F /* QRPairingScreen.swift */,
+				CF5CA535F6B55C0570022450 /* Rows.swift */,
+				D7402473975EF5D002E9167D /* SessionScreen.swift */,
+				91DAE4B8F61C5B5D0297C882 /* TrustedDevicesScreen.swift */,
+				034EFA0257EA23604971FE77 /* WorkspaceScreens.swift */,
+			);
+			path = Screens;
+			sourceTree = "<group>";
+		};
+		1E6C60C14E477FEC7606A0C2 = {
+			isa = PBXGroup;
+			children = (
+				AC8FC8E38F8CFA2A0BD418FD /* UkkCompanion */,
+				C485FA5CFFF19BA0F33CBF24 /* UkkCompanionTests */,
+				BDB3A0CBDF2BEAC23B35936F /* UkkCompanionUITests */,
+				347FF6C2579AA5C884EF995D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		254CC7CBF9DF2EBC18055D7A /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				5EFBE656060DCD5A53505FCF /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		25E505040C7F9C725C657EBA /* App */ = {
+			isa = PBXGroup;
+			children = (
+				353DB8DFF712A961210E01ED /* AppModel.swift */,
+				2EF718841ACA73110593737D /* UkkCompanionApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		347FF6C2579AA5C884EF995D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA9D200EA8EF326AF46250AC /* UkkCompanion.app */,
+				9094E7A11FF9FDE653E5C5B9 /* UkkCompanionTests.xctest */,
+				CF979CD4BE324DFE2287B7FB /* UkkCompanionUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		6CAB6E2A4A4271CB5C9C1470 /* Scanner */ = {
+			isa = PBXGroup;
+			children = (
+				101AC3DA86CCB01A01F7ADCA /* CameraAvailability.swift */,
+				51ADA552392D6B74C0A63699 /* QRScannerView.swift */,
+			);
+			path = Scanner;
+			sourceTree = "<group>";
+		};
+		AC8FC8E38F8CFA2A0BD418FD /* UkkCompanion */ = {
+			isa = PBXGroup;
+			children = (
+				25E505040C7F9C725C657EBA /* App */,
+				EF572712A5737696469CCEFD /* Components */,
+				CA42F64605E6676D254D11A0 /* Domain */,
+				254CC7CBF9DF2EBC18055D7A /* Resources */,
+				6CAB6E2A4A4271CB5C9C1470 /* Scanner */,
+				11E1B3E1D0A7A0EE713D218C /* Screens */,
+			);
+			path = UkkCompanion;
+			sourceTree = "<group>";
+		};
+		BDB3A0CBDF2BEAC23B35936F /* UkkCompanionUITests */ = {
+			isa = PBXGroup;
+			children = (
+				EAAC2D647FB3BF352F0E7B86 /* FixtureShellUITests.swift */,
+			);
+			path = UkkCompanionUITests;
+			sourceTree = "<group>";
+		};
+		C485FA5CFFF19BA0F33CBF24 /* UkkCompanionTests */ = {
+			isa = PBXGroup;
+			children = (
+				42566F977CE8887B5B1FB21B /* AppModelPairingTests.swift */,
+				088BAC136771EBA13D0AB02E /* ApprovalCapabilityTests.swift */,
+				261EBB4A699B2CB8874BB355 /* CameraAvailabilityTests.swift */,
+				16F1B93D9BD18DCED1F2140B /* ConnectionStateMachineTests.swift */,
+				97161AD90134E001CC2FA755 /* FixtureIntegrityTests.swift */,
+				7A189126131F7D2DD376DAE7 /* NavigationStateTests.swift */,
+				A32E4278FF5DB7F2B582F39D /* PairingInviteTests.swift */,
+				DCEA28C0547B35795AC8CD4F /* PushHintContractTests.swift */,
+				22EA3D5888F5C6E3BCB71678 /* TrustedDeviceStoreTests.swift */,
+			);
+			path = UkkCompanionTests;
+			sourceTree = "<group>";
+		};
+		CA42F64605E6676D254D11A0 /* Domain */ = {
+			isa = PBXGroup;
+			children = (
+				DBA9AC0CDAFA2208E255ABD1 /* ConnectionStateMachine.swift */,
+				29D4C962EE9B9F241D6FE2D5 /* Fixtures.swift */,
+				2925042CA7AB1D5BD0818A24 /* Identifiers.swift */,
+				03C4CBB774867BD1ED2C5BE8 /* Models.swift */,
+				A9CF8B1A46883A8C60EED20C /* NavigationState.swift */,
+				B759F81F96D3DEE7C5D87474 /* PairingInvite.swift */,
+				F707B4D8882CDD5137C1EE49 /* PushHintContracts.swift */,
+				7DB92502683FA5150A18C74A /* SessionPresentation.swift */,
+				D551C34414BD948466C6717D /* TrustedDevices.swift */,
+			);
+			path = Domain;
+			sourceTree = "<group>";
+		};
+		EF572712A5737696469CCEFD /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				75175DDF254EB3B04F933A5A /* ChatBubbleView.swift */,
+				8EF25F58065A5494008E5E26 /* ConnectionStatusView.swift */,
+				C8ED2FED2CD280957193E9CF /* SessionCards.swift */,
+				752406E94E8FF7DC16F26F08 /* UkkTheme.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		459E8B42B7734148B6D8FD5D /* UkkCompanion */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0569DE2DBC146192F43EFE42 /* Build configuration list for PBXNativeTarget "UkkCompanion" */;
+			buildPhases = (
+				DF938B2CB89DC1AF5645B2DB /* Sources */,
+				65FA5DD74FEE86EBE08EC7BD /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = UkkCompanion;
+			packageProductDependencies = (
+			);
+			productName = UkkCompanion;
+			productReference = AA9D200EA8EF326AF46250AC /* UkkCompanion.app */;
+			productType = "com.apple.product-type.application";
+		};
+		73BD827A822F17BB9392A0D9 /* UkkCompanionUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F4AD79EB6E1002ECCAC495FF /* Build configuration list for PBXNativeTarget "UkkCompanionUITests" */;
+			buildPhases = (
+				1E33D95E6CA201CB723AB5C3 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F35A5FAD8761EE14773DCFB4 /* PBXTargetDependency */,
+			);
+			name = UkkCompanionUITests;
+			packageProductDependencies = (
+			);
+			productName = UkkCompanionUITests;
+			productReference = CF979CD4BE324DFE2287B7FB /* UkkCompanionUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		E3DCAF5137629F7B6EF2923A /* UkkCompanionTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C577385325B0A3A568F0A30E /* Build configuration list for PBXNativeTarget "UkkCompanionTests" */;
+			buildPhases = (
+				C84F50B4D593EBA95158EFAD /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9EC41AC7764C692039737711 /* PBXTargetDependency */,
+			);
+			name = UkkCompanionTests;
+			packageProductDependencies = (
+			);
+			productName = UkkCompanionTests;
+			productReference = 9094E7A11FF9FDE653E5C5B9 /* UkkCompanionTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		6ACED1403DAC872756C6DD6E /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					459E8B42B7734148B6D8FD5D = {
+						ProvisioningStyle = Automatic;
+					};
+					73BD827A822F17BB9392A0D9 = {
+						ProvisioningStyle = Automatic;
+						TestTargetID = 459E8B42B7734148B6D8FD5D;
+					};
+					E3DCAF5137629F7B6EF2923A = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 13D2FF2877554C6066586D91 /* Build configuration list for PBXProject "UkkCompanion" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 1E6C60C14E477FEC7606A0C2;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				459E8B42B7734148B6D8FD5D /* UkkCompanion */,
+				E3DCAF5137629F7B6EF2923A /* UkkCompanionTests */,
+				73BD827A822F17BB9392A0D9 /* UkkCompanionUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		65FA5DD74FEE86EBE08EC7BD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A76775FEB71673AD6C7AF0F2 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1E33D95E6CA201CB723AB5C3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9B14F85A80771087CA24ACE6 /* FixtureShellUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C84F50B4D593EBA95158EFAD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AE0FF0BCF6AD4A7266846345 /* AppModelPairingTests.swift in Sources */,
+				8CFF14B4A1357AF0A2243B1F /* ApprovalCapabilityTests.swift in Sources */,
+				0F441031CDC504BF62281C8A /* CameraAvailabilityTests.swift in Sources */,
+				54EF6674ED44254F2ED3A70A /* ConnectionStateMachineTests.swift in Sources */,
+				4538B1AD2B32BAA17B57F98C /* FixtureIntegrityTests.swift in Sources */,
+				093815CC35074AD2106AAE4F /* NavigationStateTests.swift in Sources */,
+				077AB0FD8551DF696409D8B4 /* PairingInviteTests.swift in Sources */,
+				4ED0903CC3A78C2BAE197A7C /* PushHintContractTests.swift in Sources */,
+				057F09B28744AA4EF9DFEF25 /* TrustedDeviceStoreTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF938B2CB89DC1AF5645B2DB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				258A2D8AC02B93C3A424EAAF /* AgentScreen.swift in Sources */,
+				C3F3FE40FEBD329DE81B23EB /* AppModel.swift in Sources */,
+				2D45B59EBAADC7F63EF84DC2 /* CameraAvailability.swift in Sources */,
+				1F7AF540769474A36516510F /* ChatBubbleView.swift in Sources */,
+				A6FFE3E5C40E34FB5613FE62 /* ConnectionStateMachine.swift in Sources */,
+				5EDBE7B2BB0F24F68B964CFE /* ConnectionStatusView.swift in Sources */,
+				56B426ED9DC25BACA51B570F /* Fixtures.swift in Sources */,
+				660C7589270BDDA5FE40E497 /* Identifiers.swift in Sources */,
+				E92400A25592DE36E6597B69 /* Models.swift in Sources */,
+				C83FAC0691CB84DA4063E667 /* NavigationState.swift in Sources */,
+				08C79B34DDD10469FA46A6C7 /* PairingInvite.swift in Sources */,
+				E5E7CC298A9DFF7FF332AF70 /* PushHintContracts.swift in Sources */,
+				14AFD377C3A04F628850B4E5 /* QRPairingScreen.swift in Sources */,
+				BA955AAED3DB2094A4D2A01C /* QRScannerView.swift in Sources */,
+				C9BA30823D05F0B877908150 /* Rows.swift in Sources */,
+				35C4F3C0BABA32B7DC61E54B /* SessionCards.swift in Sources */,
+				F83665E38FB3F88281B2F15A /* SessionPresentation.swift in Sources */,
+				4E97D6D90626F03DC177E0F2 /* SessionScreen.swift in Sources */,
+				E29889A5C68B77F60271388B /* TrustedDevices.swift in Sources */,
+				DFD3335D5AB830B41DEFB404 /* TrustedDevicesScreen.swift in Sources */,
+				84B6D8274EEEEC5BE5F486F2 /* UkkCompanionApp.swift in Sources */,
+				5570DE816FD6E38E5436768E /* UkkTheme.swift in Sources */,
+				71FBB03AD4BE6E0CB431615E /* WorkspaceScreens.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		9EC41AC7764C692039737711 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 459E8B42B7734148B6D8FD5D /* UkkCompanion */;
+			targetProxy = D6EC3414BDF41CD1B2318439 /* PBXContainerItemProxy */;
+		};
+		F35A5FAD8761EE14773DCFB4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 459E8B42B7734148B6D8FD5D /* UkkCompanion */;
+			targetProxy = 39E216FA57DC63D3196FE437 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		1B5C19B13A0876ECA4E73E89 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		2C19ECF76B54C2FAC3DAA815 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = ukk;
+				INFOPLIST_KEY_NSCameraUsageDescription = "ukk uses the camera only to scan a Desktop pairing QR code. This fixture build never connects to a Host.";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ukk.companion;
+				PRODUCT_NAME = UkkCompanion;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		695483E3740AA692C8B26AEF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ukk.companion.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = UkkCompanion;
+			};
+			name = Debug;
+		};
+		80472060B12E610FA7F42D16 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ukk.companion.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/UkkCompanion.app/UkkCompanion";
+			};
+			name = Release;
+		};
+		B0C4540C742E244DF0DE613E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ukk.companion.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = UkkCompanion;
+			};
+			name = Release;
+		};
+		B67CE32B85E1F982BF612717 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ukk.companion.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/UkkCompanion.app/UkkCompanion";
+			};
+			name = Debug;
+		};
+		BD520BE089F8924E2A7CB291 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E77820FFCBCF52FCE2F64EC8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = ukk;
+				INFOPLIST_KEY_NSCameraUsageDescription = "ukk uses the camera only to scan a Desktop pairing QR code. This fixture build never connects to a Host.";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ukk.companion;
+				PRODUCT_NAME = UkkCompanion;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0569DE2DBC146192F43EFE42 /* Build configuration list for PBXNativeTarget "UkkCompanion" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2C19ECF76B54C2FAC3DAA815 /* Debug */,
+				E77820FFCBCF52FCE2F64EC8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		13D2FF2877554C6066586D91 /* Build configuration list for PBXProject "UkkCompanion" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1B5C19B13A0876ECA4E73E89 /* Debug */,
+				BD520BE089F8924E2A7CB291 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C577385325B0A3A568F0A30E /* Build configuration list for PBXNativeTarget "UkkCompanionTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B67CE32B85E1F982BF612717 /* Debug */,
+				80472060B12E610FA7F42D16 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F4AD79EB6E1002ECCAC495FF /* Build configuration list for PBXNativeTarget "UkkCompanionUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				695483E3740AA692C8B26AEF /* Debug */,
+				B0C4540C742E244DF0DE613E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 6ACED1403DAC872756C6DD6E /* Project object */;
+}
