@@ -9,8 +9,8 @@
 use serde_json::{json, Value};
 use ukk_domain::DomainSnapshot;
 use std::collections::{HashMap, HashSet};
-#[cfg(unix)]
 use std::env;
+use std::fs;
 use std::error::Error;
 use std::fmt;
 #[cfg(any(unix, windows))]
@@ -283,6 +283,54 @@ impl HostClient {
         &self.path
     }
 
+    /// Same-user capability for **local workspace metadata mutations only**.
+    /// The token file is outside the Relay protocol and never sent to hc.
+    #[cfg(unix)]
+    pub fn mutation_token_path(&self) -> PathBuf {
+        self.path.with_extension("token")
+    }
+
+    #[cfg(windows)]
+    pub fn mutation_token_path(&self) -> PathBuf {
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:\\nonexistent\\ukk"))
+            .join("ukk")
+            .join("run")
+            .join("agent-host.token")
+    }
+
+    pub fn mutation_token(&self) -> Result<String, HostError> {
+        let token = fs::read_to_string(self.mutation_token_path())?;
+        let token = token.trim();
+        if token.len() < 60 || !token.is_ascii() {
+            return Err(HostError::Protocol("invalid local Host mutation credential".into()));
+        }
+        Ok(token.to_owned())
+    }
+
+    /// Local desktop actions never touch PTY lifecycle or Agent approvals.
+    /// A mutation needs the Host's user-only capability plus an explicit
+    /// action payload (and a revision for all pane tree changes).
+    pub fn local_workspace_mutation(
+        &self,
+        method: &str,
+        mut params: Value,
+    ) -> Result<Value, HostError> {
+        if !matches!(
+            method,
+            "workspace.session.create" | "workspace.pane.split"
+                | "workspace.pane.close" | "workspace.pane.resize"
+        ) {
+            return Err(HostError::Protocol("method is not an allowed local workspace mutation".into()));
+        }
+        let object = params.as_object_mut().ok_or_else(|| {
+            HostError::Protocol("workspace mutation params must be an object".into())
+        })?;
+        object.insert("auth".into(), Value::String(self.mutation_token()?));
+        self.request_with(method, params, Duration::from_secs(5))
+    }
+
     pub fn ping(&self) -> Result<bool, HostError> {
         let value = self.request("host.ping")?;
         Ok(value.get("status").and_then(Value::as_str) == Some("ok"))
@@ -516,6 +564,19 @@ mod tests {
         payload["host_epoch"] = json!("test-host-1");
         payload["connected"] = json!(true);
         assert!(LiveHostState::from_result(&payload).is_err());
+    }
+
+    #[test]
+    fn local_mutation_allowlist_blocks_agent_and_terminal_commands() {
+        let client = HostClient::new("/nonexistent/ukk-test.sock");
+        assert!(matches!(
+            client.local_workspace_mutation("terminal.kill", json!({"terminal":"t1"})),
+            Err(HostError::Protocol(_))
+        ));
+        assert!(matches!(
+            client.local_workspace_mutation("agent.approval.respond", json!({})),
+            Err(HostError::Protocol(_))
+        ));
     }
 
     #[test]
