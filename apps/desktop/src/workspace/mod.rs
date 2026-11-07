@@ -12,6 +12,7 @@ mod actions;
 mod agent_detail;
 mod panes;
 mod render;
+mod resize;
 mod sidebar;
 mod state;
 mod toolbar;
@@ -20,6 +21,18 @@ mod toolbar;
 enum DetailTab {
     Overview,
     Runtime,
+}
+
+/// A drag gesture belongs to one split node, never an Agent process.
+#[derive(Clone)]
+struct DraggedSplitHandle {
+    split_id: String,
+}
+
+struct SplitDragPreview {
+    session_id: String,
+    split_id: String,
+    ratio: f32,
 }
 
 #[derive(Clone)]
@@ -48,6 +61,7 @@ pub(crate) struct Workspace {
     loading: bool,
     mutation_busy: bool,
     mutation_error: Option<String>,
+    split_drag_preview: Option<SplitDragPreview>,
     online: bool,
     message: Option<String>,
     host_epoch: String,
@@ -69,6 +83,7 @@ impl Workspace {
             loading: false,
             mutation_busy: false,
             mutation_error: None,
+            split_drag_preview: None,
             online: false,
             message: None,
             host_epoch: String::new(),
