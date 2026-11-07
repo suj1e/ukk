@@ -102,5 +102,4 @@ impl Workspace {
         self.mutate(method, params, false, cx);
     }
 
-    /// A manual fallback for inspecting Host connectivity and state.
 }
