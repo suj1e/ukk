@@ -40,6 +40,38 @@ impl Workspace {
             .child(label)
     }
 
+    pub(super) fn surface_button<F>(
+        &self,
+        id: String,
+        label: &'static str,
+        aria_label: String,
+        handler: F,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement
+    where
+        F: Fn(&mut Self, &mut Context<Self>) + 'static,
+    {
+        div()
+            .id(id)
+            .role(Role::Button)
+            .aria_label(aria_label)
+            .focusable()
+            .focus_visible(|style| style.border_color(rgb(ACCENT)))
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(LINE))
+            .bg(rgb(WHITE))
+            .text_xs()
+            .text_color(rgb(ACCENT))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(SURFACE)))
+            .on_click(cx.listener(move |this, _, _, cx| handler(this, cx)))
+            .child(label)
+            .into_any_element()
+    }
+
     pub(super) fn session_pane(&self, node: &PaneNode, cx: &mut Context<Self>) -> gpui::AnyElement {
         match node {
             PaneNode::Leaf { id, content } => {
