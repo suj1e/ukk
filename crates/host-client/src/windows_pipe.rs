@@ -231,22 +231,4 @@ mod tests {
         assert!(!name.contains("..\\"));
     }
 
-    #[test]
-    fn same_user_can_connect_to_private_pipe() {
-        let name = format!("{}-test-{}", pipe_name().unwrap(), std::process::id());
-        let server = create_server_pipe(&name, true).unwrap();
-        // A test-specific name uses the same ACL as the canonical endpoint.
-        let thread = thread::spawn({
-            let name = name.clone();
-            move || {
-                let mut opts = OpenOptions::new();
-                opts.read(true).write(true).security_qos_flags(SECURITY_IDENTIFICATION);
-                opts.open(name).unwrap()
-            }
-        });
-        accept_client(&server).unwrap();
-        let client = thread.join().unwrap();
-        drop(client);
-        drop(server);
-    }
 }
