@@ -68,9 +68,6 @@ impl Workspace {
                 let tab_id = tab.id.clone();
                 let group = group_id_owned.clone();
                 let session = current_session.clone();
-                let key_session = current_session.clone();
-                let key_group = group_id_owned.clone();
-                let key_tab = tab.id.clone();
                 div()
                     .id(format!("tab-{group}-{tab_id}"))
                     .role(Role::Tab)
@@ -95,18 +92,13 @@ impl Workspace {
                     .text_color(rgb(if selected { ACCENT } else { MUTED }))
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(WHITE)))
+                    // Keyboard activation is GPUI's built-in role=Tab
+                    // click-on-key-up; no duplicate local key handler.
                     .on_click(cx.listener(move |this, _, _, cx| {
                         // Do not let an old click from a different Session
                         // steal focus after switching Workspace context.
                         if this.selected_session.as_deref() == Some(&session) {
                             this.focus_tab(&group, &tab_id, cx);
-                        }
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
-                            && this.selected_session.as_deref() == Some(&key_session)
-                        {
-                            this.focus_tab(&key_group, &key_tab, cx);
                         }
                     }))
                     .on_drag(

@@ -11,7 +11,6 @@ impl Workspace {
         keyshortcuts: Option<&'static str>,
         action: PaneAction,
     ) -> impl IntoElement {
-        let keyboard_action = action.clone();
         div()
             .id(id)
             .role(Role::Button)
@@ -31,15 +30,11 @@ impl Workspace {
             .text_color(rgb(ACCENT))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(SURFACE)))
+            // GPUI activates a focused role=Button element on Enter/Space key
+            // up; adding another key handler here would double-apply actions.
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.mutation_busy {
                     this.pane_action(action.clone(), cx);
-                }
-            }))
-            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                if !this.mutation_busy && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                {
-                    this.pane_action(keyboard_action.clone(), cx);
                 }
             }))
             .child(label)

@@ -1,5 +1,6 @@
 //! Runtime subscription, snapshot reconciliation and foreground refresh.
-use super::focus_store::{pane_order, recovery_target};
+use super::focus_store::{pane_entries, pane_order, recovery_target};
+use super::pane_focus::remote_tab_focus;
 use super::*;
 
 impl Workspace {
@@ -111,6 +112,32 @@ impl Workspace {
                 .find(|layout| layout.session_id == session_id)
                 .map(|layout| pane_order(&layout.root))
         });
+        // Capture active Tabs before reconciliation drops a remotely removed
+        // ID, so the Desktop can move focus to a real neighbour.
+        let previous_tab_focus: Vec<(String, String, Vec<String>)> = previous_session
+            .as_deref()
+            .and_then(|session_id| {
+                let layout = self
+                    .domain
+                    .layouts
+                    .iter()
+                    .find(|layout| layout.session_id == session_id)?;
+                let focus = self.local_focus.session(session_id)?;
+                Some(
+                    pane_entries(&layout.root)
+                        .into_iter()
+                        .filter(|entry| !entry.tabs.is_empty())
+                        .filter_map(|entry| {
+                            let active = focus.tabs.get(&entry.id)?;
+                            entry
+                                .tabs
+                                .contains(active)
+                                .then(|| (entry.id, active.clone(), entry.tabs))
+                        })
+                        .collect(),
+                )
+            })
+            .unwrap_or_default();
 
         let mut focus_changed = self.local_focus.reconcile(&domain);
 
@@ -155,12 +182,20 @@ impl Workspace {
             });
         }
         if let Some(session_id) = self.selected_session.clone() {
+            if let Some(session) = domain
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+            {
+                self.selected_space = Some(session.space_id.clone());
+            }
             self.local_focus.set_selected_session(Some(&session_id));
         }
         self.domain = domain;
+        self.workspace_snapshot_loaded = true;
 
         if let (Some(session_id), Some(previous_pane), Some(previous_order)) =
-            (previous_session, previous_pane, previous_order)
+            (previous_session.clone(), previous_pane, previous_order)
         {
             if self.selected_session.as_deref() == Some(session_id.as_str()) {
                 let next_order = self
@@ -176,6 +211,30 @@ impl Workspace {
                     {
                         self.local_focus.set_pane(&session_id, &target);
                         focus_changed = true;
+                    }
+                }
+            }
+        }
+        if self.selected_session.as_deref() == previous_session.as_deref() {
+            if let Some(session_id) = self.selected_session.clone() {
+                if let Some(layout) = self
+                    .domain
+                    .layouts
+                    .iter()
+                    .find(|layout| layout.session_id == session_id)
+                {
+                    let entries = pane_entries(&layout.root);
+                    for (group_id, active, old_tabs) in previous_tab_focus {
+                        if let Some(resolved) =
+                            remote_tab_focus(&old_tabs, &active, &group_id, &entries)
+                        {
+                            self.local_focus.set_pane(&session_id, &resolved.pane_id);
+                            if let Some(tab_id) = resolved.tab_id {
+                                self.local_focus
+                                    .set_tab(&session_id, &resolved.pane_id, &tab_id);
+                            }
+                            focus_changed = true;
+                        }
                     }
                 }
             }

@@ -1,10 +1,15 @@
 //! User-intent Workspace metadata commands; never Agent lifecycle actions.
+use super::pane_focus::split_ratio_payload;
 use super::*;
 use ukk_host_client::HostError;
 
 /// Host RPC code for an optimistic layout revision conflict. The Desktop
 /// must surface this rather than silently retrying with a guessed revision.
 const REVISION_CONFLICT_CODE: i64 = -32031;
+
+fn retry_session_matches(selected: Option<&str>, rejected_session: &str) -> bool {
+    selected == Some(rejected_session)
+}
 
 fn revision_conflict(error: &HostError) -> bool {
     match error {
@@ -52,6 +57,7 @@ impl Workspace {
                 match result {
                     Ok(value) => {
                         view.in_flight_action = None;
+                        view.in_flight_session = None;
                         view.conflict = None;
                         if select_created_session {
                             view.selected_session =
@@ -76,12 +82,15 @@ impl Workspace {
                         view.pending_pane_focus = None;
                         if revision_conflict(&error) {
                             let action = view.in_flight_action.take();
+                            let session_id = view.in_flight_session.take();
                             view.conflict = Some(ConflictNotice {
                                 message: "Another window or client changed this Session layout. Your change was not applied.".into(),
                                 action,
+                                session_id,
                             });
                         } else {
                             view.in_flight_action = None;
+                            view.in_flight_session = None;
                             view.mutation_error = Some(error.to_string());
                         }
                     }
@@ -94,6 +103,9 @@ impl Workspace {
     }
 
     pub(super) fn create_session(&mut self, cx: &mut Context<Self>) {
+        if self.mutation_busy {
+            return;
+        }
         let space_id = self
             .selected_space
             .clone()
@@ -104,7 +116,6 @@ impl Workspace {
             cx.notify();
             return;
         };
-        self.in_flight_action = None;
         let count = self
             .domain
             .sessions
@@ -162,7 +173,7 @@ impl Workspace {
                 "workspace.pane.resize",
                 json!({
                     "session_id":session_id,"split_id":split_id,
-                    "ratio":ratio,"expected_revision":revision
+                    "ratio":split_ratio_payload(ratio),"expected_revision":revision
                 }),
             ),
             PaneAction::TabAdd {
@@ -208,27 +219,67 @@ impl Workspace {
             ),
         };
         self.in_flight_action = Some(retry_action);
+        self.in_flight_session = Some(session_id);
         self.mutate(method, params, false, cx);
     }
 
     /// Explicit user retry after a stale CAS rejection: reload the authoritative
-    /// revision first, then re-issue the same intent exactly once.
+    /// revision first, then re-issue the same intent exactly once. The intent
+    /// carries its originating Session so its IDs are never applied elsewhere.
     pub(super) fn retry_conflict(&mut self, cx: &mut Context<Self>) {
         let Some(conflict) = self.conflict.take() else {
             return;
         };
         self.mutation_error = None;
         if let Some(action) = conflict.action {
-            self.retry_after_reload = Some(action);
+            if let Some(session_id) = conflict.session_id {
+                let exists = self
+                    .domain
+                    .sessions
+                    .iter()
+                    .any(|session| session.id == session_id);
+                if !exists {
+                    self.mutation_error = Some(
+                        "The Session that rejected this change no longer exists; review the reloaded layout."
+                            .into(),
+                    );
+                } else {
+                    if !retry_session_matches(self.selected_session.as_deref(), &session_id) {
+                        // Switch back to the owning Session explicitly; never
+                        // translate old Pane/Tab IDs into the current one.
+                        self.selected_space = self
+                            .domain
+                            .sessions
+                            .iter()
+                            .find(|session| session.id == session_id)
+                            .map(|session| session.space_id.clone())
+                            .or_else(|| self.selected_space.clone());
+                        self.selected_session = Some(session_id.clone());
+                        self.selected = None;
+                        self.focus_touched = true;
+                        self.local_focus.set_selected_session(Some(&session_id));
+                        self.persist_local_focus(cx);
+                    }
+                    self.retry_after_reload = Some((session_id, action));
+                }
+            }
         }
         self.refresh(cx);
         cx.notify();
     }
 
     pub(super) fn apply_retry_after_reload(&mut self, cx: &mut Context<Self>) {
-        let Some(action) = self.retry_after_reload.take() else {
+        let Some((session_id, action)) = self.retry_after_reload.take() else {
             return;
         };
+        if !retry_session_matches(self.selected_session.as_deref(), &session_id) {
+            self.mutation_error = Some(
+                "Retry was cancelled because the focused Session changed; the layout was reloaded."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
         self.pane_action(action, cx);
     }
 
@@ -267,5 +318,12 @@ mod tests {
         assert!(revision_conflict(&by_message));
         assert!(!revision_conflict(&other));
         assert!(!revision_conflict(&HostError::Protocol("offline".into())));
+    }
+
+    #[test]
+    fn retry_is_rejected_after_switching_session() {
+        assert!(retry_session_matches(Some("session-a"), "session-a"));
+        assert!(!retry_session_matches(Some("session-b"), "session-a"));
+        assert!(!retry_session_matches(None, "session-a"));
     }
 }

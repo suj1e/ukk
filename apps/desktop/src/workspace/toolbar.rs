@@ -186,6 +186,8 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0x00000000))
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _, cx| this.dismiss_conflict(cx)))
                     .child("Dismiss"),

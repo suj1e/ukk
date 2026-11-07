@@ -198,6 +198,46 @@ impl LocalFocus {
     }
 }
 
+/// Result of adopting a settings file that arrived asynchronously.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AdoptionOutcome {
+    /// No authoritative Host snapshot yet: keep the saved identifiers intact
+    /// instead of reconciling them against an empty bootstrap domain.
+    Deferred(LocalFocus),
+    /// A user action or terminal view already expressed newer local intent.
+    Rejected,
+    /// The snapshot is authoritative; stale identifiers were reconciled.
+    Adopted {
+        focus: LocalFocus,
+        selected_session: Option<String>,
+    },
+}
+
+pub(super) fn adopt_loaded_focus_value(
+    mut focus: LocalFocus,
+    domain: Option<&DomainSnapshot>,
+    user_touched: bool,
+    terminal_view: bool,
+) -> AdoptionOutcome {
+    if user_touched || terminal_view {
+        return AdoptionOutcome::Rejected;
+    }
+    let Some(domain) = domain else {
+        return AdoptionOutcome::Deferred(focus);
+    };
+    focus.reconcile(domain);
+    let selected_session = focus.selected_session.clone().filter(|session_id| {
+        domain
+            .sessions
+            .iter()
+            .any(|session| &session.id == session_id && !session.archived)
+    });
+    AdoptionOutcome::Adopted {
+        focus,
+        selected_session,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Platform {
     MacOs,
@@ -274,15 +314,64 @@ pub(super) fn load_from(path: &Path) -> Result<LoadOutcome, String> {
     }
     let raw =
         fs::read_to_string(path).map_err(|error| format!("cannot read focus settings: {error}"))?;
-    let focus: LocalFocus = serde_json::from_str(&raw)
+    // Inspect the version before typed deserialization: a newer file may be
+    // perfectly valid JSON yet incompatible with this struct, and must never
+    // be parsed-then-overwritten as if it were corrupt.
+    let value: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|error| format!("focus settings are not valid JSON: {error}"))?;
-    if focus.version > SETTINGS_VERSION {
-        return Ok(LoadOutcome::Unsupported(focus.version));
+    let version = value
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .map(|version| version as u32)
+        .unwrap_or(SETTINGS_VERSION);
+    if version > SETTINGS_VERSION {
+        return Ok(LoadOutcome::Unsupported(version));
     }
+    let focus: LocalFocus = serde_json::from_value(value)
+        .map_err(|error| format!("focus settings have an unsupported shape: {error}"))?;
     Ok(LoadOutcome::Loaded(focus))
 }
 
 static SAVE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Replace the destination. Unix `rename` already replaces atomically; some
+/// Windows configurations refuse, so keep a copy of the old file until the
+/// replacement has succeeded instead of deleting it first.
+fn replace_file(temporary: &Path, path: &Path, unique: u64) -> Result<(), String> {
+    match fs::rename(temporary, path) {
+        Ok(()) => return Ok(()),
+        Err(first_error) if !path.exists() => {
+            let _ = fs::remove_file(temporary);
+            return Err(format!("cannot write focus settings: {first_error}"));
+        }
+        Err(_) => {}
+    }
+    let backup = path.with_file_name(format!(
+        ".{FILE_NAME}.{}.{unique}.backup",
+        std::process::id()
+    ));
+    fs::copy(path, &backup).map_err(|error| {
+        let _ = fs::remove_file(temporary);
+        format!("cannot preserve the previous focus settings: {error}")
+    })?;
+    if let Err(error) = fs::remove_file(path) {
+        let _ = fs::remove_file(temporary);
+        let _ = fs::remove_file(&backup);
+        return Err(format!("cannot replace focus settings: {error}"));
+    }
+    match fs::rename(temporary, path) {
+        Ok(()) => {
+            let _ = fs::remove_file(&backup);
+            Ok(())
+        }
+        Err(error) => {
+            // Restore the previous file; never leave the user without one.
+            let _ = fs::rename(&backup, path);
+            let _ = fs::remove_file(temporary);
+            Err(format!("cannot replace focus settings: {error}"))
+        }
+    }
+}
 
 /// Write atomically so a crash mid-write cannot leave corrupt preferences.
 pub(super) fn save_to(path: &Path, focus: &LocalFocus) -> Result<(), String> {
@@ -307,21 +396,7 @@ pub(super) fn save_to(path: &Path, focus: &LocalFocus) -> Result<(), String> {
         let _ = fs::remove_file(&temporary);
         return Err(format!("cannot write focus settings: {error}"));
     }
-    match fs::rename(&temporary, path) {
-        Ok(()) => Ok(()),
-        Err(first_error) => {
-            // Windows rename does not replace an existing destination.
-            if path.exists() {
-                fs::remove_file(path)
-                    .map_err(|error| format!("cannot replace focus settings: {error}"))?;
-                fs::rename(&temporary, path)
-                    .map_err(|error| format!("cannot replace focus settings: {error}"))
-            } else {
-                let _ = fs::remove_file(&temporary);
-                Err(format!("cannot write focus settings: {first_error}"))
-            }
-        }
-    }
+    replace_file(&temporary, path, unique)
 }
 
 impl Workspace {
@@ -349,9 +424,8 @@ impl Workspace {
                 view.focus_path = Some(path);
                 match result {
                     Ok(LoadOutcome::Loaded(focus)) => {
-                        view.local_focus = focus;
                         view.focus_save_enabled = true;
-                        view.adopt_loaded_focus();
+                        view.adopt_loaded_focus(focus);
                     }
                     Ok(LoadOutcome::Missing) => {
                         view.focus_save_enabled = true;
@@ -363,7 +437,8 @@ impl Workspace {
                         ));
                     }
                     Err(error) => {
-                        view.focus_save_enabled = true;
+                        // Never overwrite a file we could not understand.
+                        view.focus_save_enabled = false;
                         view.focus_save_error = Some(error);
                     }
                 }
@@ -374,25 +449,36 @@ impl Workspace {
         .detach();
     }
 
-    /// Reconcile loaded focus with the layout that arrived independently from
-    /// the Host. A removed Pane cannot keep or steal focus.
-    fn adopt_loaded_focus(&mut self) {
-        if self.focus_touched || self.selected.is_some() {
-            // A user action or terminal view happened before the read
-            // completed; local intent wins over the stored snapshot.
-            return;
-        }
-        self.local_focus.reconcile(&self.domain);
-        // The Host refresh may already have auto-selected the first Session.
-        // That is not a user choice, so the stored Session still wins.
-        if let Some(session_id) = self.local_focus.selected_session.clone() {
-            if self
-                .domain
-                .sessions
-                .iter()
-                .any(|session| session.id == session_id && !session.archived)
-            {
-                self.selected_session = Some(session_id);
+    /// Adopt a settings file that arrived asynchronously. Reconciliation is
+    /// deferred until the first authoritative Host snapshot: on startup the
+    /// file usually wins the race against `workspace_state`, and the empty
+    /// bootstrap domain would otherwise delete every saved identifier.
+    pub(super) fn adopt_loaded_focus(&mut self, loaded: LocalFocus) {
+        let domain = self.workspace_snapshot_loaded.then_some(&self.domain);
+        match adopt_loaded_focus_value(loaded, domain, self.focus_touched, self.selected.is_some())
+        {
+            AdoptionOutcome::Deferred(focus) => {
+                self.local_focus = focus;
+            }
+            AdoptionOutcome::Rejected => {
+                // Keep the live user selection; discard the stale file view.
+            }
+            AdoptionOutcome::Adopted {
+                focus,
+                selected_session,
+            } => {
+                self.local_focus = focus;
+                if let Some(session_id) = selected_session {
+                    self.selected_space = self
+                        .domain
+                        .sessions
+                        .iter()
+                        .find(|session| session.id == session_id)
+                        .map(|session| session.space_id.clone())
+                        .or_else(|| self.selected_space.clone());
+                    self.selected_session = Some(session_id);
+                    self.selected = None;
+                }
             }
         }
     }
@@ -621,5 +707,111 @@ mod tests {
             PathBuf::from("/home/user/.config/ukk/desktop-focus.json")
         );
         assert_eq!(settings_path_for(Platform::MacOs, None, None, None), None);
+    }
+
+    #[test]
+    fn newer_schema_is_rejected_before_typed_parse() {
+        let path = temp_path("newer-shape");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Incompatible field type for this Desktop, but a valid newer file.
+        fs::write(&path, r#"{"version":99,"sessions":[]}"#).unwrap();
+        assert_eq!(load_from(&path).unwrap(), LoadOutcome::Unsupported(99));
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn oversized_settings_file_is_rejected_without_parsing() {
+        let path = temp_path("oversized");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, vec![b'0'; MAX_SETTINGS_BYTES as usize + 1]).unwrap();
+        let error = load_from(&path).unwrap_err();
+        assert!(error.contains("unexpectedly large"), "{error}");
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn save_refuses_state_above_the_size_limit() {
+        let path = temp_path("save-limit");
+        let mut focus = LocalFocus::default();
+        for index in 0..2_000 {
+            focus.set_pane(&format!("session-{index}"), &format!("{index:0>600}"));
+        }
+        let error = save_to(&path, &focus).unwrap_err();
+        assert!(error.contains("size limit"), "{error}");
+        assert!(!path.exists(), "an over-limit save must not create a file");
+    }
+
+    #[test]
+    fn save_replaces_an_existing_file_without_losing_it() {
+        let path = temp_path("replace");
+        let mut focus = LocalFocus::default();
+        focus.set_pane("session-1", "first-pane");
+        save_to(&path, &focus).unwrap();
+        focus.set_pane("session-1", "second-pane");
+        save_to(&path, &focus).unwrap();
+        assert_eq!(
+            load_from(&path).unwrap(),
+            LoadOutcome::Loaded(focus),
+            "second save must replace the first document"
+        );
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn focus_loaded_before_a_snapshot_is_not_reconciled_against_an_empty_domain() {
+        let group = tabbed(PaneContent::Activity);
+        let group_id = group.id().to_owned();
+        let tab_id = group.leaves()[0].0.to_owned();
+        let mut focus = LocalFocus::default();
+        focus.set_selected_session(Some("session-1"));
+        focus.set_pane("session-1", &group_id);
+        focus.set_tab("session-1", &group_id, &tab_id);
+
+        let outcome = adopt_loaded_focus_value(focus.clone(), None, false, false);
+        assert_eq!(outcome, AdoptionOutcome::Deferred(focus));
+    }
+
+    #[test]
+    fn focus_loaded_after_a_snapshot_is_reconciled_against_the_real_domain() {
+        let group = tabbed(PaneContent::Activity);
+        let group_id = group.id().to_owned();
+        let tab_id = group.leaves()[0].0.to_owned();
+        let mut focus = LocalFocus::default();
+        focus.set_selected_session(Some("session-1"));
+        focus.set_pane("session-1", &group_id);
+        focus.set_tab("session-1", &group_id, &tab_id);
+        focus.set_pane("removed-session", "pane");
+
+        let domain = domain_with(group);
+        let outcome = adopt_loaded_focus_value(focus, Some(&domain), false, false);
+        let AdoptionOutcome::Adopted {
+            focus,
+            selected_session,
+        } = outcome
+        else {
+            panic!("expected adoption against an authoritative snapshot");
+        };
+        assert_eq!(selected_session.as_deref(), Some("session-1"));
+        assert_eq!(focus.pane("session-1"), Some(group_id.as_str()));
+        assert_eq!(focus.tab("session-1", &group_id), Some(tab_id.as_str()));
+        assert!(focus.session("removed-session").is_none());
+    }
+
+    #[test]
+    fn live_focus_intent_wins_over_a_late_settings_read() {
+        let focus = LocalFocus::default();
+        assert_eq!(
+            adopt_loaded_focus_value(focus.clone(), None, true, false),
+            AdoptionOutcome::Rejected
+        );
+        assert_eq!(
+            adopt_loaded_focus_value(
+                focus,
+                Some(&domain_with(PaneNode::leaf(PaneContent::Activity))),
+                false,
+                true
+            ),
+            AdoptionOutcome::Rejected
+        );
     }
 }

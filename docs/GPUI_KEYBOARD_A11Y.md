@@ -115,11 +115,14 @@ retry button. The retry intent is discarded if the reload itself fails.
 
 - Tabs expose `Tab`/`TabList` roles, `aria-selected`, titles and shortcut hints.
 - Panes expose `Pane`/`TabPanel` roles with headings and descriptions.
-- Splitters expose `Splitter`, orientation and 15–100 percent value bounds.
+- Splitters expose `Splitter`, orientation and 15–85 percent value bounds.
 - Space, Session, terminal, Tab and action rows are real tab stops with
   `focus_visible` rings, so keyboard focus is always visible.
 - Pane controls use descriptive labels ("Close this pane", "Move the active
   tab left") instead of glyph-only names; shortcut keys are announced.
+- Enter/Space activation is GPUI's built-in click-on-key-up for role `Button`/
+  `Tab` elements. ukk does not register a second key handler, so one key press
+  cannot apply a mutation twice.
 - The runtime inspector lists the full keyboard map and the local focus file.
 - The root exposes an `Application` role labelled "ukk Agent Workspace".
 
@@ -142,10 +145,12 @@ at least ~320 px after the sidebar at supported widths.
 Desktop binary tests (`cargo test --manifest-path apps/desktop/Cargo.toml
 --bin ukk-desktop`) cover:
 
-- focus persistence round-trip, size/version handling and user-profile paths;
+- focus persistence round-trip, replacement of an existing file, size limits and user-profile paths;
+- newer-schema rejection before typed parsing, and load-before/after-snapshot adoption order;
 - local-only payloads containing no `expected_revision`/`auth` fields;
 - stale focused Pane/group/Tab reconciliation and neighbour recovery;
 - deferred focus after Tab close, collapse, add and cross-Pane move;
+- remote removal of the active Tab selects the right/left neighbour, including two-Tab collapse;
 - shortcut registration uniqueness, parseability and action mapping;
 - split resize clamping and deepest enclosing-split selection;
 - responsive width thresholds and content-width bound.
@@ -175,7 +180,9 @@ results from unit tests.
    reload, never silently.
 9. Shrink the window below 1080 px and 820 px; inspector/sidebar adapt, no
    clipped controls, shortcuts still routed.
-10. Screen readers: VoiceOver (macOS), Narrator (Windows), Orca (Linux).
+10. Activate a focused Tab and Pane button with Enter and Space; each press
+    performs exactly one Host mutation.
+11. Screen readers: VoiceOver (macOS), Narrator (Windows), Orca (Linux).
     Confirm Tab/Pane/Splitter roles, selected state, labels and shortcut
     announcements. Record actual output; this remains NOT VERIFIED until done.
 

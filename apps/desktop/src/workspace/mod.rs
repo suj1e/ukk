@@ -59,6 +59,9 @@ struct ConflictNotice {
     message: String,
     /// Reapplied once after an explicit reload, never automatically.
     action: Option<PaneAction>,
+    /// Session the failed intent belonged to. Retry must never translate the
+    /// same IDs into a different Session's layout.
+    session_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -123,9 +126,13 @@ pub(crate) struct Workspace {
     pending_tab_focus: Option<pane_focus::PendingFocus>,
     pending_pane_focus: Option<String>,
     /// Explicit retry: applied after one successful reload, never in a loop.
-    retry_after_reload: Option<PaneAction>,
+    retry_after_reload: Option<(String, PaneAction)>,
     /// Action whose Host response is pending, used to offer an explicit retry.
     in_flight_action: Option<PaneAction>,
+    /// Session owning `in_flight_action` (focus can switch before the reply).
+    in_flight_session: Option<String>,
+    /// A real Host workspace snapshot has been applied at least once.
+    workspace_snapshot_loaded: bool,
     conflict: Option<ConflictNotice>,
     online: bool,
     message: Option<String>,
@@ -165,6 +172,8 @@ impl Workspace {
             pending_pane_focus: None,
             retry_after_reload: None,
             in_flight_action: None,
+            in_flight_session: None,
+            workspace_snapshot_loaded: false,
             conflict: None,
             online: false,
             message: None,
