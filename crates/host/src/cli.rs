@@ -333,9 +333,19 @@ fn print_database_health(health: &DatabaseHealth) {
             "            Restore backs up the current file automatically before replacing it."
         );
     } else if !health.supported_schema {
-        println!(
-            "  recovery: this Host does not support the schema; upgrade the Host, do not downgrade."
-        );
+        if health
+            .schema_version
+            .map(|version| version > ukk_store::backup::CURRENT_SCHEMA_VERSION)
+            .unwrap_or(false)
+        {
+            println!(
+                "  recovery: the schema is newer than this Host; upgrade the Host, do not downgrade."
+            );
+        } else {
+            println!(
+                "  recovery: not a supported ukk workspace database; restore a verified backup or start the Host to create a new one."
+            );
+        }
     } else {
         println!("  backup: `ukk-host backup <path>` is safe while the Host is running.");
     }
