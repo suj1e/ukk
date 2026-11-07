@@ -380,6 +380,34 @@ fn client_rejects_an_already_expired_grant() {
 }
 
 #[test]
+fn approval_after_the_challenge_expires_fails_closed() {
+    let mut host = test_host();
+    let invite = new_invite(&mut host);
+    let client = PairingClient::new(
+        invite,
+        Box::new(InMemoryDeviceKeyStore::new()),
+        &[Scope::SessionObserve],
+    )
+    .unwrap();
+    let request = client.request_frame().unwrap();
+    let (hello, handshake) = client.start(NOW + 10).unwrap();
+    let attempt = host.accept(&request, &hello, NOW + 20).unwrap();
+    let challenge_expires_at_ms = attempt.challenge().expires_at_ms;
+    let _pending = handshake
+        .finish(attempt.response_frame(), NOW + 30)
+        .unwrap();
+    assert!(matches!(
+        host.approve(
+            attempt,
+            &[Scope::SessionObserve],
+            DEFAULT_GRANT_TTL_MS,
+            challenge_expires_at_ms
+        ),
+        Err(PairingError::ChallengeInvalid)
+    ));
+}
+
+#[test]
 fn host_rejects_invalid_invite_ttl() {
     let mut host = test_host();
     assert!(matches!(

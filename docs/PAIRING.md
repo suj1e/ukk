@@ -113,7 +113,8 @@ Noise_IKpsk0_25519_ChaChaPoly_SHA256
 
   The desktop displays the code; the user compares it with the phone before
   approving scopes. The code binds the full transcript, both static keys and
-  the challenge.
+  the challenge. Approval is refused after the challenge expires, so a stale
+  pending attempt cannot be confirmed indefinitely.
 
 Replay, expiry, wrong PSK, wrong Host key, tampered frames and transcript-field
 changes all fail closed with a typed error. A failed handshake burns the
@@ -209,7 +210,7 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 and `subtle` 2.6.1
 
 ## What the tests prove
 
-`crates/remote/tests` (52 tests including unit tests):
+`crates/remote/tests` (53 tests including unit tests):
 
 * invite round-trip, strict unknown/missing field rejection, oversized and
   trailing input, unsafe relay schemes, secret redaction and zeroize-on-demand;
@@ -217,6 +218,7 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 and `subtle` 2.6.1
   Host id/invite id/expiry/relay transcript mismatch;
 * Host/phone confirmation-code agreement, transcript/prologue agreement and a
   deterministic `IKpsk0` handshake hash/confirmation vector;
+* approval after challenge expiry;
 * tampered and oversized handshake frames;
 * approval scope-escalation denial, `device.manage` rejection, grant TTL
   bounds and client-side grant expiry;

@@ -505,6 +505,9 @@ impl PairingHost {
         if now_ms >= attempt.invite_expires_at_ms {
             return Err(PairingError::InviteExpired);
         }
+        if now_ms >= attempt.challenge.expires_at_ms {
+            return Err(PairingError::ChallengeInvalid);
+        }
         let approved = validate_pairing_scopes(scopes)?;
         for scope in approved.iter() {
             if !attempt.requested_scopes.contains(scope) {
