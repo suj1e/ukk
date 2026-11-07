@@ -10,9 +10,5 @@ ukk-hc-client = { path = "../hc-client" }
 serde_json = "1.0"
 ukk-store = { path = "../store" }
 ukk-domain = { path = "../domain" }
-
-[dev-dependencies]
 ukk-host-client = { path = "../host-client" }
 
-[target.'cfg(windows)'.dependencies]
-ukk-host-client = { path = "../host-client" }
