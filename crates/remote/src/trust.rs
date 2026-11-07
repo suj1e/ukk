@@ -118,33 +118,64 @@ impl DeviceTrust {
         validate_grant_ttl(ttl_ms)?;
         let approved = validate_pairing_scopes(scopes)?;
         let fingerprint = public_key.fingerprint()?;
-        let generation = self
-            .registry
-            .register(device_id.clone(), fingerprint.clone())
-            .map_err(map_registry_error)?;
         let expires_at_ms = now_ms.saturating_add(ttl_ms);
-        for scope in approved.iter() {
-            if let Err(error) = self
-                .registry
-                .grant(&device_id, scope, generation, expires_at_ms)
-            {
-                // The device was just registered; a grant failure is an
-                // internal inconsistency. Roll the registration back rather
-                // than leave a partially authorized device behind.
-                let _ = self.registry.revoke(&device_id);
-                return Err(map_registry_error(error));
-            }
-        }
-        Ok(PairedDevice {
+        let device = PairedDevice {
             host_id: host_id.clone(),
             device_id,
             public_key,
             fingerprint,
-            generation,
+            generation: IdentityGeneration::FIRST,
             scopes: approved,
             grant_expires_at_ms: expires_at_ms,
             paired_at_ms: now_ms,
-        })
+        };
+        self.commit(&device, now_ms)?;
+        Ok(device)
+    }
+
+    /// Commits a prospective paired-device record to the live trust registry.
+    ///
+    /// This is the only place the pairing flow turns a prospective
+    /// `PairedDevice` into authority. It is called after the phone returns the
+    /// encrypted completion acknowledgement, so a dropped success frame cannot
+    /// leave the Host granting a device the phone never accepted.
+    pub fn commit(&mut self, device: &PairedDevice, now_ms: i64) -> Result<(), PairingError> {
+        if device.generation != IdentityGeneration::FIRST {
+            return Err(PairingError::StaleIdentity);
+        }
+        if device.fingerprint != device.public_key.fingerprint()? {
+            return Err(PairingError::KeyFingerprintMismatch);
+        }
+        if now_ms >= device.grant_expires_at_ms {
+            return Err(PairingError::GrantExpired);
+        }
+        if device.grant_expires_at_ms.saturating_sub(now_ms) > MAX_GRANT_TTL_MS {
+            return Err(PairingError::InvalidTtl);
+        }
+        for scope in device.scopes.iter() {
+            if !is_pairing_grantable(scope) {
+                return Err(PairingError::ScopeNotGrantable);
+            }
+        }
+        let generation = self
+            .registry
+            .register(device.device_id.clone(), device.fingerprint.clone())
+            .map_err(map_registry_error)?;
+        for scope in device.scopes.iter() {
+            if let Err(error) = self.registry.grant(
+                &device.device_id,
+                scope,
+                generation,
+                device.grant_expires_at_ms,
+            ) {
+                // The device was just registered; a grant failure is an
+                // internal inconsistency. Roll the registration back rather
+                // than leave a partially authorized device behind.
+                let _ = self.registry.revoke(&device.device_id);
+                return Err(map_registry_error(error));
+            }
+        }
+        Ok(())
     }
 
     /// Verifies a handshake claim against the live registry.
@@ -167,11 +198,19 @@ impl DeviceTrust {
     }
 
     /// Revokes a device and clears every grant.
+    ///
+    /// Only the local Desktop owner (or a holder of `device.manage`, which the
+    /// pairing flow never grants) may call this. The method itself has no
+    /// locality parameter; the transport/UI layer must enforce that.
     pub fn revoke(&mut self, device_id: &DeviceId) -> Result<(), PairingError> {
         self.registry.revoke(device_id).map_err(map_registry_error)
     }
 
     /// Rotates a device key, bumps its generation and clears every grant.
+    ///
+    /// Same authority rule as [`DeviceTrust::revoke`]: local owner only for the
+    /// current pairing model. A revoked device cannot re-register under the
+    /// same id; recovery requires a fresh `device_id` and invitation.
     pub fn rotate_key(
         &mut self,
         device_id: &DeviceId,

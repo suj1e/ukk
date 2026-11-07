@@ -112,7 +112,7 @@ fn deterministic_ikpsk0_transcript_and_confirmation_code() {
 }
 
 #[test]
-fn confirmation_code_binds_host_id_and_challenge() {
+fn confirmation_code_binds_challenge_and_prologue() {
     let invite = fixed_invite();
     let transcript = PairingTranscript::from_invite(&invite);
     let digest = transcript.digest();
@@ -130,6 +130,17 @@ fn confirmation_code_binds_host_id_and_challenge() {
         code,
         ConfirmationCode::from_handshake(&digest, &other_challenge)
     );
+
+    let mut value: serde_json::Value = serde_json::from_str(&invite.encode().unwrap()).unwrap();
+    value["host_id"] = serde_json::json!("host-other");
+    let other_host = PairingInvite::decode(&value.to_string()).unwrap();
+    let other_digest = PairingTranscript::from_invite(&other_host).digest();
+    assert_ne!(digest, other_digest);
+    assert_ne!(
+        code,
+        ConfirmationCode::from_handshake(&other_digest, &challenge)
+    );
+
     assert_eq!(digest.len(), 32);
     assert_eq!(PublicKey::from_bytes([0_u8; 32]).to_base64().len(), 43);
     assert_eq!(Scope::SessionObserve.as_str(), "session.observe");

@@ -62,15 +62,20 @@ fn completes_pairing_with_agreeing_code_and_scoped_grant() {
     assert_eq!(pending.handshake_hash(), attempt.handshake_hash());
     assert_eq!(pending.prologue_digest(), attempt.prologue_digest());
 
+    let confirmed = attempt.confirm(&code.digits()).unwrap();
     let approved = host
         .approve(
-            attempt,
+            confirmed,
             &[Scope::SessionObserve],
             DEFAULT_GRANT_TTL_MS,
             NOW + 40,
         )
         .unwrap();
-    let device = pending.await_approval(approved.frame(), NOW + 50).unwrap();
+    assert!(host.trust().status(client.device_id()).is_none());
+    let accepted = pending.await_approval(approved.frame(), NOW + 50).unwrap();
+    let device = host
+        .complete(approved, accepted.ack_frame(), NOW + 50)
+        .unwrap();
     assert_eq!(&device.device_id, client.device_id());
     assert_eq!(device.host_id.as_str(), "host-1");
     assert_eq!(device.scopes.len(), 1);
@@ -78,6 +83,8 @@ fn completes_pairing_with_agreeing_code_and_scoped_grant() {
     assert!(!device.scopes.contains(Scope::AgentSend));
     assert_eq!(device.public_key, client.device_public_key());
     assert!(device.grant_expires_at_ms > NOW + 50);
+    assert_eq!(device, *accepted.device());
+    assert!(host.trust().status(client.device_id()).is_some());
 }
 
 #[test]
@@ -152,10 +159,13 @@ fn rejects_transcript_field_changes() {
         .unwrap();
         let request = client.request_frame().unwrap();
         let (hello, _handshake) = client.start(NOW + 10).unwrap();
-        assert!(
-            host.accept(&request, &hello, NOW + 20).is_err(),
-            "field {field} must be transcript-bound"
-        );
+        let result = host.accept(&request, &hello, NOW + 20);
+        let expect_unknown = field == "invite_id";
+        match (result, expect_unknown) {
+            (Err(PairingError::UnknownInvite), true)
+            | (Err(PairingError::HandshakeFailed), false) => {}
+            (other, _) => panic!("field {field} produced unexpected {other:?}"),
+        }
     }
 }
 
@@ -306,9 +316,11 @@ fn approval_cannot_escalate_requested_scopes() {
     let _pending = handshake
         .finish(attempt.response_frame(), NOW + 30)
         .unwrap();
+    let code = attempt.confirmation_code().digits();
+    let confirmed = attempt.confirm(&code).unwrap();
     assert!(matches!(
         host.approve(
-            attempt,
+            confirmed,
             &[Scope::SessionObserve, Scope::AgentSend],
             DEFAULT_GRANT_TTL_MS,
             NOW + 40
@@ -343,9 +355,11 @@ fn device_manage_cannot_be_requested_or_granted_by_pairing() {
     let _pending = handshake
         .finish(attempt.response_frame(), NOW + 30)
         .unwrap();
+    let code = attempt.confirmation_code().digits();
+    let confirmed = attempt.confirm(&code).unwrap();
     assert!(matches!(
         host.approve(
-            attempt,
+            confirmed,
             &[Scope::DeviceManage],
             DEFAULT_GRANT_TTL_MS,
             NOW + 40
@@ -370,8 +384,10 @@ fn client_rejects_an_already_expired_grant() {
     let pending = handshake
         .finish(attempt.response_frame(), NOW + 30)
         .unwrap();
+    let code = attempt.confirmation_code().digits();
+    let confirmed = attempt.confirm(&code).unwrap();
     let approved = host
-        .approve(attempt, &[Scope::SessionObserve], 1, NOW + 40)
+        .approve(confirmed, &[Scope::SessionObserve], 1, NOW + 40)
         .unwrap();
     assert!(matches!(
         pending.await_approval(approved.frame(), NOW + 41),
@@ -396,9 +412,11 @@ fn approval_after_the_challenge_expires_fails_closed() {
     let _pending = handshake
         .finish(attempt.response_frame(), NOW + 30)
         .unwrap();
+    let code = attempt.confirmation_code().digits();
+    let confirmed = attempt.confirm(&code).unwrap();
     assert!(matches!(
         host.approve(
-            attempt,
+            confirmed,
             &[Scope::SessionObserve],
             DEFAULT_GRANT_TTL_MS,
             challenge_expires_at_ms
@@ -434,15 +452,20 @@ fn pairing_is_bound_to_the_device_public_key_in_the_key_store() {
     let pending = handshake
         .finish(attempt.response_frame(), NOW + 30)
         .unwrap();
+    let code = attempt.confirmation_code().digits();
+    let confirmed = attempt.confirm(&code).unwrap();
     let approved = host
         .approve(
-            attempt,
+            confirmed,
             &[Scope::SessionObserve],
             DEFAULT_GRANT_TTL_MS,
             NOW + 40,
         )
         .unwrap();
-    let device = pending.await_approval(approved.frame(), NOW + 50).unwrap();
+    let accepted = pending.await_approval(approved.frame(), NOW + 50).unwrap();
+    let device = host
+        .complete(approved, accepted.ack_frame(), NOW + 50)
+        .unwrap();
     assert_eq!(device.device_id, device_id);
     assert_eq!(device.public_key, public_key);
     assert_eq!(device.fingerprint, public_key.fingerprint().unwrap());
@@ -461,6 +484,123 @@ fn outstanding_invites_are_bounded() {
         host.create_invite(relay(), NOW, DEFAULT_INVITE_TTL_MS),
         Err(PairingError::TooManyInvites)
     ));
+}
+
+#[test]
+fn confirmation_code_must_match_before_approval() {
+    let mut host = test_host();
+    let invite = new_invite(&mut host);
+    let client = PairingClient::new(
+        invite,
+        Box::new(InMemoryDeviceKeyStore::new()),
+        &[Scope::SessionObserve],
+    )
+    .unwrap();
+    let request = client.request_frame().unwrap();
+    let (hello, handshake) = client.start(NOW + 10).unwrap();
+    let attempt = host.accept(&request, &hello, NOW + 20).unwrap();
+    let _pending = handshake
+        .finish(attempt.response_frame(), NOW + 30)
+        .unwrap();
+    let code = attempt.confirmation_code().digits();
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    assert!(matches!(
+        attempt.confirm(wrong),
+        Err(PairingError::ConfirmationMismatch)
+    ));
+}
+
+#[test]
+fn client_rejects_a_low_order_pinned_host_key() {
+    let mut host = test_host();
+    let invite = new_invite(&mut host);
+    let mut one = [0_u8; 32];
+    one[0] = 1;
+    let weak = PublicKey::from_bytes(one);
+    let tampered = mutate(
+        &invite,
+        "host_public_key",
+        serde_json::json!(weak.to_base64()),
+    );
+    let client = PairingClient::new(
+        tampered,
+        Box::new(InMemoryDeviceKeyStore::new()),
+        &[Scope::SessionObserve],
+    )
+    .unwrap();
+    assert!(matches!(
+        client.start(NOW + 10),
+        Err(PairingError::WeakPublicKey)
+    ));
+}
+
+#[test]
+fn approval_is_pending_until_the_acknowledgement() {
+    let mut host = test_host();
+    let invite = new_invite(&mut host);
+    let client = PairingClient::new(
+        invite,
+        Box::new(InMemoryDeviceKeyStore::new()),
+        &[Scope::SessionObserve],
+    )
+    .unwrap();
+    let device_id = client.device_id().clone();
+    let request = client.request_frame().unwrap();
+    let (hello, handshake) = client.start(NOW + 10).unwrap();
+    let attempt = host.accept(&request, &hello, NOW + 20).unwrap();
+    let pending_client = handshake
+        .finish(attempt.response_frame(), NOW + 30)
+        .unwrap();
+    let code = attempt.confirmation_code().digits();
+    let confirmed = attempt.confirm(&code).unwrap();
+    let pending = host
+        .approve(
+            confirmed,
+            &[Scope::SessionObserve],
+            DEFAULT_GRANT_TTL_MS,
+            NOW + 40,
+        )
+        .unwrap();
+    assert!(host.trust().status(&device_id).is_none());
+    assert!(matches!(
+        host.complete(pending, b"not-an-ack", NOW + 50),
+        Err(PairingError::AckInvalid)
+    ));
+    assert!(host.trust().status(&device_id).is_none());
+    assert!(matches!(
+        pending_client.await_approval(b"", NOW + 50),
+        Err(PairingError::HandshakeFailed)
+    ));
+
+    let invite = new_invite(&mut host);
+    let client = PairingClient::new(
+        invite,
+        Box::new(InMemoryDeviceKeyStore::new()),
+        &[Scope::SessionObserve],
+    )
+    .unwrap();
+    let request = client.request_frame().unwrap();
+    let (hello, handshake) = client.start(NOW + 10).unwrap();
+    let attempt = host.accept(&request, &hello, NOW + 20).unwrap();
+    let pending_client = handshake
+        .finish(attempt.response_frame(), NOW + 30)
+        .unwrap();
+    let code = attempt.confirmation_code().digits();
+    let confirmed = attempt.confirm(&code).unwrap();
+    let pending = host
+        .approve(
+            confirmed,
+            &[Scope::SessionObserve],
+            DEFAULT_GRANT_TTL_MS,
+            NOW + 40,
+        )
+        .unwrap();
+    let expires_at_ms = pending.expires_at_ms();
+    assert!(matches!(
+        host.complete(pending, &[], expires_at_ms),
+        Err(PairingError::PendingApprovalExpired)
+    ));
+    assert!(pending_client.await_approval(b"", NOW + 50).is_err());
 }
 
 #[test]

@@ -30,12 +30,17 @@ use std::error::Error;
 /// `send_frame` and `recv_frame` carry opaque pairing bytes. Implementations
 /// may be synchronous wrappers around an async runtime; this crate performs no
 /// I/O and tests never open a socket.
+///
+/// `recv_frame(max_bytes)` is a hard allocation bound, not an advisory hint:
+/// the adapter must not read or buffer more than `max_bytes` and must return
+/// its own error if the peer declares or delivers a larger frame. The pairing
+/// core passes [`crate::error::MAX_PAIRING_FRAME_BYTES`].
 pub trait RelayTransport {
     type Error: Error + Send + Sync + 'static;
 
     /// Sends one complete pairing frame.
     fn send_frame(&mut self, frame: &[u8]) -> Result<(), Self::Error>;
 
-    /// Receives one complete pairing frame.
-    fn recv_frame(&mut self) -> Result<Vec<u8>, Self::Error>;
+    /// Receives one complete pairing frame of at most `max_bytes` bytes.
+    fn recv_frame(&mut self, max_bytes: usize) -> Result<Vec<u8>, Self::Error>;
 }

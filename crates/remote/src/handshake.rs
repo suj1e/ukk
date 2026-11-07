@@ -32,11 +32,14 @@ use crate::invite::{
     HostId, InviteId, InviteSecret, PairingInvite, RelayUrl, INVITE_VERSION, MAX_INVITE_TTL_MS,
 };
 use crate::keys::{DeviceKeyStore, PublicKey, StaticKeypair};
-use crate::trust::{is_pairing_grantable, validate_pairing_scopes, DeviceTrust, PairedDevice};
+use crate::trust::{
+    is_pairing_grantable, validate_grant_ttl, validate_pairing_scopes, DeviceTrust, PairedDevice,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
+use subtle::ConstantTimeEq;
 use ukk_protocol::{DeviceId, IdentityGeneration, Scope, ScopeSet};
 
 /// Noise handshake pattern. X25519 + ChaCha20-Poly1305 + SHA-256 with `psk0`.
@@ -47,6 +50,10 @@ pub const PAIRING_PROTOCOL_VERSION: u8 = INVITE_VERSION;
 
 /// Challenge lifetime after the Host accepts the first handshake message.
 pub const CHALLENGE_TTL_MS: i64 = 60 * 1000;
+
+/// Window in which the phone must acknowledge the success frame before the
+/// Host discards the pending grant record.
+pub const ACK_TTL_MS: i64 = 60 * 1000;
 
 /// Maximum outstanding invitations held by one Host.
 pub const MAX_PENDING_INVITES: usize = 32;
@@ -155,6 +162,20 @@ impl ConfirmationCode {
     pub fn digits(self) -> String {
         format!("{:06}", self.0)
     }
+
+    /// Constant-time comparison against a user-entered six-digit string.
+    ///
+    /// Non-digits and wrong lengths are rejected; the fixed-length digit
+    /// comparison itself does not branch on the entered value.
+    #[must_use]
+    pub fn matches(self, candidate: &str) -> bool {
+        let candidate = candidate.as_bytes();
+        if candidate.len() != 6 || !candidate.iter().all(u8::is_ascii_digit) {
+            return false;
+        }
+        let expected = self.digits();
+        bool::from(expected.as_bytes().ct_eq(candidate))
+    }
 }
 
 impl fmt::Display for ConfirmationCode {
@@ -209,6 +230,13 @@ struct ClientHelloPayload {
 struct PairingSuccessPayload {
     v: u8,
     device: PairedDevice,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairingAck {
+    v: u8,
+    device_id: DeviceId,
 }
 
 #[derive(Clone, Debug)]
@@ -428,8 +456,8 @@ impl PairingHost {
                 .try_into()
                 .map_err(|_| PairingError::HandshakeFailed)?,
         );
-        if device_public_key.is_zero() {
-            return Err(PairingError::HandshakeFailed);
+        if !self.host_key.is_contributory_with(&device_public_key) {
+            return Err(PairingError::WeakPublicKey);
         }
         let hello: ClientHelloPayload = serde_json::from_slice(&hello_payload[..hello_len])
             .map_err(|_| PairingError::ClientHelloMalformed)?;
@@ -491,52 +519,106 @@ impl PairingHost {
         })
     }
 
-    /// Issues grants after the local owner confirms the code.
+    /// Prepares a grant after the local owner confirms the code.
     ///
-    /// Callers must compare [`HostPairingAttempt::confirmation_code`] with the
-    /// code shown by the phone before invoking this method.
+    /// The owner must call [`HostPairingAttempt::confirm`] first; this method
+    /// accepts only [`ConfirmedAttempt`], so a caller cannot skip the
+    /// six-digit comparison. It returns the encrypted success frame and a
+    /// prospective device, but does **not** grant authority. Authority is
+    /// committed by [`PairingHost::complete`] only after the phone returns the
+    /// encrypted acknowledgement.
     pub fn approve(
         &mut self,
-        attempt: HostPairingAttempt,
+        confirmed: ConfirmedAttempt,
         scopes: &[Scope],
         grant_ttl_ms: i64,
         now_ms: i64,
-    ) -> Result<ApprovedPairing, PairingError> {
+    ) -> Result<PendingPairing, PairingError> {
+        let attempt = confirmed.attempt;
         if now_ms >= attempt.invite_expires_at_ms {
             return Err(PairingError::InviteExpired);
         }
         if now_ms >= attempt.challenge.expires_at_ms {
             return Err(PairingError::ChallengeInvalid);
         }
+        validate_grant_ttl(grant_ttl_ms)?;
         let approved = validate_pairing_scopes(scopes)?;
         for scope in approved.iter() {
             if !attempt.requested_scopes.contains(scope) {
                 return Err(PairingError::ScopeEscalation);
             }
         }
-        let device = self.trust.approve(
-            &self.host_id,
-            attempt.device_id.clone(),
-            attempt.device_public_key,
-            scopes,
-            grant_ttl_ms,
-            now_ms,
-        )?;
-        match encrypt_success(attempt.transport, &device) {
-            Ok(frame) => Ok(ApprovedPairing { frame, device }),
-            Err(error) => {
-                // Never leave grants behind if the success frame cannot be
-                // produced; the phone would otherwise believe it is unpaired
-                // while the Host retained authority.
-                let _ = self.trust.revoke(&device.device_id);
-                Err(error)
-            }
+        if self.trust.status(&attempt.device_id).is_some() {
+            return Err(PairingError::DeviceAlreadyRegistered);
         }
+        let grant_expires_at_ms = now_ms
+            .checked_add(grant_ttl_ms)
+            .filter(|expires| *expires > now_ms)
+            .ok_or(PairingError::InvalidTtl)?;
+        let fingerprint = attempt.device_public_key.fingerprint()?;
+        let device = PairedDevice {
+            host_id: self.host_id.clone(),
+            device_id: attempt.device_id.clone(),
+            public_key: attempt.device_public_key,
+            fingerprint,
+            generation: IdentityGeneration::FIRST,
+            scopes: approved,
+            grant_expires_at_ms,
+            paired_at_ms: now_ms,
+        };
+        let ack_expires_at_ms = attempt
+            .challenge
+            .expires_at_ms
+            .min(now_ms.saturating_add(ACK_TTL_MS));
+        if ack_expires_at_ms <= now_ms {
+            return Err(PairingError::ChallengeInvalid);
+        }
+        let mut transport = attempt.transport.ok_or(PairingError::HandshakeFailed)?;
+        let frame = encrypt_success(&mut transport, &device)?;
+        Ok(PendingPairing {
+            frame,
+            device,
+            transport: Some(transport),
+            expires_at_ms: ack_expires_at_ms,
+        })
+    }
+
+    /// Commits the pending grant after the phone acknowledges the success
+    /// frame. A dropped success frame therefore leaves no Host authority.
+    pub fn complete(
+        &mut self,
+        mut pending: PendingPairing,
+        ack_frame: &[u8],
+        now_ms: i64,
+    ) -> Result<PairedDevice, PairingError> {
+        if now_ms >= pending.expires_at_ms {
+            return Err(PairingError::PendingApprovalExpired);
+        }
+        if pending.device.host_id != self.host_id {
+            return Err(PairingError::HostMismatch);
+        }
+        if ack_frame.len() > MAX_PAIRING_FRAME_BYTES {
+            return Err(PairingError::FrameTooLarge {
+                max: MAX_PAIRING_FRAME_BYTES,
+            });
+        }
+        let mut payload = vec![0_u8; MAX_PAIRING_FRAME_BYTES];
+        let mut transport = pending.transport.take().ok_or(PairingError::AckInvalid)?;
+        let payload_len = transport
+            .read_message(ack_frame, &mut payload)
+            .map_err(|_| PairingError::AckInvalid)?;
+        let ack: PairingAck = serde_json::from_slice(&payload[..payload_len])
+            .map_err(|_| PairingError::AckInvalid)?;
+        if ack.v != PAIRING_PROTOCOL_VERSION || ack.device_id != pending.device.device_id {
+            return Err(PairingError::AckInvalid);
+        }
+        self.trust.commit(&pending.device, now_ms)?;
+        Ok(pending.device)
     }
 }
 
 fn encrypt_success(
-    transport: Option<snow::TransportState>,
+    transport: &mut snow::TransportState,
     device: &PairedDevice,
 ) -> Result<Vec<u8>, PairingError> {
     let payload = PairingSuccessPayload {
@@ -550,7 +632,6 @@ fn encrypt_success(
             max: MAX_TRANSPORT_PAYLOAD_BYTES,
         });
     }
-    let mut transport = transport.ok_or(PairingError::HandshakeFailed)?;
     let mut frame = vec![0_u8; encoded.len() + AEAD_TAG_BYTES];
     let frame_len = transport
         .write_message(&encoded, &mut frame)
@@ -622,6 +703,16 @@ impl HostPairingAttempt {
     pub fn host_id(&self) -> &HostId {
         &self.host_id
     }
+
+    /// Compares the six-digit code shown by the phone/desktop in constant time
+    /// and, on success, returns the only token [`PairingHost::approve`] accepts.
+    pub fn confirm(self, user_entered: &str) -> Result<ConfirmedAttempt, PairingError> {
+        if self.confirmation_code.matches(user_entered) {
+            Ok(ConfirmedAttempt { attempt: self })
+        } else {
+            Err(PairingError::ConfirmationMismatch)
+        }
+    }
 }
 
 impl fmt::Debug for HostPairingAttempt {
@@ -638,28 +729,74 @@ impl fmt::Debug for HostPairingAttempt {
     }
 }
 
-/// Encrypted success frame plus the grants issued by the Host.
-#[derive(Debug)]
-pub struct ApprovedPairing {
-    frame: Vec<u8>,
-    device: PairedDevice,
+/// Proof that the owner compared the confirmation code in constant time.
+///
+/// This type can only be produced by [`HostPairingAttempt::confirm`];
+/// [`PairingHost::approve`] accepts nothing else.
+pub struct ConfirmedAttempt {
+    attempt: HostPairingAttempt,
 }
 
-impl ApprovedPairing {
+impl ConfirmedAttempt {
+    #[must_use]
+    pub fn attempt(&self) -> &HostPairingAttempt {
+        &self.attempt
+    }
+
+    #[must_use]
+    pub fn into_attempt(self) -> HostPairingAttempt {
+        self.attempt
+    }
+}
+
+impl fmt::Debug for ConfirmedAttempt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConfirmedAttempt")
+            .field("attempt", &self.attempt)
+            .finish()
+    }
+}
+
+/// Prospective device and encrypted success frame awaiting phone acknowledgement.
+///
+/// Nothing is written to the trust registry by [`PairingHost::approve`]; the
+/// caller must pass this value and the phone's encrypted ack to
+/// [`PairingHost::complete`].
+pub struct PendingPairing {
+    frame: Vec<u8>,
+    device: PairedDevice,
+    transport: Option<snow::TransportState>,
+    expires_at_ms: i64,
+}
+
+impl PendingPairing {
     /// Encrypted frame to send to the phone after confirmation.
     #[must_use]
     pub fn frame(&self) -> &[u8] {
         &self.frame
     }
 
+    /// Prospective grants; not authoritative until [`PairingHost::complete`].
     #[must_use]
     pub fn device(&self) -> &PairedDevice {
         &self.device
     }
 
+    /// Absolute deadline for the phone's acknowledgement.
     #[must_use]
-    pub fn into_device(self) -> PairedDevice {
-        self.device
+    pub fn expires_at_ms(&self) -> i64 {
+        self.expires_at_ms
+    }
+}
+
+impl fmt::Debug for PendingPairing {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PendingPairing")
+            .field("device", &self.device)
+            .field("expires_at_ms", &self.expires_at_ms)
+            .finish_non_exhaustive()
     }
 }
 
@@ -746,6 +883,10 @@ impl PairingClient {
     /// invitation has already expired locally.
     pub fn start(&self, now_ms: i64) -> Result<(Vec<u8>, ClientHandshake), PairingError> {
         self.invite.validate_at(now_ms)?;
+        let host_public_key = self.invite.host_public_key();
+        if !self.device_key.is_contributory_with(&host_public_key) {
+            return Err(PairingError::WeakPublicKey);
+        }
         let transcript = PairingTranscript::from_invite(&self.invite);
         let prologue = transcript.prologue();
         let prologue_digest = transcript.digest();
@@ -785,7 +926,9 @@ impl PairingClient {
             message,
             ClientHandshake {
                 state,
-                invite: self.invite.clone(),
+                host_id: self.invite.host_id().clone(),
+                host_public_key,
+                invite_expires_at_ms: self.invite.expires_at_ms(),
                 device_id: self.device_id.clone(),
                 device_public_key: self.device_key.public_key(),
                 requested_scopes: self.requested_scopes.clone(),
@@ -810,7 +953,9 @@ impl fmt::Debug for PairingClient {
 /// Phone-side first handshake message plus pinned Host identity.
 pub struct ClientHandshake {
     state: snow::HandshakeState,
-    invite: PairingInvite,
+    host_id: HostId,
+    host_public_key: PublicKey,
+    invite_expires_at_ms: i64,
     device_id: DeviceId,
     device_public_key: PublicKey,
     requested_scopes: ScopeSet,
@@ -839,12 +984,15 @@ impl ClientHandshake {
             .state
             .get_remote_static()
             .ok_or(PairingError::HandshakeFailed)?;
-        if remote_static != self.invite.host_public_key().as_bytes() {
+        // In an IK initiator `snow` returns the builder's pinned `rs` here, so
+        // this is a defensive invariant rather than independent proof of
+        // pinning. Pinning is enforced by `es`/`ss` and AEAD failure.
+        if remote_static != self.host_public_key.as_bytes() {
             return Err(PairingError::HostKeyMismatch);
         }
         let challenge: PairingChallenge = serde_json::from_slice(&payload[..payload_len])
             .map_err(|_| PairingError::ChallengeInvalid)?;
-        challenge.validate_for(self.invite.expires_at_ms(), now_ms)?;
+        challenge.validate_for(self.invite_expires_at_ms, now_ms)?;
         let handshake_hash: [u8; 32] = self
             .state
             .get_handshake_hash()
@@ -857,7 +1005,7 @@ impl ClientHandshake {
             .map_err(|_| PairingError::HandshakeFailed)?;
         Ok(ClientPairingPending {
             transport: Some(transport),
-            invite: self.invite,
+            host_id: self.host_id,
             device_id: self.device_id,
             device_public_key: self.device_public_key,
             requested_scopes: self.requested_scopes,
@@ -873,7 +1021,7 @@ impl fmt::Debug for ClientHandshake {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ClientHandshake")
-            .field("invite", &self.invite)
+            .field("host_id", &self.host_id)
             .field("device_id", &self.device_id)
             .finish_non_exhaustive()
     }
@@ -882,7 +1030,7 @@ impl fmt::Debug for ClientHandshake {
 /// Phone-side state after a successful handshake, before grant approval.
 pub struct ClientPairingPending {
     transport: Option<snow::TransportState>,
-    invite: PairingInvite,
+    host_id: HostId,
     device_id: DeviceId,
     device_public_key: PublicKey,
     requested_scopes: ScopeSet,
@@ -913,14 +1061,18 @@ impl ClientPairingPending {
         &self.prologue_digest
     }
 
-    /// Decrypts and verifies the Host's grant payload. Rejects a payload that
-    /// names another device or Host, carries an unrequested scope, grants
+    /// Decrypts and verifies the Host's grant payload and produces the
+    /// encrypted completion acknowledgement. Rejects a payload that names
+    /// another device or Host, carries an unrequested scope, grants
     /// `device.manage`, or is already expired.
+    ///
+    /// The caller must send [`ClientPairingAccepted::ack_frame`] to the Host;
+    /// the Host commits the device only after that acknowledgement.
     pub fn await_approval(
         mut self,
         frame: &[u8],
         now_ms: i64,
-    ) -> Result<PairedDevice, PairingError> {
+    ) -> Result<ClientPairingAccepted, PairingError> {
         if frame.len() > MAX_PAIRING_FRAME_BYTES {
             return Err(PairingError::FrameTooLarge {
                 max: MAX_PAIRING_FRAME_BYTES,
@@ -940,7 +1092,7 @@ impl ClientPairingPending {
         if device.device_id != self.device_id {
             return Err(PairingError::DeviceIdMismatch);
         }
-        if device.host_id != *self.invite.host_id() {
+        if device.host_id != self.host_id {
             return Err(PairingError::HostMismatch);
         }
         if device.public_key != self.device_public_key {
@@ -963,7 +1115,57 @@ impl ClientPairingPending {
         if device.is_grant_expired_at(now_ms) {
             return Err(PairingError::GrantExpired);
         }
-        Ok(device)
+
+        let ack = PairingAck {
+            v: PAIRING_PROTOCOL_VERSION,
+            device_id: device.device_id.clone(),
+        };
+        let encoded = serde_json::to_vec(&ack).map_err(|_| PairingError::AckInvalid)?;
+        if encoded.len() > MAX_TRANSPORT_PAYLOAD_BYTES {
+            return Err(PairingError::FrameTooLarge {
+                max: MAX_TRANSPORT_PAYLOAD_BYTES,
+            });
+        }
+        let mut ack_frame = vec![0_u8; encoded.len() + AEAD_TAG_BYTES];
+        let ack_len = transport
+            .write_message(&encoded, &mut ack_frame)
+            .map_err(|_| PairingError::AckInvalid)?;
+        ack_frame.truncate(ack_len);
+        Ok(ClientPairingAccepted { device, ack_frame })
+    }
+}
+
+/// Verified phone-side grant plus the encrypted acknowledgement to send back.
+pub struct ClientPairingAccepted {
+    device: PairedDevice,
+    ack_frame: Vec<u8>,
+}
+
+impl ClientPairingAccepted {
+    #[must_use]
+    pub fn device(&self) -> &PairedDevice {
+        &self.device
+    }
+
+    /// Encrypted frame the phone must send to the Host. The Host does not
+    /// register the device until this acknowledgement is received.
+    #[must_use]
+    pub fn ack_frame(&self) -> &[u8] {
+        &self.ack_frame
+    }
+
+    #[must_use]
+    pub fn into_device(self) -> PairedDevice {
+        self.device
+    }
+}
+
+impl fmt::Debug for ClientPairingAccepted {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClientPairingAccepted")
+            .field("device", &self.device)
+            .finish_non_exhaustive()
     }
 }
 
@@ -971,7 +1173,7 @@ impl fmt::Debug for ClientPairingPending {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ClientPairingPending")
-            .field("invite", &self.invite)
+            .field("host_id", &self.host_id)
             .field("device_id", &self.device_id)
             .field("requested_scopes", &self.requested_scopes)
             .field("challenge", &self.challenge)
@@ -993,7 +1195,7 @@ mod tests {
         scopes.iter().copied().collect()
     }
 
-    fn setup(requested: &[Scope]) -> (HostPairingAttempt, ClientPairingPending) {
+    fn accept(requested: &[Scope]) -> (HostPairingAttempt, ClientHandshake) {
         let mut host = PairingHost::new(
             HostId::new("host-1").unwrap(),
             StaticKeypair::generate().unwrap(),
@@ -1010,6 +1212,11 @@ mod tests {
         let request = client.request_frame().unwrap();
         let (hello, handshake) = client.start(NOW + 10).unwrap();
         let attempt = host.accept(&request, &hello, NOW + 20).unwrap();
+        (attempt, handshake)
+    }
+
+    fn setup(requested: &[Scope]) -> (HostPairingAttempt, ClientPairingPending) {
+        let (attempt, handshake) = accept(requested);
         let pending = handshake
             .finish(attempt.response_frame(), NOW + 30)
             .unwrap();
@@ -1034,17 +1241,20 @@ mod tests {
         }
     }
 
+    fn encrypt_raw(attempt: &mut HostPairingAttempt, payload: &[u8]) -> Vec<u8> {
+        let mut transport = attempt.transport.take().unwrap();
+        let mut frame = vec![0_u8; payload.len() + AEAD_TAG_BYTES];
+        let len = transport.write_message(payload, &mut frame).unwrap();
+        frame.truncate(len);
+        frame
+    }
+
     fn encrypt(attempt: &mut HostPairingAttempt, device: PairedDevice) -> Vec<u8> {
         let payload = PairingSuccessPayload {
             v: PAIRING_PROTOCOL_VERSION,
             device,
         };
-        let encoded = serde_json::to_vec(&payload).unwrap();
-        let mut transport = attempt.transport.take().unwrap();
-        let mut frame = vec![0_u8; encoded.len() + AEAD_TAG_BYTES];
-        let len = transport.write_message(&encoded, &mut frame).unwrap();
-        frame.truncate(len);
-        frame
+        encrypt_raw(attempt, &serde_json::to_vec(&payload).unwrap())
     }
 
     #[test]
@@ -1059,10 +1269,10 @@ mod tests {
                 NOW + 60_000,
             ),
         );
-        assert_eq!(
+        assert!(matches!(
             pending.await_approval(&frame, NOW + 40),
             Err(PairingError::HostMismatch)
-        );
+        ));
     }
 
     #[test]
@@ -1072,30 +1282,30 @@ mod tests {
             &mut attempt,
             device(
                 &pending,
-                pending.invite.host_id().clone(),
+                pending.host_id.clone(),
                 scope_set(&[Scope::SessionObserve, Scope::AgentSend]),
                 NOW + 60_000,
             ),
         );
-        assert_eq!(
+        assert!(matches!(
             pending.await_approval(&frame, NOW + 40),
             Err(PairingError::ScopeEscalation)
-        );
+        ));
 
         let (mut attempt, pending) = setup(&[Scope::SessionObserve]);
         let frame = encrypt(
             &mut attempt,
             device(
                 &pending,
-                pending.invite.host_id().clone(),
+                pending.host_id.clone(),
                 scope_set(&[Scope::DeviceManage]),
                 NOW + 60_000,
             ),
         );
-        assert_eq!(
+        assert!(matches!(
             pending.await_approval(&frame, NOW + 40),
             Err(PairingError::ScopeNotGrantable)
-        );
+        ));
     }
 
     #[test]
@@ -1105,14 +1315,102 @@ mod tests {
             &mut attempt,
             device(
                 &pending,
-                pending.invite.host_id().clone(),
+                pending.host_id.clone(),
                 pending.requested_scopes.clone(),
                 NOW + 40,
             ),
         );
-        assert_eq!(
+        assert!(matches!(
             pending.await_approval(&frame, NOW + 40),
             Err(PairingError::GrantExpired)
+        ));
+    }
+
+    #[test]
+    fn client_rejects_wrong_device_id_or_fingerprint() {
+        let (mut attempt, pending) = setup(&[Scope::SessionObserve]);
+        let mut wrong_id = device(
+            &pending,
+            pending.host_id.clone(),
+            pending.requested_scopes.clone(),
+            NOW + 60_000,
         );
+        wrong_id.device_id = DeviceId::new("other-device").unwrap();
+        let frame = encrypt(&mut attempt, wrong_id);
+        assert!(matches!(
+            pending.await_approval(&frame, NOW + 40),
+            Err(PairingError::DeviceIdMismatch)
+        ));
+
+        let (mut attempt, pending) = setup(&[Scope::SessionObserve]);
+        let other_key = StaticKeypair::generate().unwrap().public_key();
+        let mut wrong_key = device(
+            &pending,
+            pending.host_id.clone(),
+            pending.requested_scopes.clone(),
+            NOW + 60_000,
+        );
+        wrong_key.public_key = other_key;
+        wrong_key.fingerprint = other_key.fingerprint().unwrap();
+        let frame = encrypt(&mut attempt, wrong_key);
+        assert!(matches!(
+            pending.await_approval(&frame, NOW + 40),
+            Err(PairingError::KeyFingerprintMismatch)
+        ));
+    }
+
+    #[test]
+    fn client_rejects_zero_generation() {
+        let (mut attempt, pending) = setup(&[Scope::SessionObserve]);
+        let mut device = device(
+            &pending,
+            pending.host_id.clone(),
+            pending.requested_scopes.clone(),
+            NOW + 60_000,
+        );
+        device.generation = IdentityGeneration::from_raw(0);
+        let frame = encrypt(&mut attempt, device);
+        assert!(matches!(
+            pending.await_approval(&frame, NOW + 40),
+            Err(PairingError::PairingSuccessMalformed)
+        ));
+    }
+
+    #[test]
+    fn client_rejects_oversized_success_frame() {
+        let (_attempt, pending) = setup(&[Scope::SessionObserve]);
+        let oversized = vec![0_u8; MAX_PAIRING_FRAME_BYTES + 1];
+        assert!(matches!(
+            pending.await_approval(&oversized, NOW + 40),
+            Err(PairingError::FrameTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn client_rejects_invalid_challenge_and_oversized_response() {
+        let invite_expires_at_ms = NOW + DEFAULT_INVITE_TTL_MS;
+        let past_invite = PairingChallenge {
+            nonce: [1_u8; 32],
+            expires_at_ms: invite_expires_at_ms + 1,
+        };
+        assert!(matches!(
+            past_invite.validate_for(invite_expires_at_ms, NOW + 30),
+            Err(PairingError::ChallengeInvalid)
+        ));
+        let expired = PairingChallenge {
+            nonce: [2_u8; 32],
+            expires_at_ms: NOW + 20,
+        };
+        assert!(matches!(
+            expired.validate_for(invite_expires_at_ms, NOW + 30),
+            Err(PairingError::ChallengeInvalid)
+        ));
+
+        let (_attempt, handshake) = accept(&[Scope::SessionObserve]);
+        let oversized = vec![0_u8; MAX_PAIRING_FRAME_BYTES + 1];
+        assert!(matches!(
+            handshake.finish(&oversized, NOW + 30),
+            Err(PairingError::FrameTooLarge { .. })
+        ));
     }
 }

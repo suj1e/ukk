@@ -70,6 +70,14 @@ pub enum PairingError {
     ChallengeInvalid,
     /// The decrypted pairing success names another Host.
     HostMismatch,
+    /// The user-entered confirmation code does not match the transcript.
+    ConfirmationMismatch,
+    /// An X25519 public key is low-order or otherwise non-contributory.
+    WeakPublicKey,
+    /// The encrypted completion acknowledgement was malformed or named another device.
+    AckInvalid,
+    /// The pending approval was not acknowledged before its deadline.
+    PendingApprovalExpired,
     /// The requested grant set was not a subset of what the device requested.
     ScopeEscalation,
     /// A scope cannot be granted during pairing.
@@ -140,6 +148,18 @@ impl fmt::Display for PairingError {
             }
             Self::ChallengeInvalid => formatter.write_str("pairing challenge is invalid"),
             Self::HostMismatch => formatter.write_str("pairing success names another Host"),
+            Self::ConfirmationMismatch => {
+                formatter.write_str("confirmation code does not match the pairing transcript")
+            }
+            Self::WeakPublicKey => {
+                formatter.write_str("static key is low-order or non-contributory")
+            }
+            Self::AckInvalid => {
+                formatter.write_str("pairing completion acknowledgement is invalid")
+            }
+            Self::PendingApprovalExpired => {
+                formatter.write_str("pairing approval was not acknowledged before its deadline")
+            }
             Self::ScopeEscalation => {
                 formatter.write_str("approved scopes exceed the requested scopes")
             }

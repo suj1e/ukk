@@ -146,6 +146,17 @@ impl StaticKeypair {
         &self.secret
     }
 
+    /// Returns whether X25519 with `public` yields a non-identity shared
+    /// secret. Clamped X25519 scalars are multiples of the cofactor, so every
+    /// low-order point (including the all-zero encoding and `u = 1`) collapses
+    /// to the identity here. `snow` 0.10.0 does not perform this check itself.
+    #[must_use]
+    pub fn is_contributory_with(&self, public: &PublicKey) -> bool {
+        let secret = StaticSecret::from(self.secret);
+        let peer = X25519PublicKey::from(*public.as_bytes());
+        secret.diffie_hellman(&peer).was_contributory()
+    }
+
     #[must_use]
     pub fn public_key(&self) -> PublicKey {
         PublicKey(self.public)
@@ -208,6 +219,10 @@ pub trait DeviceKeyStore {
 }
 
 /// Deterministic in-memory key store for tests and fixtures.
+///
+/// This is **not** a production key store: keys are lost when the process
+/// exits. A production binary must wire an OS Keychain/Keyring adapter.
+#[doc(hidden)]
 #[derive(Default)]
 pub struct InMemoryDeviceKeyStore {
     keys: Mutex<BTreeMap<String, StaticKeypair>>,
@@ -302,5 +317,17 @@ mod tests {
             StaticKeypair::from_store_bytes(&[1_u8; 31]),
             Err(PairingError::KeyStoreCorrupt)
         ));
+    }
+
+    #[test]
+    fn rejects_non_contributory_x25519_public_keys() {
+        let key = StaticKeypair::from_secret([7_u8; 32]);
+        let zero = PublicKey::from_bytes([0_u8; 32]);
+        let mut one = [0_u8; 32];
+        one[0] = 1;
+        let small_order = PublicKey::from_bytes(one);
+        assert!(!key.is_contributory_with(&zero));
+        assert!(!key.is_contributory_with(&small_order));
+        assert!(key.is_contributory_with(&StaticKeypair::from_secret([8_u8; 32]).public_key()));
     }
 }

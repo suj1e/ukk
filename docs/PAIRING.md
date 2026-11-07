@@ -77,6 +77,9 @@ Noise_IKpsk0_25519_ChaChaPoly_SHA256
   QR. A relay or QR attacker cannot substitute another Host key.
 * **Device static key:** the phone's X25519 static key is carried encrypted in
   the first `IK` message; the Host recovers it from `get_remote_static()`.
+  Both sides reject non-contributory X25519 public keys (all-zero, `u = 1` and
+  other cofactor points) by checking that the DH output is not the identity;
+  `snow` 0.10.0's X25519 resolver does not perform that Noise-spec check.
 * **PSK:** the 32-byte QR `invite_secret` is installed at PSK slot `0`.
   `psk0` mixes it before the first ephemeral, so a wrong secret fails on the
   first message instead of leaking a later oracle.
@@ -116,6 +119,12 @@ Noise_IKpsk0_25519_ChaChaPoly_SHA256
   the challenge. Approval is refused after the challenge expires, so a stale
   pending attempt cannot be confirmed indefinitely.
 
+  Confirmation is enforced by type: `HostPairingAttempt::confirm(entered)`
+  compares the six digits in constant time and returns `ConfirmedAttempt`;
+  `PairingHost::approve` accepts only that token, so a caller cannot skip the
+  comparison. A wrong code returns `confirmation_mismatch` and the invitation
+  remains burned.
+
 Replay, expiry, wrong PSK, wrong Host key, tampered frames and transcript-field
 changes all fail closed with a typed error. A failed handshake burns the
 invitation.
@@ -148,10 +157,43 @@ decisions to `ukk_protocol::TrustRegistry`:
   registry is re-read rather than cached.
 * Key rotation bumps the generation, clears every grant and returns
   `stale_identity` for old sessions. Re-granting is required.
+* **Completion ACK / pending-until-ack:** `PairingHost::approve` returns a
+  `PendingPairing` with the encrypted success frame but does **not** register
+  the device. The phone decrypts the grant, returns an encrypted `PairingAck`,
+  and only `PairingHost::complete` commits the prospective record to
+  `DeviceTrust`. If the success frame is dropped or the ack never arrives, no
+  Host authority is created; a pending record expires after 60 seconds or the
+  challenge deadline, whichever is sooner. If the phone receives the grant but
+  its ack is lost, it should treat pairing as pending and retry rather than
+  assume the Host committed.
+* **WAN possession gate (do not deploy a listener yet):** pairing proves the
+  phone held its device static private key during the Noise exchange and binds
+  the issued fingerprint to that key. It does **not** make the S1 WAN
+  `DeviceClaim` self-authenticating: `accept_hello` on
+  `TransportBinding::remote()` currently trusts a client-supplied
+  `(device_id, fingerprint, generation)` with no proof of possession. Until
+  `crates/host`/relay wiring requires a fresh Noise session keyed by the paired
+  device static key (or a signature over the hello), an observer who sees a
+  hello could replay the claim. See the NOT VERIFIED gate below.
 
 Device private keys are persisted only through `DeviceKeyStore`; this slice
 ships an in-memory test implementation. An OS adapter must use Keychain/Keyring
 and must not store the private key as plaintext in SQLite.
+
+## WAN authentication gate (MAJOR, not implemented)
+
+**Do not expose a relay/WAN listener or claim remote device authentication
+until this gate is implemented and tested.** S2 authenticates the device only
+during pairing. The S1 `accept_hello` path accepts a client-supplied
+`DeviceClaim` over `TransportBinding::remote()` without checking possession of
+the paired device static key. A future `crates/host`/relay transport must:
+
+1. establish a fresh Noise session keyed by the paired device static key (or
+   verify a signature over the hello with that static key), and
+2. only then construct `AuthenticatedSession` / enforce live grants.
+
+Replaying a captured `(device_id, fingerprint, generation)` must fail before
+authorization. This is **NOT VERIFIED / NOT IMPLEMENTED** in S2.
 
 ## Relay boundary
 
@@ -163,8 +205,10 @@ format. Adapters must enforce:
 * TLS with platform trust-store validation; no insecure-skip-verify.
 * The relay sees routing metadata and ciphertext, never the invite secret,
   private static keys or grant contents.
-* Frames are bounded by `MAX_PAIRING_FRAME_BYTES` (4096); oversized frames are
-  rejected before buffering.
+* Frames are bounded by `MAX_PAIRING_FRAME_BYTES` (4096).
+  `RelayTransport::recv_frame(max_bytes)` makes the bound part of the trait
+  contract: an adapter must not read or buffer beyond `max_bytes` and must
+  return its own error on an oversized frame.
 * A relay reconnect is a new pairing attempt. Started or completed invitations
   are never replayed.
 
@@ -196,13 +240,14 @@ Direct dependencies of `crates/remote` at the time of this change:
 | `zeroize` | 1.9.1 | Apache-2.0 OR MIT |
 | `base64` | 0.22.1 | MIT OR Apache-2.0 |
 | `sha2` | 0.10.9 | MIT OR Apache-2.0 |
+| `subtle` | 2.6.1 | BSD-3-Clause |
 | `getrandom` | 0.3.4 | MIT OR Apache-2.0 |
 | `x25519-dalek` | 2.0.1 | BSD-3-Clause |
 | `url` | 2.5.8 | MIT OR Apache-2.0 |
 | `ukk-protocol` | workspace path | same repository |
 
-Notable transitive crates: `curve25519-dalek` 4.1.3 and `subtle` 2.6.1
-(BSD-3-Clause), `chacha20poly1305` 0.10.1 (Apache-2.0 OR MIT), `idna` 1.1.0
+Notable transitive crates: `curve25519-dalek` 4.1.3 (BSD-3-Clause),
+`chacha20poly1305` 0.10.1 (Apache-2.0 OR MIT), `idna` 1.1.0
 (MIT OR Apache-2.0).
 
 `crates/remote` is intentionally free of network and I/O beyond the
@@ -210,22 +255,29 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 and `subtle` 2.6.1
 
 ## What the tests prove
 
-`crates/remote/tests` (53 tests including unit tests):
+`crates/remote/tests` (61 tests including unit tests):
 
 * invite round-trip, strict unknown/missing field rejection, oversized and
   trailing input, unsafe relay schemes, secret redaction and zeroize-on-demand;
 * expiry, unknown invite, single-use replay, wrong PSK, Host key substitution,
   Host id/invite id/expiry/relay transcript mismatch;
-* Host/phone confirmation-code agreement, transcript/prologue agreement and a
-  deterministic `IKpsk0` handshake hash/confirmation vector;
-* approval after challenge expiry;
-* tampered and oversized handshake frames;
+* Host/phone confirmation-code agreement, wrong-code rejection, transcript/
+  prologue agreement and a deterministic `IKpsk0` handshake hash/confirmation
+  vector;
+* low-order/non-contributory X25519 rejection for both the pinned Host key and
+  the device key predicate;
+* approval after challenge expiry, typed `confirm` gate, pending-until-ack
+  commit, tampered/oversized ack, expired pending approval;
+* tampered and oversized handshake frames and oversized success frames;
 * approval scope-escalation denial, `device.manage` rejection, grant TTL
   bounds and client-side grant expiry;
-* client rejection of a decrypted success payload that names another Host,
-  carries an unrequested or forbidden scope, or is already expired;
+* client rejection of a decrypted success payload that names another Host or
+  device, carries a wrong fingerprint or zero generation, or has an
+  unrequested/forbidden scope;
 * revocation and key rotation invalidating existing sessions, independent
   scopes and fingerprinted device binding.
 
 **NOT VERIFIED:** real alma-relay interoperability, OS Keychain/Keyring storage,
 a physical iPhone, relay outage/reconnect, and independent security review.
+**MAJOR GATE:** no WAN proof-of-possession is bound to the paired device static
+key yet; do not expose a relay listener until the gate above is implemented.
