@@ -9,6 +9,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ukk_host_client::{HostClient, LiveHostState};
+use ukk_store::Store;
 
 struct Fixture {
     child: Child,
@@ -36,6 +37,11 @@ fn host_tracks_live_agent_spawn_and_status_through_socket() {
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
     let socket = directory.join("agent.sock");
     let hc_bin = directory.join("mock-hc");
+    let db = directory.join("workspace.sqlite3");
+    let mut store = Store::open(&db).unwrap();
+    let space = store.create_space("ukk", "/src/ukk").unwrap();
+    let session = store.create_session(&space.id, "Live Agent sync").unwrap();
+    drop(store);
     fs::write(
         &hc_bin,
         r#"#!/usr/bin/env python3
@@ -80,6 +86,7 @@ time.sleep(3)
         .arg("serve")
         .env("UKK_HC_BIN", &hc_bin)
         .env("UKK_SOCKET", &socket)
+        .env("UKK_DB_PATH", &db)
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
         .spawn()
@@ -100,6 +107,10 @@ time.sleep(3)
         }
     };
     assert_eq!(initial.snapshot.terminals[0].address, "t3");
+    let workspace = client.workspace_snapshot().expect("read persisted Session from same Host");
+    assert_eq!(workspace.spaces[0].id, space.id);
+    assert_eq!(workspace.sessions[0].id, session.id);
+    assert_eq!(workspace.layouts[0].root.leaves().len(), 1);
 
     let spawned = client
         .wait_for_change(&initial.host_epoch, initial.revision)
