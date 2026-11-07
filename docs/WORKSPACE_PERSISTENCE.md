@@ -137,11 +137,12 @@ cargo run -p ukk-host -- db-doctor
 - Uses SQLite's **online backup API**. The source connection holds a read
   transaction, so the snapshot is consistent while the Host continues writing
   in WAL mode.
-- Writes to a `0600` temporary file in the destination directory, verifies
-  `PRAGMA integrity_check`, the supported `user_version` (1–3) and the
-  required tables, forces a single-file `DELETE` journal, fsyncs, and only then
-  atomically renames it over the destination. A failure never leaves a partial
-  destination.
+- Writes to a private temporary file (`0600` on Unix) in the destination
+  directory, verifies `PRAGMA integrity_check`, the supported `user_version`
+  (1–3) and the required tables, forces a single-file `DELETE` journal,
+  flushes it (`fsync` on Unix; `MOVEFILE_WRITE_THROUGH` on Windows), and only
+  then atomically renames it over the destination. A failure never leaves a
+  partial destination.
 - Refuses an existing destination unless `--force` is passed, and always
   refuses symlinks, directories, devices and the source file itself.
 - The snapshot is metadata only (no terminal output, chat transcripts or
