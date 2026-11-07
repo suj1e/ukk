@@ -13,6 +13,9 @@
     "turn.jsonl": "system init, assistant text/tool_use, user tool_result and result",
     "partial.jsonl": "include-partial-messages stream_event deltas followed by the authoritative assistant message",
     "progress.jsonl": "api_retry, tool_progress and permission_denied",
-    "unsupported.jsonl": "unknown top-level type, unknown system subtype and control_request"
+    "unsupported.jsonl": "unknown top-level type, unknown system subtype and control_request",
+    "assistant_blocks.jsonl": "two assistant lines sharing message.id: text then tool_use",
+    "partial_tool.jsonl": "streamed tool_use start/input_json_delta followed by the authoritative assistant tool_use input",
+    "denials.jsonl": "result with two permission_denials entries"
   }
 }

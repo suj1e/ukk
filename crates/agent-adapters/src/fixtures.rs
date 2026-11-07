@@ -15,6 +15,12 @@ pub const CLAUDE_STREAM_JSON_TURN: &str =
     include_str!("../fixtures/claude/stream_json_2_1/turn.jsonl");
 pub const CLAUDE_STREAM_JSON_PARTIAL: &str =
     include_str!("../fixtures/claude/stream_json_2_1/partial.jsonl");
+pub const CLAUDE_STREAM_JSON_ASSISTANT_BLOCKS: &str =
+    include_str!("../fixtures/claude/stream_json_2_1/assistant_blocks.jsonl");
+pub const CLAUDE_STREAM_JSON_PARTIAL_TOOL: &str =
+    include_str!("../fixtures/claude/stream_json_2_1/partial_tool.jsonl");
+pub const CLAUDE_STREAM_JSON_DENIALS: &str =
+    include_str!("../fixtures/claude/stream_json_2_1/denials.jsonl");
 pub const CLAUDE_STREAM_JSON_PROGRESS: &str =
     include_str!("../fixtures/claude/stream_json_2_1/progress.jsonl");
 pub const CLAUDE_STREAM_JSON_UNSUPPORTED: &str =

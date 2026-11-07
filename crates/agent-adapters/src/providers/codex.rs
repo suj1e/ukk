@@ -1190,12 +1190,15 @@ impl CodexAppServerAdapter {
                     .map(sanitize_action_name),
             })
         });
+        let proposed_command =
+            parse_execpolicy_amendment(&self.config, params.get("proposedExecpolicyAmendment"));
         let options = parse_approval_options(
+            &self.config,
             params.get("availableDecisions"),
+            proposed_command,
             &[
                 ApprovalDecision::Accept,
                 ApprovalDecision::AcceptForSession,
-                ApprovalDecision::AcceptWithExecpolicyAmendment,
                 ApprovalDecision::Decline,
                 ApprovalDecision::Cancel,
             ],
@@ -1388,36 +1391,94 @@ fn parse_file_changes(config: &AdapterConfig, changes: Option<&Value>) -> Vec<Fi
         .collect()
 }
 
-fn parse_approval_options(
+fn parse_execpolicy_amendment(
+    config: &AdapterConfig,
     value: Option<&Value>,
-    defaults: &[ApprovalDecision],
-) -> Vec<ApprovalDecision> {
-    let Some(Value::Array(values)) = value else {
-        return defaults.to_vec();
+) -> Option<Vec<String>> {
+    let value = value?;
+    let commands = match value {
+        Value::Array(commands) => commands,
+        Value::Object(object) => object
+            .get("execpolicyAmendment")
+            .or_else(|| object.get("command"))?
+            .as_array()?,
+        _ => return None,
     };
-    let parsed: Vec<_> = values
+    let command: Vec<String> = commands
         .iter()
-        .map(|value| match value {
+        .filter_map(Value::as_str)
+        .map(|token| redact_bounded(config, token, config.limits.max_input_bytes).text)
+        .collect();
+    if command.is_empty() {
+        None
+    } else {
+        Some(command)
+    }
+}
+
+fn parse_approval_options(
+    config: &AdapterConfig,
+    value: Option<&Value>,
+    proposed_command: Option<Vec<String>>,
+    defaults_without_amendment: &[ApprovalDecision],
+) -> Vec<ApprovalDecision> {
+    let defaults = || {
+        let mut options = defaults_without_amendment.to_vec();
+        if let Some(command) = &proposed_command {
+            options.push(ApprovalDecision::AcceptWithExecpolicyAmendment {
+                command: command.clone(),
+            });
+        }
+        options
+    };
+
+    let Some(Value::Array(values)) = value else {
+        return defaults();
+    };
+    let mut parsed = Vec::new();
+    for value in values {
+        let decision = match value {
             Value::String(option) => match option.as_str() {
                 "accept" => ApprovalDecision::Accept,
                 "acceptForSession" => ApprovalDecision::AcceptForSession,
-                "acceptWithExecpolicyAmendment" => ApprovalDecision::AcceptWithExecpolicyAmendment,
+                "acceptWithExecpolicyAmendment" => match &proposed_command {
+                    Some(command) => ApprovalDecision::AcceptWithExecpolicyAmendment {
+                        command: command.clone(),
+                    },
+                    // The documented decision carries an amendment; a bare
+                    // string without a proposal cannot be answered truthfully.
+                    None => ApprovalDecision::Other(
+                        "acceptWithExecpolicyAmendmentWithoutProposal".to_owned(),
+                    ),
+                },
                 "decline" => ApprovalDecision::Decline,
                 "cancel" => ApprovalDecision::Cancel,
                 other => ApprovalDecision::Other(sanitize_action_name(other)),
             },
             Value::Object(object) => {
-                if object.contains_key("acceptWithExecpolicyAmendment") {
-                    ApprovalDecision::AcceptWithExecpolicyAmendment
-                } else {
-                    ApprovalDecision::Other("structured_decision".to_owned())
+                let amendment = object
+                    .get("acceptWithExecpolicyAmendment")
+                    .and_then(|value| parse_execpolicy_amendment(config, Some(value)));
+                match amendment {
+                    Some(command) => ApprovalDecision::AcceptWithExecpolicyAmendment { command },
+                    None => match &proposed_command {
+                        Some(command) => ApprovalDecision::AcceptWithExecpolicyAmendment {
+                            command: command.clone(),
+                        },
+                        None => ApprovalDecision::Other(
+                            "acceptWithExecpolicyAmendmentWithoutProposal".to_owned(),
+                        ),
+                    },
                 }
             }
             _ => ApprovalDecision::Other("unknown_decision".to_owned()),
-        })
-        .collect();
+        };
+        if !parsed.contains(&decision) {
+            parsed.push(decision);
+        }
+    }
     if parsed.is_empty() {
-        defaults.to_vec()
+        defaults()
     } else {
         parsed
     }

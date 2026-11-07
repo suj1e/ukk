@@ -81,50 +81,68 @@ version, whether each semantic is `Supported`, `Unsupported` or `Unverified`.
 
 ## Merge and replay semantics
 
-`MergeEngine` consumes parsed events. One parsed transport line is ingested as
-one **batch** (`ingest_batch`) because one line can produce several neutral
-events (for example a Claude assistant message with text plus a tool call).
+`MergeEngine` consumes parsed events. One parsed transport line is ingested
+with `ingest_line(stream, sequence, events)` because one line can produce zero
+or several neutral events (a Codex response without modeled events, Claude
+`ping`/`message_stop`, or an assistant message with text plus a tool call).
 
 Rules:
 
 1. **Stream identity.** A `StreamId` is one transport connection. A reconnect or
    explicit resume uses a new stream id and starts line sequence at 1.
-2. **Out-of-order lines.** A sequence gap buffers later batches up to
+2. **Zero-event lines.** `ingest_line` always advances the stream cursor. A line
+   that parses to zero events is `Skipped`, not a permanent sequence gap.
+3. **Out-of-order lines.** A sequence gap buffers later line batches up to
    `Limits::max_pending_events`. Closing the gap drains buffered batches in
-   order. Buffer overflow returns a `TerminalFallback`, never a silently
-   dropped event.
-3. **Replay.** A sequence below the next expected sequence is reported as
+   order. Buffer overflow returns `FallbackReason::StreamBufferOverflow`, never
+   a silently dropped event.
+4. **Replay.** A sequence below the next expected sequence is reported as
    `MergeOutcome::Replay` and is not applied.
-4. **Duplicate lifecycle events.** Lifecycle events with a documented native
-   identity use an `EventKey` built from payload kind + native id. An identical
-   payload is `Duplicate` and changes nothing. The same key with different
-   content is `Conflict`: the first value is retained and the conflict is
-   recorded.
-5. **Streaming deltas.** Provider deltas have no documented replay-stable id.
+5. **Duplicate lifecycle events.** Lifecycle events with a documented native
+   identity use an `EventKey` built from payload kind + transport stream +
+   native id. An identical payload is `Duplicate` and changes nothing. The same
+   key with different content is `Conflict`: the first value is retained and the
+   conflict is recorded. Stream scoping prevents JSON-RPC ids reused on a new
+   connection from suppressing new approvals.
+6. **Repeated updates are not deduplicated.** Plan, plan-text, session-status,
+   artifact/diff, permission-denial and tool-start observations are applied in
+   stream order. The latest plan/status/diff wins; richer tool starts update
+   earlier empty starts; every denial from a result is retained.
+7. **Streaming deltas.** Provider deltas have no documented replay-stable id.
    They are applied in sequence order and are **not** deduplicated by content;
    treating repeated text as a duplicate would erase legitimate repetition.
-6. **Partial streams.** A completed message is authoritative. A final item
+8. **Partial streams.** A completed message is authoritative. A final item
    replaces accumulated partial text; a delta arriving after completion is
-   ignored with a reason.
-7. **Resumed sessions.** `SessionResumed` is an explicit event. It preserves
+   ignored with a reason. Claude assistant lines sharing one `message.id`
+   accumulate content blocks so a later tool_use-only line cannot erase earlier
+   text.
+9. **Resumed sessions.** `SessionResumed` is an explicit event. It preserves
    already-merged history, sets `SessionView::resumed`, and never wipes state
    just because the transport reconnected.
-8. **Session mismatch.** A typed event carrying a different session id than the
-   established session is rejected with `SessionMismatch`; sessions are not
-   mixed silently.
-9. **Unscoped typed events.** A typed event without a documented session scope
-   is reported as `Unscoped` and not applied.
-10. **Unsupported actions.** Unknown provider methods, item types, content
+10. **Session mismatch.** A typed event carrying a different session id than the
+    established session is rejected with `SessionMismatch`; sessions are not
+    mixed silently.
+11. **Unscoped typed events.** A typed event without a documented session scope
+    is reported as `Unscoped` and not applied.
+12. **Unsupported actions.** Unknown provider methods, item types, content
     blocks and server requests become `UnsupportedAction { scope: Action }`.
     Unknown providers/versions fail detection and fall back to raw terminal.
-11. **Approvals.** `serverRequest/resolved` confirms that a request was answered
+13. **Approvals.** `serverRequest/resolved` confirms that a request was answered
     or cleared, but does **not** state which decision was taken. The merge
     records `ApprovalEvidence::ServerRequestResolved` with no decision. Only a
     documented terminal item status (`declined`) supplies
-    `ApprovalEvidence::ItemStatus(Declined)` and decision `Decline`.
-12. **Bounded state.** Accumulated message/plan text is capped. Progress,
+    `ApprovalEvidence::ItemStatus(Declined)` and decision `Decline`. Approval
+    views are keyed by `stream_id + request_id`, so request-id reuse across
+    reconnects cannot merge two approvals.
+14. **Claude message identity.** `SDKUserMessage.message` (MessageParam) has no
+    documented `id`; the adapter uses the event `uuid`, then a stable
+    content-derived id. Approval/decision payloads are never inferred.
+15. **Bounded state.** Accumulated message/plan text is capped. Progress,
     notices, denials, unsupported actions and conflicts are capped. Dedupe
-    entries store a payload fingerprint, not a second copy of the payload.
+    entries store a payload fingerprint computed only for identity-deduped
+    events. Stream cursors are bounded by `Limits::max_streams` and idle
+    streams are evicted without affecting already-merged history; adapter-local
+    in-progress accumulation for an evicted stream may reset.
 
 ## Redaction and payload bounds
 
@@ -151,6 +169,7 @@ Default `Limits`:
 | `max_pending_events` | 256 |
 | `max_progress_entries` | 512 |
 | `max_dedupe_entries` | 4096 |
+| `max_streams` | 64 |
 
 An oversized line, id, or missing/invalid required field returns
 `ParseOutcome::failed` with `AdapterError` + `TerminalFallback`. Truncated text
@@ -237,24 +256,31 @@ directory has a `manifest.json` with fixture version, source URLs and an explici
 | `codex/app_server_v2/approval.jsonl` | Command approval request, `serverRequest/resolved`, declined command item. |
 | `codex/app_server_v2/resume.jsonl` | `thread/started` matching an integration resume hint. |
 | `codex/app_server_v2/unsupported.jsonl` | Unknown notification and unknown item type. |
-| `claude/stream_json_2_1/turn.jsonl` | Init, assistant text + `tool_use`, user `tool_result`, success result. |
+| `claude/stream_json_2_1/turn.jsonl` | Init, assistant text + `tool_use`, user `tool_result` without `message.id`, success result. |
 | `claude/stream_json_2_1/partial.jsonl` | `stream_event` text deltas followed by the authoritative assistant message. |
+| `claude/stream_json_2_1/assistant_blocks.jsonl` | Two assistant lines sharing one `message.id`: text then `tool_use`. |
+| `claude/stream_json_2_1/partial_tool.jsonl` | Streamed tool_use start + `input_json_delta` followed by the authoritative full tool input. |
+| `claude/stream_json_2_1/denials.jsonl` | One result with two `permission_denials` entries. |
 | `claude/stream_json_2_1/progress.jsonl` | `api_retry`, `tool_progress`, `permission_denied`. |
 | `claude/stream_json_2_1/unsupported.jsonl` | Unknown top-level type, unknown system subtype, `control_request`. |
 
 Test coverage in `tests/fixtures.rs`:
 
 - fixture parse + merge for both providers;
-- duplicate ids and replay sequences;
+- zero-event lines advancing the cursor and closing gaps;
+- duplicate ids, replay sequences and stream-scoped request ids;
 - partial streams and final-message authority;
 - out-of-order streams with buffered gaps;
-- resumed sessions preserving history;
+- repeated plan, status and diff updates;
+- resumed sessions preserving history (Codex + Claude);
+- session mismatch rejection;
 - unknown actions and unsupported scope;
-- approval provenance, no invented decision, declined-item evidence;
+- approval provenance, no invented decision, declined-item evidence, execpolicy amendment data, and no amendment option without a proposal;
 - redaction of messages, tool input/output and approvals;
-- unknown provider and unsupported version detection;
-- malformed JSON, non-JSON-RPC object, oversized line;
+- unknown provider and unsupported version/wire detection;
+- malformed JSON, non-JSON-RPC object, oversized line, buffer-overflow reason;
 - bounded text/output truncation and flags;
+- Claude assistant blocks sharing a message id, tool results without `message.id`, partial tool input and multiple result denials;
 - contract version mismatch fallback;
 - fixture manifests are versioned and cite sources.
 
@@ -264,7 +290,9 @@ Test coverage in `tests/fixtures.rs`:
    integration actually observed. On `DetectionFailure`, explicitly switch the
    pane to raw terminal fallback and keep `structured_events_available: false`.
 2. For each transport line, call `ProviderAdapter::parse_line(stream, sequence,
-   line)`, then `MergeEngine::ingest_batch(outcome.events)`.
+   line)`, then `MergeEngine::ingest_line(&stream, sequence, outcome.events)`.
+   Always call it, including for zero-event and blank lines, so the sequence
+   cursor advances.
 3. Start `sequence` at 1 for each new `StreamId`; use a new stream id on
    reconnect. Do not reuse hc/terminal sequence numbers as this sequence.
 4. Apply `TerminalFallback` only by showing raw terminal output or an explicit

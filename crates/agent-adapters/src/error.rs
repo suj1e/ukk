@@ -47,6 +47,9 @@ pub enum AdapterError {
         expected: u32,
         actual: u32,
     },
+    StreamBufferOverflow {
+        limit: usize,
+    },
 }
 
 impl AdapterError {
@@ -109,6 +112,10 @@ impl AdapterError {
             Self::ContractVersionMismatch { expected, actual } => (
                 FallbackReason::ContractVersionMismatch,
                 format!("contract version {actual} is not {expected}"),
+            ),
+            Self::StreamBufferOverflow { limit } => (
+                FallbackReason::StreamBufferOverflow,
+                format!("more than {limit} out-of-order line batches buffered"),
             ),
         };
         TerminalFallback::raw_terminal(reason, detail)

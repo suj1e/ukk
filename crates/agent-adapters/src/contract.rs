@@ -44,6 +44,12 @@ impl AdapterEvent {
                 | EventPayload::Progress { .. }
                 | EventPayload::Notice { .. }
                 | EventPayload::Unsupported { .. }
+                | EventPayload::PermissionDenied { .. }
+                | EventPayload::ToolCallStarted { .. }
+                | EventPayload::Plan { .. }
+                | EventPayload::PlanText { .. }
+                | EventPayload::Artifacts { .. }
+                | EventPayload::SessionStatus { .. }
         ) {
             return None;
         }
@@ -55,9 +61,10 @@ impl AdapterEvent {
             .or_else(|| self.provenance.turn_id.as_ref().map(TurnId::as_str))
             .or_else(|| self.provenance.session_id.as_ref().map(SessionId::as_str))?;
         Some(EventKey(format!(
-            "{}:{}:{}",
+            "{}:{}:{}:{}",
             self.provider.as_str(),
             payload_kind(&self.payload),
+            self.provenance.stream_id,
             identity
         )))
     }
@@ -469,7 +476,10 @@ pub struct NetworkApproval {
 pub enum ApprovalDecision {
     Accept,
     AcceptForSession,
-    AcceptWithExecpolicyAmendment,
+    AcceptWithExecpolicyAmendment {
+        /// Documented `ExecPolicyAmendment` command tokens.
+        command: Vec<String>,
+    },
     Decline,
     Cancel,
     Other(String),

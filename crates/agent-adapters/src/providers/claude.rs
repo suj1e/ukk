@@ -23,18 +23,27 @@ use crate::util::{
     stable_fingerprint,
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+
+#[derive(Default)]
+struct AssistantAccum {
+    parts: Vec<MessagePart>,
+    truncated: bool,
+}
 
 #[derive(Default)]
 struct StreamState {
     message_id: Option<String>,
     tool_blocks: HashMap<u64, ItemId>,
+    assistant: HashMap<String, AssistantAccum>,
+    assistant_order: VecDeque<String>,
 }
 
 pub struct ClaudeStreamJsonAdapter {
     config: AdapterConfig,
     descriptor: CapabilityDescriptor,
     streams: HashMap<StreamId, StreamState>,
+    stream_order: VecDeque<StreamId>,
 }
 
 impl ClaudeStreamJsonAdapter {
@@ -43,7 +52,26 @@ impl ClaudeStreamJsonAdapter {
             config,
             descriptor,
             streams: HashMap::new(),
+            stream_order: VecDeque::new(),
         }
+    }
+
+    fn ensure_stream(&mut self, stream: &StreamId) {
+        if self.streams.contains_key(stream) {
+            self.stream_order.retain(|known| known != stream);
+        } else {
+            while self.streams.len() >= self.config.limits.max_streams.max(1) {
+                let evictable = self.stream_order.iter().position(|known| known != stream);
+                let Some(index) = evictable else {
+                    break;
+                };
+                if let Some(oldest) = self.stream_order.remove(index) {
+                    self.streams.remove(&oldest);
+                }
+            }
+            self.streams.insert(stream.clone(), StreamState::default());
+        }
+        self.stream_order.push_back(stream.clone());
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -330,7 +358,7 @@ impl ClaudeStreamJsonAdapter {
     }
 
     fn parse_assistant(
-        &self,
+        &mut self,
         value: &Value,
         stream: &StreamId,
         sequence: u64,
@@ -497,29 +525,50 @@ impl ClaudeStreamJsonAdapter {
                 }
             }
         }
-        let message = Message {
-            id: ItemId::from(message_id),
-            role: Role::Assistant,
-            parts,
-            phase: None,
-            complete: true,
-            truncated,
-        };
-        let provenance = self.provenance(
-            "assistant",
-            native_id,
-            parent.map(str::to_owned),
-            Some(session_id),
-            None,
-            Some(message_id),
-            stream,
-            sequence,
-        )?;
-        events.push(AdapterEvent::new(
-            ProviderKind::ClaudeStreamJson,
-            provenance,
-            EventPayload::MessageCompleted { message },
-        ));
+        // A documented stream may deliver several assistant lines that share
+        // one message id, one content block each. Accumulate per message id so
+        // a later tool_use-only line cannot erase earlier text.
+        if !parts.is_empty() {
+            self.ensure_stream(stream);
+            let state = self
+                .streams
+                .get_mut(stream)
+                .expect("ensure_stream establishes the stream state");
+            if !state.assistant.contains_key(message_id) {
+                if state.assistant.len() >= 128 {
+                    if let Some(oldest) = state.assistant_order.pop_front() {
+                        state.assistant.remove(&oldest);
+                    }
+                }
+                state.assistant_order.push_back(message_id.to_owned());
+            }
+            let accum = state.assistant.entry(message_id.to_owned()).or_default();
+            accum.parts.extend(parts);
+            accum.truncated |= truncated;
+            let message = Message {
+                id: ItemId::from(message_id),
+                role: Role::Assistant,
+                parts: accum.parts.clone(),
+                phase: None,
+                complete: true,
+                truncated: accum.truncated,
+            };
+            let provenance = self.provenance(
+                "assistant",
+                native_id,
+                parent.map(str::to_owned),
+                Some(session_id),
+                None,
+                Some(message_id),
+                stream,
+                sequence,
+            )?;
+            events.push(AdapterEvent::new(
+                ProviderKind::ClaudeStreamJson,
+                provenance,
+                EventPayload::MessageCompleted { message },
+            ));
+        }
 
         if let Some(error) = value.get("error").and_then(Value::as_str) {
             let bounded = redact_bounded(&self.config, error, self.config.limits.max_text_bytes);
@@ -584,9 +633,20 @@ impl ClaudeStreamJsonAdapter {
                 native_type: "user".to_owned(),
                 field: "message",
             })?;
-        let message_id = required_str(message, "id", "user")?;
-        self.config.limits.check_id("message_id", message_id)?;
         let native_id = Self::event_uuid(value);
+        // SDKUserMessage.message is MessageParam and documents no id. Fall
+        // back to the event uuid, then to a stable content-derived identity.
+        let message_id = match optional_str(message, "id") {
+            Some(id) => id.to_owned(),
+            None => native_id.clone().unwrap_or_else(|| {
+                let content = message
+                    .get("content")
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
+                format!("user#{:x}", stable_fingerprint(&content))
+            }),
+        };
+        self.config.limits.check_id("message_id", &message_id)?;
         let parent = optional_str(value, "parent_tool_use_id");
         let mut events = Vec::new();
         let mut parts = Vec::new();
@@ -664,7 +724,7 @@ impl ClaudeStreamJsonAdapter {
         }
         if !parts.is_empty() {
             let message = Message {
-                id: ItemId::from(message_id),
+                id: ItemId::from(message_id.as_str()),
                 role: Role::User,
                 parts,
                 phase: None,
@@ -677,7 +737,7 @@ impl ClaudeStreamJsonAdapter {
                 parent.map(str::to_owned),
                 Some(session_id),
                 None,
-                Some(message_id),
+                Some(message_id.as_str()),
                 stream,
                 sequence,
             )?;
@@ -762,7 +822,7 @@ impl ClaudeStreamJsonAdapter {
     }
 
     fn parse_result(
-        &self,
+        &mut self,
         value: &Value,
         stream: &StreamId,
         sequence: u64,
@@ -819,7 +879,7 @@ impl ClaudeStreamJsonAdapter {
                     .unwrap_or("");
                 let provenance = self.provenance(
                     "result/permission_denials",
-                    native_id.clone(),
+                    Some(tool_use_id.to_owned()),
                     None,
                     Some(session_id),
                     None,
@@ -868,6 +928,10 @@ impl ClaudeStreamJsonAdapter {
                 },
             },
         ));
+        if let Some(state) = self.streams.get_mut(stream) {
+            state.assistant.clear();
+            state.assistant_order.clear();
+        }
         Ok(events)
     }
 
@@ -897,7 +961,11 @@ impl ClaudeStreamJsonAdapter {
                     })?;
                 let message_id = required_str(message, "id", "stream_event/message_start")?;
                 self.config.limits.check_id("message_id", message_id)?;
-                let state = self.streams.entry(stream.clone()).or_default();
+                self.ensure_stream(stream);
+                let state = self
+                    .streams
+                    .get_mut(stream)
+                    .expect("ensure_stream establishes the stream state");
                 state.message_id = Some(message_id.to_owned());
                 state.tool_blocks.clear();
                 let provenance = self.provenance(
@@ -944,7 +1012,11 @@ impl ClaudeStreamJsonAdapter {
                         bounded_json(&self.config, input, self.config.limits.max_input_bytes)
                     })
                     .unwrap_or_else(BoundedText::empty);
-                let state = self.streams.entry(stream.clone()).or_default();
+                self.ensure_stream(stream);
+                let state = self
+                    .streams
+                    .get_mut(stream)
+                    .expect("ensure_stream establishes the stream state");
                 state.tool_blocks.insert(index, ItemId::from(tool_id));
                 let provenance = self.provenance(
                     "stream_event/tool_use",
@@ -1134,6 +1206,7 @@ impl ClaudeStreamJsonAdapter {
                 )])
             }
             "message_stop" => {
+                self.ensure_stream(stream);
                 if let Some(state) = self.streams.get_mut(stream) {
                     state.message_id = None;
                     state.tool_blocks.clear();

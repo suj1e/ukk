@@ -19,12 +19,16 @@ pub struct Limits {
     pub max_output_bytes: usize,
     /// Maximum bytes accepted for a provider identifier.
     pub max_id_bytes: usize,
-    /// Maximum number of out-of-order events buffered per stream.
+    /// Maximum number of out-of-order line batches buffered per stream.
     pub max_pending_events: usize,
     /// Maximum number of recorded progress observations.
     pub max_progress_entries: usize,
     /// Maximum number of deduplication keys retained.
     pub max_dedupe_entries: usize,
+    /// Maximum number of transport streams retained by merge/adapter state.
+    /// Evicting an idle stream never fabricates events; its history is already
+    /// merged into the conversation.
+    pub max_streams: usize,
 }
 
 impl Default for Limits {
@@ -38,6 +42,7 @@ impl Default for Limits {
             max_pending_events: 256,
             max_progress_entries: 512,
             max_dedupe_entries: 4096,
+            max_streams: 64,
         }
     }
 }

@@ -34,7 +34,7 @@ fn run_fixture(
             "fixture parse failed: {:?}",
             outcome.error
         );
-        let ingest = merge.ingest_batch(outcome.events.clone());
+        let ingest = merge.ingest_line(&stream, sequence, outcome.events.clone());
         assert!(
             ingest.fallback.is_none(),
             "merge fallback: {:?}",
@@ -43,6 +43,18 @@ fn run_fixture(
         outcomes.push(outcome);
     }
     outcomes
+}
+
+fn approval_by_request<'a>(
+    merge: &'a MergeEngine,
+    request_id: &str,
+) -> &'a ukk_agent_adapters::ApprovalView {
+    merge
+        .session()
+        .approvals
+        .values()
+        .find(|view| view.request.request_id.as_str() == request_id)
+        .expect("approval request")
 }
 
 #[test]
@@ -262,7 +274,7 @@ fn codex_approval_provenance_is_retained_without_an_invented_decision() {
         Some("cmd_approval")
     );
 
-    let approval = &merge.session().approvals["42"];
+    let approval = approval_by_request(&merge, "42");
     assert_eq!(approval.request.id.as_str(), "42");
     assert_eq!(approval.request.request_id.as_str(), "42");
     assert_eq!(
@@ -274,6 +286,11 @@ fn codex_approval_provenance_is_retained_without_an_invented_decision() {
         ukk_agent_adapters::ApprovalSubject::Command { .. }
     ));
     assert_eq!(approval.request.options.len(), 5);
+    assert!(approval.request.options.iter().any(|option| matches!(
+        option,
+        ApprovalDecision::AcceptWithExecpolicyAmendment { command }
+            if command == &["cargo", "test", "--workspace"]
+    )));
     let clearance = approval.clearance.as_ref().expect("clearance");
     assert_eq!(
         clearance.evidence,
@@ -295,13 +312,13 @@ fn codex_redaction_applies_to_messages_tools_and_approvals() {
     let approval_line = r#"{"id":"7","method":"item/commandExecution/requestApproval","params":{"threadId":"thr_r","turnId":"turn_r","itemId":"cmd_r","reason":"needs sk-secret","command":"echo sk-secret","cwd":"/repo"}}"#;
 
     for (index, line) in [message_line, tool_line, approval_line].iter().enumerate() {
-        let outcome = adapter.parse_line(&stream, u64::try_from(index).unwrap() + 1, line);
+        let sequence = u64::try_from(index).unwrap() + 1;
+        let outcome = adapter.parse_line(&stream, sequence, line);
         assert!(outcome.error.is_none(), "{:?}", outcome.error);
-        for event in &outcome.events {
-            merge.ingest(event.clone());
-        }
+        merge.ingest_line(&stream, sequence, outcome.events.clone());
     }
 
+    let approval = approval_by_request(&merge, "7");
     let session = merge.session();
     assert_eq!(session.messages["msg_r"].text(), "token [REDACTED]");
     let tool = &session.tools["cmd_r"];
@@ -312,7 +329,6 @@ fn codex_redaction_applies_to_messages_tools_and_approvals() {
     } else {
         panic!("expected command input");
     }
-    let approval = &session.approvals["7"];
     if let ukk_agent_adapters::ApprovalSubject::Command {
         reason, command, ..
     } = &approval.request.subject
@@ -363,11 +379,10 @@ fn codex_bounded_payloads_truncate_and_report() {
     let message_line = r#"{"method":"item/completed","params":{"threadId":"thr_b","turnId":"turn_b","item":{"id":"msg_b","type":"agentMessage","text":"0123456789","phase":null}}}"#;
     let tool_line = r#"{"method":"item/completed","params":{"threadId":"thr_b","turnId":"turn_b","item":{"id":"cmd_b","type":"commandExecution","command":"0123456789","cwd":"/repo","status":"completed","aggregatedOutput":"0123456789","exitCode":0}}}"#;
     for (index, line) in [message_line, tool_line].iter().enumerate() {
-        let outcome = adapter.parse_line(&stream, u64::try_from(index).unwrap() + 1, line);
+        let sequence = u64::try_from(index).unwrap() + 1;
+        let outcome = adapter.parse_line(&stream, sequence, line);
         assert!(outcome.error.is_none(), "{:?}", outcome.error);
-        for event in &outcome.events {
-            merge.ingest(event.clone());
-        }
+        merge.ingest_line(&stream, sequence, outcome.events.clone());
     }
 
     let message = &merge.session().messages["msg_b"];
@@ -656,6 +671,298 @@ fn contract_version_mismatch_degrades_without_applying() {
         ingest.fallback.expect("fallback").reason,
         FallbackReason::ContractVersionMismatch
     );
+}
+
+#[test]
+fn zero_event_lines_advance_the_stream_cursor() {
+    let mut adapter = codex_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::CodexAppServer, Limits::default());
+    let stream = StreamId::from("empty-lines");
+    let lines: Vec<&str> = fixtures::lines(fixtures::CODEX_V2_TURN).take(2).collect();
+
+    let skipped = merge.ingest_line(&stream, 1, Vec::new());
+    assert!(matches!(
+        skipped.outcomes.as_slice(),
+        [MergeOutcome::Skipped { sequence: 1 }]
+    ));
+
+    let session = adapter.parse_line(&stream, 2, lines[0]);
+    let ingest = merge.ingest_line(&stream, 2, session.events.clone());
+    assert!(matches!(
+        ingest.outcomes.as_slice(),
+        [MergeOutcome::Applied { .. }]
+    ));
+
+    let skipped = merge.ingest_line(&stream, 3, Vec::new());
+    assert!(matches!(
+        skipped.outcomes.as_slice(),
+        [MergeOutcome::Skipped { sequence: 3 }]
+    ));
+
+    let turn = adapter.parse_line(&stream, 4, lines[1]);
+    let ingest = merge.ingest_line(&stream, 4, turn.events.clone());
+    assert!(matches!(
+        ingest.outcomes.as_slice(),
+        [MergeOutcome::Applied { .. }]
+    ));
+    assert_eq!(
+        merge.session().id.as_ref().map(SessionId::as_str),
+        Some("thr_fixture")
+    );
+    assert!(merge.session().turns.contains_key("turn_fixture"));
+}
+
+#[test]
+fn zero_event_lines_can_close_an_out_of_order_gap() {
+    let mut adapter = codex_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::CodexAppServer, Limits::default());
+    let stream = StreamId::from("empty-gap");
+    let turn_line = fixtures::lines(fixtures::CODEX_V2_TURN)
+        .nth(1)
+        .expect("turn/started line");
+
+    let late = adapter.parse_line(&stream, 3, turn_line);
+    let buffered = merge.ingest_line(&stream, 3, late.events.clone());
+    assert!(matches!(
+        buffered.outcomes.as_slice(),
+        [MergeOutcome::Buffered {
+            awaiting_sequence: 1
+        }]
+    ));
+
+    let first = merge.ingest_line(&stream, 1, Vec::new());
+    assert!(matches!(
+        first.outcomes.as_slice(),
+        [MergeOutcome::Skipped { sequence: 1 }]
+    ));
+    let second = merge.ingest_line(&stream, 2, Vec::new());
+    assert_eq!(second.outcomes.len(), 2);
+    assert!(matches!(
+        second.outcomes[0],
+        MergeOutcome::Skipped { sequence: 2 }
+    ));
+    assert!(matches!(second.outcomes[1], MergeOutcome::Applied { .. }));
+    assert!(merge.session().turns.contains_key("turn_fixture"));
+}
+
+#[test]
+fn session_mismatch_is_rejected_without_mixing_state() {
+    let mut adapter = codex_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::CodexAppServer, Limits::default());
+    let stream = StreamId::from("mismatch");
+    let first = fixtures::lines(fixtures::CODEX_V2_TURN)
+        .next()
+        .expect("thread/started line");
+    let outcome = adapter.parse_line(&stream, 1, first);
+    merge.ingest_line(&stream, 1, outcome.events.clone());
+
+    let other = r#"{"method":"turn/started","params":{"threadId":"thr_other","turn":{"id":"turn_other","status":"inProgress","items":[],"error":null}}}"#;
+    let outcome = adapter.parse_line(&stream, 2, other);
+    let ingest = merge.ingest_line(&stream, 2, outcome.events.clone());
+    assert!(matches!(
+        ingest.outcomes.as_slice(),
+        [MergeOutcome::SessionMismatch { .. }]
+    ));
+    assert_eq!(
+        merge.session().id.as_ref().map(SessionId::as_str),
+        Some("thr_fixture")
+    );
+    assert!(merge.session().turns.is_empty());
+}
+
+#[test]
+fn repeated_plan_status_and_diff_updates_are_applied() {
+    let mut adapter = codex_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::CodexAppServer, Limits::default());
+    let stream = StreamId::from("updates");
+    let lines = [
+        r#"{"method":"thread/started","params":{"thread":{"id":"thr_updates","sessionId":"thr_updates"}}}"#,
+        r#"{"method":"thread/status/changed","params":{"threadId":"thr_updates","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}"#,
+        r#"{"method":"thread/status/changed","params":{"threadId":"thr_updates","status":{"type":"idle"}}}"#,
+        r#"{"method":"turn/plan/updated","params":{"threadId":"thr_updates","turnId":"turn_updates","explanation":"first","plan":[{"step":"one","status":"pending"}]}}"#,
+        r#"{"method":"turn/plan/updated","params":{"threadId":"thr_updates","turnId":"turn_updates","explanation":"second","plan":[{"step":"two","status":"inProgress"}]}}"#,
+        r#"{"method":"turn/diff/updated","params":{"threadId":"thr_updates","turnId":"turn_updates","diff":"diff one"}}"#,
+        r#"{"method":"turn/diff/updated","params":{"threadId":"thr_updates","turnId":"turn_updates","diff":"diff two"}}"#,
+        r#"{"method":"item/plan/delta","params":{"threadId":"thr_updates","turnId":"turn_updates","itemId":"plan_updates","delta":"Part A"}}"#,
+        r#"{"method":"item/plan/delta","params":{"threadId":"thr_updates","turnId":"turn_updates","itemId":"plan_updates","delta":" Part B"}}"#,
+        r#"{"method":"item/completed","params":{"threadId":"thr_updates","turnId":"turn_updates","item":{"id":"plan_updates","type":"plan","text":"Part A Part B"}}}"#,
+    ];
+    for (index, line) in lines.iter().enumerate() {
+        let sequence = u64::try_from(index).unwrap() + 1;
+        let outcome = adapter.parse_line(&stream, sequence, line);
+        assert!(outcome.error.is_none(), "{:?}", outcome.error);
+        let ingest = merge.ingest_line(&stream, sequence, outcome.events.clone());
+        assert!(ingest.fallback.is_none(), "{:?}", ingest.fallback);
+    }
+
+    let session = merge.session();
+    assert!(matches!(
+        session.status,
+        ukk_agent_adapters::SessionStatus::Idle
+    ));
+    let plan = &session.plans["turn_updates"];
+    assert_eq!(plan.explanation.as_ref().unwrap().text, "second");
+    assert_eq!(plan.steps[0].step, "two");
+    let artifacts = &session.artifacts["turn_diff:turn_updates"];
+    assert_eq!(artifacts[0].content.text, "diff two");
+    let plan_text = &session.plan_text["plan_updates"];
+    assert_eq!(plan_text.text, "Part A Part B");
+    assert!(plan_text.final_item);
+}
+
+#[test]
+fn approval_request_ids_are_scoped_to_the_transport_stream() {
+    let mut adapter = codex_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::CodexAppServer, Limits::default());
+    let stream_a = StreamId::from("approval-a");
+    let stream_b = StreamId::from("approval-b");
+    let line_a = r#"{"id":"1","method":"item/commandExecution/requestApproval","params":{"threadId":"thr_a","turnId":"turn_a","itemId":"item_a","command":"echo A","cwd":"/repo"}}"#;
+    let line_b = r#"{"id":"1","method":"item/commandExecution/requestApproval","params":{"threadId":"thr_a","turnId":"turn_b","itemId":"item_b","command":"echo B","cwd":"/repo"}}"#;
+
+    for (stream, line) in [(&stream_a, line_a), (&stream_b, line_b)] {
+        let outcome = adapter.parse_line(stream, 1, line);
+        assert!(outcome.error.is_none(), "{:?}", outcome.error);
+        let ingest = merge.ingest_line(stream, 1, outcome.events.clone());
+        assert!(ingest.fallback.is_none(), "{:?}", ingest.fallback);
+    }
+
+    let approvals: Vec<_> = merge.session().approvals.values().collect();
+    assert_eq!(approvals.len(), 2);
+    assert!(approvals.iter().any(|view| matches!(
+        &view.request.subject,
+        ukk_agent_adapters::ApprovalSubject::Command { command: Some(command), .. }
+            if command.text == "echo A"
+    )));
+    assert!(approvals.iter().any(|view| matches!(
+        &view.request.subject,
+        ukk_agent_adapters::ApprovalSubject::Command { command: Some(command), .. }
+            if command.text == "echo B"
+    )));
+}
+
+#[test]
+fn buffer_overflow_uses_the_dedicated_fallback_reason() {
+    let limits = Limits {
+        max_pending_events: 1,
+        ..Limits::default()
+    };
+    let mut adapter = codex_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::CodexAppServer, limits);
+    let stream = StreamId::from("overflow");
+    let lines: Vec<&str> = fixtures::lines(fixtures::CODEX_V2_TURN).take(2).collect();
+
+    let two = adapter.parse_line(&stream, 2, lines[0]);
+    let first = merge.ingest_line(&stream, 2, two.events.clone());
+    assert!(matches!(
+        first.outcomes.as_slice(),
+        [MergeOutcome::Buffered { .. }]
+    ));
+
+    let three = adapter.parse_line(&stream, 3, lines[1]);
+    let overflow = merge.ingest_line(&stream, 3, three.events.clone());
+    assert_eq!(
+        overflow.fallback.expect("fallback").reason,
+        FallbackReason::StreamBufferOverflow
+    );
+}
+
+#[test]
+fn codex_approval_without_a_proposed_amendment_does_not_offer_one() {
+    let mut adapter = codex_adapter(AdapterConfig::default());
+    let line = r#"{"id":"9","method":"item/commandExecution/requestApproval","params":{"threadId":"thr_e","turnId":"turn_e","itemId":"item_e","command":"echo hi","cwd":"/repo"}}"#;
+    let stream = StreamId::from("no-amendment");
+    let outcome = adapter.parse_line(&stream, 1, line);
+    let request = outcome.events[0].clone();
+    let EventPayload::ApprovalRequested { approval } = request.payload else {
+        panic!("expected approval request");
+    };
+    assert_eq!(approval.options.len(), 4);
+    assert!(!approval.options.iter().any(|option| matches!(
+        option,
+        ApprovalDecision::AcceptWithExecpolicyAmendment { .. }
+    )));
+}
+
+#[test]
+fn claude_assistant_blocks_sharing_a_message_id_are_accumulated() {
+    let mut adapter = claude_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::ClaudeStreamJson, Limits::default());
+    run_fixture(
+        adapter.as_mut(),
+        &mut merge,
+        "claude-blocks",
+        fixtures::CLAUDE_STREAM_JSON_ASSISTANT_BLOCKS,
+    );
+
+    let session = merge.session();
+    assert_eq!(session.messages["msg_shared"].text(), "Before the tool.");
+    assert!(session.tools.contains_key("toolu_shared"));
+}
+
+#[test]
+fn claude_partial_tool_stream_keeps_the_authoritative_input() {
+    let mut adapter = claude_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::ClaudeStreamJson, Limits::default());
+    run_fixture(
+        adapter.as_mut(),
+        &mut merge,
+        "claude-partial-tool",
+        fixtures::CLAUDE_STREAM_JSON_PARTIAL_TOOL,
+    );
+
+    let tool = &merge.session().tools["toolu_partial"];
+    if let Some(ToolInput::Named { arguments, .. }) = &tool.input {
+        assert!(arguments.text.contains("cargo test"));
+    } else {
+        panic!("expected named tool input");
+    }
+    assert!(merge
+        .session()
+        .progress
+        .iter()
+        .any(|progress| progress.kind == ukk_agent_adapters::ProgressKind::ToolInput));
+}
+
+#[test]
+fn claude_result_keeps_every_permission_denial() {
+    let mut adapter = claude_adapter(AdapterConfig::default());
+    let mut merge = MergeEngine::new(ProviderKind::ClaudeStreamJson, Limits::default());
+    run_fixture(
+        adapter.as_mut(),
+        &mut merge,
+        "claude-denials",
+        fixtures::CLAUDE_STREAM_JSON_DENIALS,
+    );
+
+    let denials = &merge.session().permission_denials;
+    assert_eq!(denials.len(), 2);
+    assert!(denials
+        .iter()
+        .any(|denial| denial.tool_call_id.as_str() == "toolu_deny_a"));
+    assert!(denials
+        .iter()
+        .any(|denial| denial.tool_call_id.as_str() == "toolu_deny_b"));
+}
+
+#[test]
+fn claude_detection_rejects_a_non_stream_json_wire_version() {
+    let mut handshake = ProviderHandshake {
+        declared_version: Some("2.1.191".to_owned()),
+        wire_version: Some("v1".to_owned()),
+        ..ProviderHandshake::default()
+    };
+    handshake.observed_methods = CLAUDE_REQUIRED_METHODS
+        .iter()
+        .map(|method| (*method).to_owned())
+        .collect();
+    let failure = match detect_adapter("claude", &handshake, AdapterConfig::default()) {
+        Ok(_) => panic!("non-stream-json wire version must be rejected"),
+        Err(failure) => failure,
+    };
+    assert!(matches!(
+        failure.error,
+        DetectionError::UnsupportedVersion { .. }
+    ));
 }
 
 #[test]

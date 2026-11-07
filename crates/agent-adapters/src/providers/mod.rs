@@ -56,23 +56,24 @@ pub fn detect_adapter(
             Ok(Box::new(CodexAppServerAdapter::new(config, descriptor)))
         }
         ProviderKind::ClaudeStreamJson => {
-            if let Some(version) = handshake.declared_version.as_deref() {
-                match major_version(version) {
-                    Some(2) => {}
-                    _ => {
-                        return Err(DetectionFailure::new(DetectionError::UnsupportedVersion {
-                            provider: kind,
-                            version: version.to_owned(),
-                            supported: "Claude stream-json 2.x documented schema".to_owned(),
-                        }));
-                    }
-                }
-            } else if let Some(wire_version) = handshake.wire_version.as_deref() {
-                if wire_version != "stream-json" {
+            if let Some(wire_version) = handshake.wire_version.as_deref() {
+                if !matches!(
+                    wire_version,
+                    "stream-json" | "stream-json-2" | "stream_json" | "2"
+                ) {
                     return Err(DetectionFailure::new(DetectionError::UnsupportedVersion {
                         provider: kind,
                         version: wire_version.to_owned(),
                         supported: "Claude stream-json".to_owned(),
+                    }));
+                }
+            }
+            if let Some(version) = handshake.declared_version.as_deref() {
+                if major_version(version) != Some(2) {
+                    return Err(DetectionFailure::new(DetectionError::UnsupportedVersion {
+                        provider: kind,
+                        version: version.to_owned(),
+                        supported: "Claude stream-json 2.x documented schema".to_owned(),
                     }));
                 }
             }

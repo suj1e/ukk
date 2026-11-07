@@ -20,22 +20,46 @@ use crate::contract::{
     ToolKind, ToolStatus, TurnInfo, UnsupportedAction, CONTRACT_VERSION,
 };
 use crate::error::AdapterError;
-use crate::ids::{ItemId, SessionId, StreamId};
+use crate::ids::{ItemId, RequestId, SessionId, StreamId};
 use crate::limits::{truncate_utf8, Limits};
 use crate::util::stable_fingerprint;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MergeOutcome {
-    Applied { key: Option<String> },
-    Buffered { awaiting_sequence: u64 },
-    Duplicate { key: String },
-    Conflict { key: String },
-    Replay { sequence: u64 },
-    ContractMismatch { expected: u32, actual: u32 },
-    SessionMismatch { expected: String, actual: String },
-    Unscoped { native_type: String },
-    Ignored { reason: String },
+    Applied {
+        key: Option<String>,
+    },
+    Buffered {
+        awaiting_sequence: u64,
+    },
+    Duplicate {
+        key: String,
+    },
+    Conflict {
+        key: String,
+    },
+    Replay {
+        sequence: u64,
+    },
+    ContractMismatch {
+        expected: u32,
+        actual: u32,
+    },
+    SessionMismatch {
+        expected: String,
+        actual: String,
+    },
+    Unscoped {
+        native_type: String,
+    },
+    Ignored {
+        reason: String,
+    },
+    /// A sequenced line produced no events. The stream cursor still advanced.
+    Skipped {
+        sequence: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -87,6 +111,9 @@ pub struct ApprovalClearance {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ApprovalView {
     pub request: ApprovalRequest,
+    /// Transport stream that carried the request. JSON-RPC request ids are
+    /// only unique per connection.
+    pub stream_id: StreamId,
     pub clearance: Option<ApprovalClearance>,
 }
 
@@ -155,6 +182,7 @@ struct StreamCursor {
 pub struct MergeEngine {
     state: ConversationState,
     streams: HashMap<StreamId, StreamCursor>,
+    stream_order: VecDeque<StreamId>,
     seen: HashMap<EventKey, PayloadStamp>,
     seen_order: VecDeque<EventKey>,
     conflicts: Vec<MergeConflict>,
@@ -166,6 +194,7 @@ impl MergeEngine {
         Self {
             state: ConversationState::new(provider),
             streams: HashMap::new(),
+            stream_order: VecDeque::new(),
             seen: HashMap::new(),
             seen_order: VecDeque::new(),
             conflicts: Vec::new(),
@@ -189,22 +218,38 @@ impl MergeEngine {
         self.state
     }
 
-    /// Ingest one event. Equivalent to a batch of one; lines that produce
-    /// multiple events must use [`MergeEngine::ingest_batch`] so events sharing
-    /// a transport sequence are not mistaken for replays.
+    /// Ingest one event. Equivalent to a one-event batch.
     pub fn ingest(&mut self, event: AdapterEvent) -> IngestOutcome {
         self.ingest_batch(vec![event])
     }
 
-    /// Ingest every event produced by one transport line.
+    /// Convenience for a non-empty batch. `ingest_line` is the canonical entry
+    /// point because a transport line may legitimately produce zero events.
     pub fn ingest_batch(&mut self, events: Vec<AdapterEvent>) -> IngestOutcome {
-        if events.is_empty() {
-            return IngestOutcome {
-                outcomes: Vec::new(),
-                fallback: None,
-                buffered: 0,
-            };
-        }
+        let Some(first) = events.first() else {
+            return IngestOutcome::fallback(AdapterError::InvalidField {
+                native_type: "merge".to_owned(),
+                field: "batch",
+                detail: "empty batch cannot establish a stream position; use ingest_line"
+                    .to_owned(),
+            });
+        };
+        let stream = first.provenance.stream_id.clone();
+        let sequence = first.provenance.sequence;
+        self.ingest_line(&stream, sequence, events)
+    }
+
+    /// Ingest every event produced by one transport line.
+    ///
+    /// The call advances the stream cursor even when `events` is empty, so
+    /// blank lines, responses without modeled events, `ping` and
+    /// `message_stop` do not create permanent sequence gaps.
+    pub fn ingest_line(
+        &mut self,
+        stream: &StreamId,
+        sequence: u64,
+        events: Vec<AdapterEvent>,
+    ) -> IngestOutcome {
         if let Some(event) = events
             .iter()
             .find(|event| event.contract_version != CONTRACT_VERSION)
@@ -214,18 +259,17 @@ impl MergeEngine {
                 actual: event.contract_version,
             });
         }
-
-        let stream = events[0].provenance.stream_id.clone();
-        let sequence = events[0].provenance.sequence;
         if events.iter().any(|event| {
-            event.provenance.stream_id != stream || event.provenance.sequence != sequence
+            &event.provenance.stream_id != stream || event.provenance.sequence != sequence
         }) {
             return IngestOutcome::fallback(AdapterError::InvalidField {
                 native_type: "merge".to_owned(),
                 field: "batch",
-                detail: "events from one batch must share stream and sequence".to_owned(),
+                detail: "events from one line must share stream and sequence".to_owned(),
             });
         }
+
+        self.touch_stream(stream);
 
         enum Step {
             Apply(Vec<AdapterEvent>),
@@ -237,12 +281,8 @@ impl MergeEngine {
         let step = {
             let cursor = self
                 .streams
-                .entry(stream.clone())
-                .or_insert_with(|| StreamCursor {
-                    next: 1,
-                    pending: BTreeMap::new(),
-                });
-
+                .get_mut(stream)
+                .expect("touch_stream establishes the stream cursor");
             if sequence < cursor.next {
                 Step::Replay
             } else if sequence == cursor.next {
@@ -260,32 +300,35 @@ impl MergeEngine {
 
         match step {
             Step::Replay => IngestOutcome::from_outcome(MergeOutcome::Replay { sequence }),
-            Step::Overflow => IngestOutcome::fallback(AdapterError::InvalidField {
-                native_type: "merge".to_owned(),
-                field: "stream.pending",
-                detail: format!(
-                    "more than {} out-of-order batches buffered",
-                    self.limits.max_pending_events
-                ),
+            Step::Overflow => IngestOutcome::fallback(AdapterError::StreamBufferOverflow {
+                limit: self.limits.max_pending_events,
             }),
             Step::Buffer => {
                 let awaiting_sequence = self
                     .streams
-                    .get(&stream)
+                    .get(stream)
                     .map(|cursor| cursor.next)
                     .unwrap_or(sequence);
                 IngestOutcome {
                     outcomes: vec![MergeOutcome::Buffered { awaiting_sequence }],
                     fallback: None,
-                    buffered: self.pending_count(&stream),
+                    buffered: self.pending_count(stream),
                 }
             }
-            Step::Apply(batch) => {
+            Step::Apply(events) => {
                 let mut outcomes = Vec::new();
-                for event in batch {
+                if events.is_empty() {
+                    outcomes.push(MergeOutcome::Skipped { sequence });
+                }
+                for event in events {
                     outcomes.push(self.apply_event(event));
                 }
-                while let Some(pending) = self.take_next_pending(&stream) {
+                while let Some((pending_sequence, pending)) = self.take_next_pending(stream) {
+                    if pending.is_empty() {
+                        outcomes.push(MergeOutcome::Skipped {
+                            sequence: pending_sequence,
+                        });
+                    }
                     for event in pending {
                         outcomes.push(self.apply_event(event));
                     }
@@ -293,30 +336,61 @@ impl MergeEngine {
                 IngestOutcome {
                     outcomes,
                     fallback: None,
-                    buffered: self.pending_count(&stream),
+                    buffered: self.pending_count(stream),
                 }
             }
         }
     }
 
+    fn touch_stream(&mut self, stream: &StreamId) {
+        if self.streams.contains_key(stream) {
+            self.stream_order.retain(|known| known != stream);
+        } else {
+            while self.streams.len() >= self.limits.max_streams.max(1) {
+                let evictable = self.stream_order.iter().position(|known| {
+                    known != stream
+                        && self
+                            .streams
+                            .get(known)
+                            .is_some_and(|cursor| cursor.pending.is_empty())
+                });
+                let Some(index) = evictable else {
+                    break;
+                };
+                if let Some(oldest) = self.stream_order.remove(index) {
+                    self.streams.remove(&oldest);
+                }
+            }
+            self.streams.insert(
+                stream.clone(),
+                StreamCursor {
+                    next: 1,
+                    pending: BTreeMap::new(),
+                },
+            );
+        }
+        self.stream_order.push_back(stream.clone());
+    }
+
     fn pending_count(&self, stream: &StreamId) -> usize {
         self.streams
             .get(stream)
-            .map(|cursor| cursor.pending.values().map(Vec::len).sum())
+            .map(|cursor| cursor.pending.len())
             .unwrap_or(0)
     }
 
-    fn take_next_pending(&mut self, stream: &StreamId) -> Option<Vec<AdapterEvent>> {
+    fn take_next_pending(&mut self, stream: &StreamId) -> Option<(u64, Vec<AdapterEvent>)> {
         let cursor = self.streams.get_mut(stream)?;
-        let batch = cursor.pending.remove(&cursor.next)?;
+        let sequence = cursor.next;
+        let batch = cursor.pending.remove(&sequence)?;
         cursor.next += 1;
-        Some(batch)
+        Some((sequence, batch))
     }
 
     fn apply_event(&mut self, event: AdapterEvent) -> MergeOutcome {
         let key = event.event_key();
-        let fingerprint = payload_fingerprint(&event.payload);
-        if let Some(key) = &key {
+        let fingerprint = key.as_ref().map(|_| payload_fingerprint(&event.payload));
+        if let (Some(key), Some(fingerprint)) = (&key, fingerprint) {
             if let Some(existing) = self.seen.get(key) {
                 if existing.fingerprint == fingerprint {
                     return MergeOutcome::Duplicate {
@@ -354,7 +428,7 @@ impl MergeEngine {
         }
 
         let outcome = self.apply_payload(&event);
-        if let Some(key) = key {
+        if let (Some(key), Some(fingerprint)) = (key, fingerprint) {
             self.remember(
                 key,
                 PayloadStamp {
@@ -488,7 +562,7 @@ impl MergeEngine {
             }
             EventPayload::ToolCallCompleted { call } => {
                 apply_tool_completed(session, call.clone());
-                clear_approval_from_tool(session, call);
+                clear_approval_from_tool(session, call, &event.provenance.stream_id);
                 MergeOutcome::Applied { key: None }
             }
             EventPayload::Progress { progress } => {
@@ -558,9 +632,10 @@ impl MergeEngine {
             }
             EventPayload::ApprovalRequested { approval } => {
                 session.approvals.insert(
-                    approval.request_id.to_string(),
+                    approval_key(&event.provenance.stream_id, &approval.request_id),
                     ApprovalView {
                         request: approval.clone(),
+                        stream_id: event.provenance.stream_id.clone(),
                         clearance: None,
                     },
                 );
@@ -571,7 +646,8 @@ impl MergeEngine {
                 request_id,
                 evidence,
             } => {
-                let Some(view) = session.approvals.get_mut(request_id.as_str()) else {
+                let key = approval_key(&event.provenance.stream_id, request_id);
+                let Some(view) = session.approvals.get_mut(&key) else {
                     return MergeOutcome::Ignored {
                         reason: format!("approval clearance for unknown request {request_id}"),
                     };
@@ -744,7 +820,11 @@ fn apply_tool_completed(session: &mut SessionView, call: ToolCall) {
     }
 }
 
-fn clear_approval_from_tool(session: &mut SessionView, call: &ToolCall) {
+fn approval_key(stream: &StreamId, request: &RequestId) -> String {
+    format!("{stream}:{request}")
+}
+
+fn clear_approval_from_tool(session: &mut SessionView, call: &ToolCall, stream: &StreamId) {
     if call.status != ToolStatus::Declined {
         return;
     }
@@ -753,7 +833,10 @@ fn clear_approval_from_tool(session: &mut SessionView, call: &ToolCall) {
             .clearance
             .as_ref()
             .is_some_and(|clearance| clearance.decision.is_some());
-        if !has_decision && view.request.item_id.as_ref() == Some(&call.id) {
+        if !has_decision
+            && &view.stream_id == stream
+            && view.request.item_id.as_ref() == Some(&call.id)
+        {
             view.clearance = Some(ApprovalClearance {
                 evidence: ApprovalEvidence::ItemStatus(ToolStatus::Declined),
                 decision: Some(ApprovalDecision::Decline),
