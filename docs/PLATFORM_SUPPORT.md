@@ -12,8 +12,8 @@ GPUI's `gpui_platform::application()` selects platform-specific backends:
 
 | Desktop OS | GPUI presentation backend | Host private IPC | Host background service | Remote Screen capture | Current state in ukk |
 |---|---|---|---|---|---|
-| macOS | Metal; text through font-kit | Unix Domain Socket | launchd user service (planned) | ScreenCaptureKit + VideoToolbox; Accessibility input | GPUI + local socket sources committed; native build/runtime test pending |
-| Windows | Win32 + DirectWrite | SID-scoped ACL-protected Named Pipe (source committed) | user-scoped process / Task Scheduler or service design pending | Windows Graphics Capture + Media Foundation or D3D encoder; input API review | GPUI and Host Named Pipe source committed; CI / real Windows verification pending |
+| macOS | Metal; text through font-kit | Unix Domain Socket | launchd user agent (explicit `install`) | ScreenCaptureKit + VideoToolbox; Accessibility input | GPUI + local socket sources committed; native build/runtime test pending |
+| Windows | Win32 + DirectWrite | SID-scoped ACL-protected Named Pipe (source committed) | current-user logon Scheduled Task (explicit `install`) | Windows Graphics Capture + Media Foundation or D3D encoder; input API review | GPUI and Host Named Pipe source committed; CI / real Windows verification pending |
 | Linux | Wayland / X11; platform graphics backend | Unix Domain Socket | systemd --user service (planned) | PipeWire/portal for Wayland, X11 capture fallback; input via permission-brokered APIs | GPUI + local socket sources committed; native build/runtime test pending |
 
 GPU rendering, text, fullscreen, tray, update, screen capture, input injection and window decorations must be tested per OS. A macOS pass does not constitute a Windows/Linux pass.
@@ -59,7 +59,9 @@ cargo run -p ukk-host -- serve
 cargo run --manifest-path apps/desktop/Cargo.toml
 ```
 
-**Windows status:** Windows Named Pipe Host/server and client **source is committed**; Windows CI and real-device validation have not been confirmed. For now the Windows client has a 3s connection-busy retry but the synchronous Named Pipe read path does not yet enforce a hard read deadline. Add bounded waits/cancellation before production remote or untrusted plugin use.
+**Windows status:** Windows Named Pipe Host/server and client **source is committed**; `ukk-host-client` is type-checked for `x86_64-pc-windows-msvc`, but Windows CI and real-device validation have not been confirmed. Pipe I/O is overlapped with a bounded deadline and `CancelIoEx`; the server and client verify each other's process token SID. Cross-user denial and real service installation remain NOT VERIFIED. See [Host lifecycle](HOST_LIFECYCLE.md#evidence).
+
+**macOS/Linux status:** the Unix socket enforces a 0700 directory, 0600 socket, same-user peer credentials and flock-guarded stale-socket recovery. The macOS local hardening tests ran locally; Linux CI confirmation and cross-user denial remain NOT VERIFIED.
 
 ## Required CI coverage
 
@@ -67,6 +69,7 @@ cargo run --manifest-path apps/desktop/Cargo.toml
 - [x] GPUI source build workflow matrix includes Ubuntu, macOS and Windows (with native Linux build dependencies).
 - [ ] Verify CI passes on each OS and fix platform-specific compiler/toolchain issues.
 - [x] Windows Named Pipe Host server/client and explicit current-user DACL (source committed; not yet verified).\n- [ ] Windows CI/test green, different-user ACL denial test, pipe hijack test, timeout/cancellation and peer verification as appropriate.
+- [ ] macOS/Linux/Windows real `install`/`uninstall`/`restart` evidence and cross-user denial (source + local macOS tests committed; see [Host lifecycle](HOST_LIFECYCLE.md)).
 - [ ] End-to-end real hc snapshot/events from Windows Host and Linux Host, including reconnect and child Agent tree.
 - [ ] Window close/reopen persistence, permissions, keyboard shortcuts and accessibility tested on all platforms.
 - [ ] OS-specific Remote Screen privilege prompts, view/control separation and media compatibility.
