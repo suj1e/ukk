@@ -64,6 +64,7 @@ pub(super) fn serve() -> AppResult<()> {
     let auth = Arc::new(LocalAuth::install()?);
     let broker = Broker::new();
     broker.start();
+    let plugins = Arc::new(PluginService::from_env());
     println!("ukk Host listening on {}", path.display());
     println!(
         "Security: same-user Unix peers only; socket 0600 in a 0700 directory; \
@@ -91,9 +92,10 @@ pub(super) fn serve() -> AppResult<()> {
                 }
                 let broker = Arc::clone(&broker);
                 let auth = Arc::clone(&auth);
+                let plugins = Arc::clone(&plugins);
                 std::thread::spawn(move || {
                     let _slot = slot;
-                    if let Err(error) = serve_one(stream, broker, auth) {
+                    if let Err(error) = serve_one(stream, broker, auth, plugins) {
                         eprintln!("ukk Host client error: {error}");
                     }
                 });
@@ -149,6 +151,7 @@ fn serve_one<S: Read + Write>(
     mut stream: S,
     broker: Arc<Broker>,
     auth: Arc<LocalAuth>,
+    plugins: Arc<PluginService>,
 ) -> AppResult<()> {
     let mut pending: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = [0u8; 8192];
@@ -159,7 +162,7 @@ fn serve_one<S: Read + Write>(
                 return Err(format!("Host request exceeds {MAX_REQUEST_BYTES} bytes").into());
             }
             let line: Vec<u8> = pending.drain(..=position).collect();
-            let response = dispatch_line(&line[..line.len() - 1], &broker, &auth);
+            let response = dispatch_line(&line[..line.len() - 1], &broker, &auth, &plugins);
             write_json(&mut stream, &response)?;
             requests += 1;
             if requests >= MAX_REQUESTS_PER_CONNECTION {
@@ -195,7 +198,7 @@ fn serve_one<S: Read + Write>(
     }
 }
 
-fn dispatch_line(line: &[u8], broker: &Broker, auth: &LocalAuth) -> Value {
+fn dispatch_line(line: &[u8], broker: &Broker, auth: &LocalAuth, plugins: &PluginService) -> Value {
     let input: Value = match serde_json::from_slice(line) {
         Ok(value) => value,
         Err(_) => {
@@ -205,7 +208,7 @@ fn dispatch_line(line: &[u8], broker: &Broker, auth: &LocalAuth) -> Value {
             })
         }
     };
-    handle_request(&input, broker, auth)
+    handle_request_with_plugins(&input, broker, auth, plugins)
 }
 
 fn overloaded_error() -> Value {
@@ -234,6 +237,7 @@ pub(super) fn serve_windows() -> AppResult<()> {
     let auth = Arc::new(LocalAuth::install()?);
     let broker = Broker::new();
     broker.start();
+    let plugins = Arc::new(PluginService::from_env());
     println!("ukk Host listening on local Named Pipe {name}");
     println!(
         "Security: same-user Named Pipe clients only; protected DACL; remote pipe clients \
@@ -261,10 +265,11 @@ pub(super) fn serve_windows() -> AppResult<()> {
         }
         let broker = Arc::clone(&broker);
         let auth = Arc::clone(&auth);
+        let plugins = Arc::clone(&plugins);
         std::thread::spawn(move || {
             let _slot = slot;
             let stream = PipeStream::new(connected, CLIENT_IDLE_TIMEOUT, WRITE_TIMEOUT);
-            if let Err(error) = serve_one(stream, broker, auth) {
+            if let Err(error) = serve_one(stream, broker, auth, plugins) {
                 eprintln!("ukk Host named-pipe client error: {error}");
             }
         });

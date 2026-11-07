@@ -2,9 +2,11 @@
 
 > Status: **v1 contract implemented** in `crates/plugin-api` and
 > `crates/plugin-host`, with a harmless sample plugin under
-> `plugins/sample-session-action/`. There is **no GPUI or Host RPC wiring yet**
-> and no OS sandbox; see [Not verified](#not-verified-in-this-pr) before relying
-> on this for a privileged plugin.
+> `plugins/sample-session-action/`. The **Host RPC and Desktop Session wiring
+> for that sample are implemented** in `crates/host/src/plugin_service.rs` and
+> `apps/desktop/src/workspace/plugins.rs`. There is still **no OS sandbox**; see
+> [Not verified](#not-verified-in-this-pr) before relying on this for a
+> privileged plugin.
 
 ## Scope
 
@@ -47,6 +49,10 @@ cleared environment, bounded framing, deadlines and kill-on-disable.
 | `crates/plugin-host/src/contributions.rs` | Read-only UI descriptors and command index |
 | `crates/plugin-host/src/in_process.rs` | Trusted in-process contribution trait |
 | `crates/plugin-host/src/bin/*` | Reference sample helper and a fault-injection helper |
+| `crates/host/src/plugin_service.rs` | Explicit registry, one Host-owned `PluginHost`, `plugin.*` RPC and typed errors |
+| `crates/host/src/plugin_control.rs` | Separate default-off `plugin.control` token file |
+| `crates/host-client/src/lib.rs` | Typed `plugin.snapshot` projection and invoke-time token read |
+| `apps/desktop/src/workspace/plugins.rs` | Session action/tab/overlay rendering and explicit-click invocation |
 | `plugins/sample-session-action/plugin.toml` | Sample manifest: Session action + tab + overlay |
 
 ## Manifest schema v1
@@ -307,19 +313,110 @@ requires that token (no public constructor), so a settings UI or a future
 SQLite store cannot create authority on its own; `grant_store()` exposes only
 listing and revocation.
 
+## Host registry and `plugin.control` (delivered)
+
+`crates/host/src/plugin_service.rs` owns exactly one `PluginHost` for the Host
+process. It never scans a directory. Plugins load only from one explicit
+registry file:
+
+- default `~/.ukk/plugins/registry.json` (Windows:
+  `%LOCALAPPDATA%\ukk\plugins\registry.json`);
+- `UKK_PLUGIN_REGISTRY` overrides the path for tests and operators.
+
+```json
+{
+  "version": 1,
+  "plugins": [
+    {
+      "id": "dev.ukk.sample.session-action",
+      "manifest": "/absolute/path/plugin.toml",
+      "helper": "/absolute/path/ukk-sample-session-helper",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Loading is strict and fail-closed:
+
+- unknown fields and unknown registry versions are rejected;
+- manifest and helper paths must be absolute and must not contain `.`/`..`;
+- both must be regular, non-symlink files; the helper must be executable and
+  its file stem must match the manifest `entrypoint`; the manifest id must
+  match the registry id;
+- on Unix neither the registry nor the listed files may be group/other
+  writable;
+- duplicate ids, manifest paths, helper paths and command ids are ambiguous
+  and refuse the whole registry;
+- a bad entry installs **nothing**; the snapshot reports `registry.error`;
+- a missing registry means "no plugins", not a scan fallback.
+
+Installed entries start disabled unless `enabled` is true. `plugin.enable` and
+`plugin.disable` persist that flag by rewriting the registry atomically
+(0600 temporary file + rename), so an operator's choice survives a Host
+restart. They never restart the Host; they only start/stop the helper.
+
+### Capability separation
+
+Mutating plugin RPC requires the separate, default-off `plugin.control`
+capability. It is **not** the rotated workspace metadata token and **not** the
+agent-control token.
+
+- Default path: next to the Host socket with extension `.plugin-control`
+  (`~/.ukk/run/agent-host.plugin-control`), or
+  `UKK_PLUGIN_CONTROL_TOKEN_FILE`; Windows uses
+  `%LOCALAPPDATA%\ukk\run\agent-host.plugin-control`.
+- Must be a regular, non-symlink ASCII file, at least 60 characters, mode 0600
+  on Unix.
+- `ukk-host plugin-control-enable` creates it explicitly and refuses to
+  overwrite; `plugin-control-disable` removes it; `plugin-control-status`
+  reports enabled/path/problem.
+- The Host reloads the file on every mutating request, so provisioning or
+  revoking it needs no Host restart.
+- Only the distinct `control` field is read. The workspace `auth` field and any
+  agent-control value are ignored/rejected.
+- `plugin.snapshot` is read-only and requires no capability.
+
+Local-only threat model: this is same-user, same-host defense in depth. It does
+not authenticate a remote device and does not stop a process that can already
+read the user's profile.
+
+### RPC surface
+
+| Method | Capability | Result |
+|---|---|---|
+| `plugin.snapshot` | none (read-only) | registry status, installed plugin states (`disabled`/`starting`/`ready`/`failed`), `session.action`/`session.tab`/`session.overlay` descriptors and command metadata. No helper output, no token, no context/settings slots |
+| `plugin.enable` | `plugin.control` | starts the helper in the same Host, returns typed state |
+| `plugin.disable` | `plugin.control` | stops the helper in the same Host, returns typed state |
+| `plugin.invoke` | `plugin.control` | dispatches one declared command with `session_id`/`args`; returns `{plugin_id, command, provenance, value}` |
+
+Denials are typed JSON-RPC errors: plugin-control disabled/insecure/unauthorized
+(`-32061`/`-32063`/`-32062`), invalid params (`-32602`), supervisor denial
+(`-32065` with `data.kind` such as `not_enabled`, `capability_denied`,
+`unknown_command`) and registry failure (`-32066`). The Host plugin path has no
+handle to herdr-core or the runtime API.
+
+### Desktop Session rendering
+
+`apps/desktop/src/workspace/plugins.rs` polls `plugin.snapshot` through
+`HostClient` and renders the sample action, tab and bounded overlay inside the
+selected Session. Selection is local; nothing invokes on load, refresh or tab
+selection. Only an explicit action/run click calls `plugin.invoke`, and the
+Desktop reads the `plugin.control` token at that moment, never storing or
+logging it. Denied and local errors are rendered as typed states; helper
+`value` text is sanitized and bounded before display.
+
 Remaining wiring, deliberately **not** in this PR:
 
-1. Host RPC method(s) exposing snapshot/invoke/grants — `crates/host/src/rpc.rs`
-   stays untouched; local authorization for mutation methods must be designed
-   first (see H1).
-2. GPUI rendering of `ViewDescriptor`/`OverlayDescriptor` and a settings surface
-   for granting/revoking capabilities.
-3. Plugin discovery, signature/origin verification, allowlist and installer
-   policy; today the embedding host must supply the absolute helper path.
-4. Durable grant storage (SQLite) and audit persistence.
-5. Host-event production: which Host subsystem emits `workspace.changed`,
-   `session.updated`, `agent.status`, and how in-process plugins receive events.
-6. OS sandbox/entitlements for first-party privileged helpers (Remote Screen),
+1. Grant issuance UI and settings surface for granting/revoking capabilities;
+   the sample declares no required capability and this slice issues no grants.
+2. Signature/origin verification, installer/allowlist policy and update
+   migration. Discovery is explicit, but an absolute path is not yet
+   authenticated.
+3. Durable grant storage (SQLite) and audit persistence.
+4. Host-event production for `workspace.changed`, `session.updated`,
+   `agent.status`, plus in-process event delivery.
+5. OS sandbox/entitlements for first-party privileged helpers (Remote Screen),
    plus capture/input implementation and consent UI — none of that exists here.
 
 ## Security review notes
@@ -377,10 +474,16 @@ Residual risks and honest gaps:
 ## Not verified in this PR
 
 - macOS/Linux/Windows **runtime** behaviour of the sample helper beyond the
-  local test run in this worktree (CI matrix is the authority).
-- Any GPUI rendering, Host RPC path, mobile/iOS consumption.
-- OS sandboxing, entitlements, screen capture/input (no such capability is
-  implemented; `screen.*` is vocabulary only).
+  local test run in this worktree (the three-OS CI matrix is the authority).
+- **Third-party helpers.** Only the first-party sample has run through this
+  wiring. No third-party helper has been installed, enabled or invoked, and
+  there is no signature/origin check.
+- **Real GPUI-window acceptance.** The Desktop code compiles and its unit tests
+  pass locally, but a real macOS/Windows/Linux window showing plugin slots has
+  not been exercised in this worktree. The launch-smoke workflow remains the
+  authority for window evidence.
+- Capture/input (no such capability is implemented; `screen.*` is vocabulary
+  only), OS sandboxing and entitlements.
 - Durable grant/audit persistence and multi-process host operation.
 - CPU/memory quotas, helper restart budgets and crash-loop policy.
 - Signature, notarization, allowlist and update/migration for plugins.
@@ -390,13 +493,35 @@ Residual risks and honest gaps:
 ```bash
 cargo test -p ukk-plugin-api            # manifest/version/capability contract
 cargo test -p ukk-plugin-host           # lifecycle, dispatch, crash, queue, audit
+cargo test -p ukk-host plugin           # registry validation, control, service
+cargo test -p ukk-host --test plugin_wiring  # real helper through Host RPC
+cargo test -p ukk-host-client           # snapshot parsing and token reader
+cargo test --manifest-path apps/desktop/Cargo.toml --bin ukk-desktop
 ```
 
-The sample manifest is validated from its shipped file
-(`plugins/sample-session-action/plugin.toml`), and
-`sample_plugin_enable_disable_without_host_restart` installs it against the real
-`ukk-sample-session-helper` binary, enables it, dispatches
-`sample.session.ping`, disables it and enables it again inside one host instance.
+`sample_plugin_enable_invoke_disable_without_host_restart` (plugin-host) proves
+the broker in isolation. The Host-level
+`sample_plugin_enable_invoke_disable_without_host_restart` in
+`crates/host/tests/plugin_wiring.rs` starts the actual `ukk-host` binary with an
+explicit temp registry, enables/invokes/disables/re-enables the real
+`ukk-sample-session-helper`, and asserts the Host process id is unchanged.
+`plugin_control_is_default_off_and_never_accepts_other_tokens` proves the
+workspace/agent-style tokens are refused, and
+`plugin_rpc_does_not_change_runtime_observation` proves plugin work does not
+alter the Host runtime snapshot.
+
+To run it by hand:
+
+```bash
+# 1. Build the sample helper and the Host.
+cargo build -p ukk-host -p ukk-plugin-host
+# 2. Write ~/.ukk/plugins/registry.json with absolute manifest/helper paths.
+# 3. Provision the separate capability.
+target/debug/ukk-host plugin-control-enable
+# 4. Start the Host, then use `plugin.snapshot` / `plugin.invoke` over the
+#    local socket. The Desktop reads the same snapshot through HostClient.
+target/debug/ukk-host serve
+```
 
 ## Compatibility and store strategy
 

@@ -309,12 +309,16 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     let client = HostClient::from_env();
-                    (client.host_snapshot(), client.workspace_state())
+                    (
+                        client.host_snapshot(),
+                        client.workspace_state(),
+                        client.plugin_snapshot(),
+                    )
                 })
                 .await;
             this.update(cx, |view, cx| {
                 view.loading = false;
-                let (host, domain) = result;
+                let (host, domain, plugins) = result;
                 match host {
                     Ok(live) => view.apply_host_state(live),
                     Err(error) => {
@@ -332,6 +336,15 @@ impl Workspace {
                         view.retry_after_reload = None;
                         view.workspace_sync_error =
                             Some(format!("Workspace storage unavailable: {error}"));
+                    }
+                }
+                match plugins {
+                    Ok(snapshot) => {
+                        view.plugin_snapshot = snapshot;
+                        view.plugin_snapshot_error = None;
+                    }
+                    Err(error) => {
+                        view.plugin_snapshot_error = Some(error.to_string());
                     }
                 }
                 cx.notify();

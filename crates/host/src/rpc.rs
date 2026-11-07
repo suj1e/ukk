@@ -1,7 +1,18 @@
 //! JSON-RPC dispatch and local capability authorization.
 use super::*;
+use crate::plugin_service::PluginService;
 
+#[cfg(test)]
 pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> Value {
+    handle_request_with_plugins(req, broker, auth, &PluginService::test_empty())
+}
+
+pub(super) fn handle_request_with_plugins(
+    req: &Value,
+    broker: &Broker,
+    auth: &LocalAuth,
+    plugins: &PluginService,
+) -> Value {
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     if req.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
         || req.get("method").and_then(Value::as_str).is_none()
@@ -15,7 +26,7 @@ pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> 
     match req["method"].as_str().unwrap_or_default() {
         "host.ping" => json!({
             "jsonrpc":"2.0","id":id,
-            "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":false,"agent_runtime_control":"separate-capability-opt-in","workspace_edits":"local-capability-only"}
+            "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":false,"agent_runtime_control":"separate-capability-opt-in","plugin_control":"separate-capability-opt-in","workspace_edits":"local-capability-only"}
         }),
         method @ ("workspace.session.create"
         | "workspace.pane.split"
@@ -106,6 +117,14 @@ pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> 
                 "error":{"code":-32001,"message":error.to_string()}
             }),
         },
+        "plugin.snapshot" => json!({"jsonrpc":"2.0","id":id,"result":plugins.snapshot()}),
+        method @ ("plugin.enable" | "plugin.disable" | "plugin.invoke") => {
+            let params = req.get("params").unwrap_or(&Value::Null);
+            match crate::plugin_service::dispatch(method, params, plugins) {
+                Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+                Err(error) => json!({"jsonrpc":"2.0","id":id,"error":error.value()}),
+            }
+        }
         _ => json!({
             "jsonrpc":"2.0","id":id,
             "error":{"code":-32601,"message":"method not found"}

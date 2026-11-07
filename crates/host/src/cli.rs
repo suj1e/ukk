@@ -1,4 +1,5 @@
 //! Explicit CLI commands, not a public remote API.
+use super::plugin_control::PluginControlAuth;
 use super::runtime_auth::AgentControlAuth;
 use super::*;
 
@@ -55,6 +56,39 @@ pub(super) fn execute() -> AppResult<()> {
         }
         "agent-control-status" => {
             let auth = AgentControlAuth::from_env();
+            println!("enabled: {}", auth.is_enabled());
+            println!("path: {}", auth.path().display());
+            if let Some(problem) = auth.problem() {
+                println!("problem: {problem}");
+            }
+            Ok(())
+        }
+        "plugin-control-enable" => {
+            let path = PluginControlAuth::default_path();
+            match PluginControlAuth::provision(&path) {
+                Ok(path) => {
+                    println!("Plugin control capability created at {}", path.display());
+                    println!(
+                        "plugin.enable/disable/invoke now require this separate token; \
+                         plugin.snapshot stays read-only."
+                    );
+                    Ok(())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(format!(
+                    "plugin-control capability already exists at {}; remove it deliberately with plugin-control-disable",
+                    path.display()
+                )
+                .into()),
+                Err(error) => Err(error.into()),
+            }
+        }
+        "plugin-control-disable" => {
+            PluginControlAuth::remove(PluginControlAuth::default_path())?;
+            println!("Plugin control capability removed; plugin mutations are disabled.");
+            Ok(())
+        }
+        "plugin-control-status" => {
+            let auth = PluginControlAuth::from_env();
             println!("enabled: {}", auth.is_enabled());
             println!("path: {}", auth.path().display());
             if let Some(problem) = auth.problem() {
@@ -197,6 +231,9 @@ Commands:
   agent-control-enable Create the separate agent-control token (mutations only)
   agent-control-disable Remove that token; runtime mutations become disabled
   agent-control-status Show whether agent control is enabled
+  plugin-control-enable Create the separate plugin-control token (plugin mutations only)
+  plugin-control-disable Remove that token; plugin mutations become disabled
+  plugin-control-status Show whether plugin control is enabled
   serve                Start private local Unix socket / Named Pipe
   request [method]     Read local Host RPC (default host.ping)
 Lifecycle (explicit; `serve` never installs anything):
