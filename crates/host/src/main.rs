@@ -6,8 +6,11 @@
 //! broker is not yet a durable, authenticated cross-device event service.
 
 mod broker;
+mod local_auth;
+mod workspace_rpc;
 
 use broker::Broker;
+use local_auth::LocalAuth;
 use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
@@ -215,16 +218,18 @@ fn serve() -> AppResult<()> {
     // Never unlink an existing socket: another Host might own it.
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    let auth = Arc::new(LocalAuth::install()?);
     let broker = Broker::new();
     broker.start();
     println!("ukk Host listening on {}", path.display());
-    println!("Read-only methods: host.ping, terminal.list, host.snapshot, host.wait, workspace.snapshot");
+    println!("Methods: read-only snapshots + authorized local Session / Pane metadata edits");
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
                 let broker = Arc::clone(&broker);
+                let auth = Arc::clone(&auth);
                 std::thread::spawn(move || {
-                    if let Err(error) = serve_one(stream, broker) {
+                    if let Err(error) = serve_one(stream, broker, auth) {
                         eprintln!("ukk Host client error: {error}");
                     }
                 });
@@ -237,7 +242,7 @@ fn serve() -> AppResult<()> {
 
 // This handler is shared by UnixStream (macOS/Linux) and Win32 Named Pipe
 // File handles. Every client uses the same read-only JSON-RPC dispatcher.
-fn serve_one<S: Read + Write>(mut stream: S, broker: Arc<Broker>) -> AppResult<()> {
+fn serve_one<S: Read + Write>(mut stream: S, broker: Arc<Broker>, auth: Arc<LocalAuth>) -> AppResult<()> {
     const MAX_LINE: usize = 64 * 1024;
     loop {
         let mut bytes = Vec::new();
@@ -267,7 +272,7 @@ fn serve_one<S: Read + Write>(mut stream: S, broker: Arc<Broker>) -> AppResult<(
                 continue;
             }
         };
-        let result = handle_request(&input, &broker);
+        let result = handle_request(&input, &broker, &auth);
         write_json(&mut stream, &result)?;
     }
 }
@@ -278,8 +283,9 @@ fn serve_windows() -> AppResult<()> {
     let broker = Broker::new();
     broker.start();
     println!("ukk Host listening on local Named Pipe {name}");
-    println!("Read-only methods: host.ping, terminal.list, host.snapshot, host.wait");
+    println!("Methods: snapshots + authorized Session / Pane edits");
     let mut pending = windows_pipe::create_server_pipe(&name, true)?;
+    let auth = Arc::new(LocalAuth::install()?);
     loop {
         windows_pipe::accept_client(&pending)?;
         // Keep a replacement server instance open *before* handing off the
@@ -288,15 +294,16 @@ fn serve_windows() -> AppResult<()> {
         let replacement = windows_pipe::create_server_pipe(&name, false)?;
         let connected = std::mem::replace(&mut pending, replacement);
         let broker = Arc::clone(&broker);
+        let auth = Arc::clone(&auth);
         std::thread::spawn(move || {
-            if let Err(error) = serve_one(connected, broker) {
+            if let Err(error) = serve_one(connected, broker, auth) {
                 eprintln!("ukk Host named-pipe client error: {error}");
             }
         });
     }
 }
 
-fn handle_request(req: &Value, broker: &Broker) -> Value {
+fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> Value {
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     if req.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
         || req.get("method").and_then(Value::as_str).is_none()
@@ -312,6 +319,24 @@ fn handle_request(req: &Value, broker: &Broker) -> Value {
             "jsonrpc":"2.0","id":id,
             "result":{"status":"ok","protocol":"ukk-local-spike-1","read_only":true}
         }),
+        method @ (
+            "workspace.session.create"
+            | "workspace.pane.split"
+            | "workspace.pane.close"
+            | "workspace.pane.resize"
+        ) => {
+            let params = req.get("params").unwrap_or(&Value::Null);
+            if !auth.authorized(params.get("auth").and_then(Value::as_str)) {
+                json!({"jsonrpc":"2.0","id":id,
+                    "error":{"code":-32030,"message":"local workspace mutation is not authorized"}})
+            } else {
+                match workspace_rpc::dispatch(method, params) {
+                    Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+                    Err(error) => json!({"jsonrpc":"2.0","id":id,
+                        "error":{"code":error.code,"message":error.message}}),
+                }
+            }
+        }
         "workspace.snapshot" => {
             match Store::open_default().and_then(|store| store.snapshot()) {
                 Ok(snapshot) => json!({"jsonrpc":"2.0","id":id,"result":snapshot}),
@@ -402,9 +427,10 @@ mod tests {
     #[test]
     fn ping_is_read_only() {
         let broker = Broker::new();
+        let auth = LocalAuth::test();
         let response = handle_request(&json!({
             "jsonrpc":"2.0","id":19,"method":"host.ping","params":{}
-        }), &broker);
+        }), &broker, &auth);
         assert_eq!(response["id"], 19);
         assert_eq!(response["result"]["read_only"], true);
     }
@@ -412,18 +438,20 @@ mod tests {
     #[test]
     fn rejects_unknown_or_mutating_methods() {
         let broker = Broker::new();
+        let auth = LocalAuth::test();
         let response = handle_request(&json!({
             "jsonrpc":"2.0","id":20,"method":"terminal.kill","params":{"terminal":"t1"}
-        }), &broker);
+        }), &broker, &auth);
         assert_eq!(response["error"]["code"], -32601);
     }
 
     #[test]
     fn snapshot_starts_disconnected() {
         let broker = Broker::new();
+        let auth = LocalAuth::test();
         let response = handle_request(&json!({
             "jsonrpc":"2.0","id":30,"method":"host.snapshot","params":{}
-        }), &broker);
+        }), &broker, &auth);
         assert_eq!(response["result"]["revision"], 0);
         assert_eq!(response["result"]["connected"], false);
         assert_eq!(response["result"]["terminals"].as_array().unwrap().len(), 0);
@@ -432,17 +460,35 @@ mod tests {
     #[test]
     fn wait_returns_immediately_for_new_host_epoch() {
         let broker = Broker::new();
+        let auth = LocalAuth::test();
         let response = handle_request(&json!({
             "jsonrpc":"2.0","id":31,"method":"host.wait",
             "params":{"after_epoch":"previous-host","after_revision":0,"timeout_ms":10000}
-        }), &broker);
+        }), &broker, &auth);
         assert_eq!(response["result"]["revision"], 0);
+    }
+
+    #[test]
+    fn local_pane_mutations_require_capability() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        let request = json!({
+            "jsonrpc":"2.0","id":51,"method":"workspace.pane.split",
+            "params":{"session_id":"s","pane_id":"p","expected_revision":0,
+                "axis":"horizontal","content":{"type":"diff"}}
+        });
+        let denied = handle_request(&request, &broker, &auth);
+        assert_eq!(denied["error"]["code"], -32030);
+        let mut with_bad_token = request;
+        with_bad_token["params"]["auth"] = json!("wrong");
+        assert_eq!(handle_request(&with_bad_token, &broker, &auth)["error"]["code"], -32030);
     }
 
     #[test]
     fn rejects_invalid_requests() {
         let broker = Broker::new();
-        let response = handle_request(&json!({"method":"host.ping"}), &broker);
+        let auth = LocalAuth::test();
+        let response = handle_request(&json!({"method":"host.ping"}), &broker, &auth);
         assert_eq!(response["error"]["code"], -32600);
     }
 }
