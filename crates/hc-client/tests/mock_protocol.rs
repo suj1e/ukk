@@ -6,6 +6,9 @@ use serde_json::{json, Value};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_MOCK_ID: AtomicU64 = AtomicU64::new(0);
 use std::time::{SystemTime, UNIX_EPOCH};
 use ukk_hc_client::{HcClient, HcError};
 
@@ -20,7 +23,11 @@ impl MockHc {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("ukk-hc-mock-{}-{unique}", std::process::id()));
+        let sequence = NEXT_MOCK_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "ukk-hc-mock-{}-{unique}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir(&dir).expect("create isolated mock directory");
         let binary = dir.join("mock-hc");
         fs::write(
