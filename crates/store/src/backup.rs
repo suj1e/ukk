@@ -31,7 +31,7 @@ use rusqlite::{
 };
 use std::{
     ffi::OsString,
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io,
     path::{Path, PathBuf},
     thread,
@@ -45,6 +45,7 @@ pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 /// the next normal open.
 pub const MIN_SUPPORTED_SCHEMA_VERSION: i64 = 1;
 
+#[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const SIDECARS: [&str; 3] = ["-wal", "-shm", "-journal"];
 const COPY_STEP_PAGES: i32 = 256;
@@ -820,7 +821,7 @@ fn set_private_permissions(path: &Path) -> Result<()> {
 fn sync_file(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        File::open(path)?.sync_all()?;
+        std::fs::File::open(path)?.sync_all()?;
     }
     #[cfg(not(unix))]
     {
@@ -833,7 +834,7 @@ fn sync_file(path: &Path) -> Result<()> {
 fn sync_directory(path: &Path) {
     #[cfg(unix)]
     {
-        if let Ok(directory) = File::open(path) {
+        if let Ok(directory) = std::fs::File::open(path) {
             let _ = directory.sync_all();
         }
     }
