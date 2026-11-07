@@ -92,8 +92,10 @@ device's retry record or learn its result.
 ### Enforced invariants
 
 * **Live authorization.** Cached handshake scopes are not authoritative.
-  Revocation, key rotation and grant expiry are re-read on every command and
-  subscription. Revocation also withdraws that device's controller leases.
+  Revocation, key rotation and grant expiry are re-read on every command, every
+  subscription request and every outbound event batch
+  (`ProtocolService::authorize_delivery`). A denied batch closes the open
+  stream. Revocation also withdraws that device's controller leases.
 * **Typed denials.** `unknown_device`, `device_revoked`, `forged_identity`,
   `stale_identity`, `missing_scope`, `grant_expired`, `plane_mismatch`,
   `replay_forbidden`, and the three controller-lease reasons are distinct wire
@@ -103,7 +105,11 @@ device's retry record or learn its result.
   reserved names and are rejected on durable messages and checkpoints.
 * **Snapshot on gap.** A cursor behind retained history forces a cursor-bound
   snapshot instead of silent event loss; a cursor ahead of the head is a typed
-  error, never a reset. Event-id reuse at a different cursor is detected.
+  error, never a reset. `EventInbox::apply_snapshot`/`resume_from` positions
+  deduplication at the snapshot cursor, so resync does not disable duplicate
+  detection. Event-id reuse at a different cursor is detected within the
+  bounded recent-id window. Restored logs must continue the retention floor and
+  belong to the current generation.
 * **No blind replay.** `approval_respond` (human decision) and `pointer_input`
   (ephemeral input) are classified `NeverReplay`. The reconnect queue refuses
   them, so reconnection cannot approve an action or inject input the user never
@@ -112,7 +118,10 @@ device's retry record or learn its result.
   idempotency-store and replay-batch limits are validated at startup and
   enforced before work. The idempotency store refuses new keys at capacity
   rather than evicting records, because eviction re-enables duplicate
-  execution.
+  execution. In-flight records never expire; completed records become
+  tombstones after retention and refuse a late retry with `expired` instead of
+  executing. The reconnect queue applies the same retention window and discards
+  stale entries.
 * **Ordered checks.** Transport binding → generation negotiation → device
   identity → semantic validation → live authorization/lease → idempotency
   lookup. An unauthorized retry cannot discover whether a key exists or what
@@ -175,11 +184,12 @@ Use macOS Keychain / iOS Keychain. Host identity and pairing material must never
 | Invariant | Contract test |
 | --- | --- |
 | Two clients reconnect independently; dropped ACK redelivers and dedups | `tests/sync.rs` |
-| Out-of-order delivery, event-id reuse, retention gap → snapshot | `tests/sync.rs` |
-| Cursor monotonicity across restarts; non-contiguous durable log rejected | `tests/sync.rs` |
-| Revocation mid-session; leases withdrawn | `tests/security.rs` |
+| Out-of-order delivery, event-id reuse, retention gap → snapshot → inbox continues | `tests/sync.rs` |
+| Cursor monotonicity across restarts; non-contiguous/squeezed/generation-mismatched durable log rejected | `tests/sync.rs` |
+| Revocation mid-session; revocation/expiry/rotation stop an open stream; leases withdrawn | `tests/security.rs` |
 | Stale, forged and unknown identity claims; rotation invalidates sessions | `tests/security.rs` |
 | Duplicate/idempotent commands; fingerprint conflict; principal and plane scoping | `tests/security.rs` |
+| In-flight retention, completion tombstones, capacity refusal, stale queue replay | `tests/retention.rs` |
 | Approval and pointer replay refusal; mandatory approval revision | `tests/security.rs`, `tests/wire.rs` |
 | Pointer scope and live/expired/mismatched lease denials | `tests/security.rs` |
 | Local IPC vs WAN distinct bindings | `tests/security.rs` |

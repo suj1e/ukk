@@ -184,8 +184,12 @@ The Host answers with ordered `event` frames. Resume outcomes:
 | `== floor` or between floor and head | replay events `> cursor`, up to `max_batch` |
 
 A snapshot is bound to a cursor. The client applies the snapshot body, persists
-`at_cursor`, then resumes from it. A snapshot body is an opaque JSON object
-owned by the Host domain layer.
+`at_cursor`, then resumes from it. `EventInbox::apply_snapshot` (or
+`EventInbox::resume_from`) positions the deduplication window at the snapshot
+cursor and clears the recent-id window; without it the first post-snapshot
+event would look like an out-of-order gap. A snapshot behind the applied cursor
+is refused. A snapshot body is an opaque JSON object owned by the Host domain
+layer.
 
 ```json
 {"type":"snapshot","protocol":1,"stream":"workspace","at_cursor":912,
@@ -216,8 +220,19 @@ Every command carries an `idempotency_key`. The Host records:
 * Same key on the other plane → `cross_plane`.
 * The store is bounded and refuses new keys at capacity. It never evicts a
   record silently, because eviction re-enables duplicate execution.
-* Records expire after the configured retention window. The retention window
-  must cover the longest supported reconnect interval.
+* **In-flight records never expire.** A command whose result is not yet
+  classified remains a duplicate (`result: null`) no matter how old it is.
+  Dropping it would let a retry execute a second time. An abandoned in-flight
+  record is resolved by Host reconciliation, not by silent expiry.
+* **Completed records expire into tombstones.** The retention window starts at
+  completion. After it, the result is dropped but the key remains: a retry is
+  refused with the typed `expired` error, never treated as a first attempt.
+  Tombstones still consume capacity, so capacity exhaustion remains a visible
+  typed refusal rather than a correctness regression.
+* The reconnect queue applies the same window. It rejects commands older than
+  the idempotency retention (or far in the future) and discards entries that
+  aged out before drain. A queued command is therefore never replayed after the
+  Host would refuse its key.
 
 The fingerprint is the canonical serialized command, excluding request id,
 timestamp and the key itself.
@@ -238,10 +253,22 @@ Scopes are explicit, additive and server-side:
 | `device.manage` | pair, rotate or revoke devices |
 
 Authorization is re-evaluated against the live trust registry on **every**
-command and subscription. Cached permissions from the handshake are not
-authoritative, so revocation, key rotation and grant expiry take effect
-immediately on existing sessions. Authorization runs before idempotency lookup,
-so an unauthorized retry cannot discover a previous result.
+command, every subscription request **and every outbound event batch**.
+Transports must call `ProtocolService::authorize_delivery(session, now)` before
+sending each batch; a denial closes the open subscription. Cached permissions
+from the handshake are never authoritative, so revocation, key rotation and
+grant expiry take effect on the next command or delivery batch. Authorization
+runs before idempotency lookup, so an unauthorized retry cannot discover a
+previous result.
+
+### Reconnect replay queue
+
+Only idempotent mutations may be queued. `approval_respond` and `pointer_input`
+are refused at enqueue time, so reconnection cannot approve an action or inject
+input the user never repeated. Queue entries are stamped with `issued_at_ms`;
+enqueue and drain reject entries outside the idempotency retention window. A
+stale entry is discarded rather than replayed, because the Host would refuse its
+expired key and executing it would reintroduce a duplicate side effect.
 
 ### Device identity and rotation
 
@@ -276,7 +303,7 @@ Default bounds (`Limits`); all are configurable and validated at startup:
 | reconnect queue depth | 256 | enqueue |
 | retained events | 4096 | append (prunes oldest, advances floor) |
 | idempotency records | 4096 | admit (refuses, never evicts) |
-| idempotency retention | 10 min | begin/purge |
+| idempotency retention | 10 min | completed records → tombstones, queue freshness; in-flight never expires |
 | replay batch | 256 | subscribe |
 
 Endpoint names not listed here are not part of generation 1. Terminal bytes and
@@ -302,14 +329,21 @@ See [security](SECURITY.md), [pairing](PAIRING.md),
 `crates/protocol/tests`:
 
 * `wire.rs` — round-trip of every client/server message, tagged wire shape,
-  reserved ephemeral field rejection, unknown field rejection, version
-  negotiation mismatch, generation mismatch, oversized command/event/snapshot,
-  mandatory approval revision.
+  reserved ephemeral field rejection, unknown field rejection (including inside
+  tagged command/event/pointer payloads), version negotiation mismatch,
+  generation mismatch, oversized command/event/snapshot, mandatory approval
+  revision.
 * `sync.rs` — two independent reconnecting clients, dropped ACK with dedup and
   backward-checkpoint refusal, out-of-order delivery, event-id reuse, retention
-  gap → snapshot → resume, cursor monotonicity across two restarts, rejection of
-  non-contiguous durable logs, cursor beyond head.
-* `security.rs` — mid-session revocation, stale/forged/unknown identity, key
-  rotation invalidating sessions, duplicate/idempotent commands, principal- and
+  gap → snapshot → inbox positioning → next event, cursor monotonicity across
+  two restarts, rejection of non-contiguous/squeezed/generation-mismatched
+  durable logs, cursor beyond head.
+* `security.rs` — mid-session revocation, revocation/expiry/rotation stopping an
+  **open delivery stream**, stale/forged/unknown identity, key rotation
+  invalidating sessions, duplicate/idempotent commands, principal- and
   plane-scoped keys, approval/pointer replay refusal, pointer scope and lease
   checks, local/WAN plane separation, expired grants, lease withdrawal.
+* `retention.rs` — in-flight records never expire; completed records become
+  tombstones that refuse retries; capacity is refused rather than evicting;
+  stale/future queued commands are rejected/discarded; the service refuses a
+  post-retention retry instead of re-executing.

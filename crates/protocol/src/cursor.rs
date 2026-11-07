@@ -262,6 +262,11 @@ impl EventLog {
                         "event stream does not match the log stream",
                     ));
                 }
+                if event.protocol != CURRENT_GENERATION {
+                    return Err(SyncError::InvalidDurableLog(
+                        "event generation does not match the protocol",
+                    ));
+                }
                 if let Some(previous_cursor) = previous {
                     let expected = previous_cursor
                         .next()
@@ -271,10 +276,15 @@ impl EventLog {
                             "retained event cursors are not contiguous",
                         ));
                     }
-                } else if event.cursor.get() <= floor.get() {
-                    return Err(SyncError::InvalidDurableLog(
-                        "retained events overlap the pruned range",
-                    ));
+                } else {
+                    let expected_first = floor
+                        .next()
+                        .ok_or(SyncError::InvalidDurableLog("cursor space exhausted"))?;
+                    if event.cursor != expected_first {
+                        return Err(SyncError::InvalidDurableLog(
+                            "first retained event does not continue the retention floor",
+                        ));
+                    }
                 }
                 previous = Some(event.cursor);
             }
@@ -428,6 +438,11 @@ pub enum InboxError {
     InconsistentReplay {
         cursor: DurableCursor,
     },
+    /// A snapshot would rewind the client to a cursor it already passed.
+    SnapshotRegression {
+        applied: DurableCursor,
+        snapshot: DurableCursor,
+    },
     InvalidCapacity,
 }
 
@@ -441,6 +456,10 @@ impl fmt::Display for InboxError {
             Self::InconsistentReplay { cursor } => write!(
                 formatter,
                 "event id repeated at a different cursor ({cursor})"
+            ),
+            Self::SnapshotRegression { applied, snapshot } => write!(
+                formatter,
+                "snapshot cursor {snapshot} is behind the applied cursor {applied}"
             ),
             Self::InvalidCapacity => formatter.write_str("inbox capacity must be at least one"),
         }
@@ -473,6 +492,39 @@ impl EventInbox {
             recent: VecDeque::with_capacity(capacity.min(1024)),
             capacity,
         })
+    }
+
+    /// Creates an inbox that already applied a durable prefix, for example a
+    /// checkpoint restored at process start.
+    pub fn resume_from(
+        stream: StreamId,
+        at_cursor: DurableCursor,
+        capacity: usize,
+    ) -> Result<Self, InboxError> {
+        let mut inbox = Self::new(stream, capacity)?;
+        inbox.applied = at_cursor;
+        Ok(inbox)
+    }
+
+    /// Positions the inbox at a snapshot cursor and clears the recent-id
+    /// window.
+    ///
+    /// This is the required step after `Resume::SnapshotRequired`; without it
+    /// the first event after the snapshot would look like an out-of-order gap.
+    /// A snapshot behind the applied cursor is refused instead of rewinding.
+    pub fn apply_snapshot(&mut self, snapshot: &Snapshot) -> Result<(), InboxError> {
+        if snapshot.stream != self.stream {
+            return Err(InboxError::StreamMismatch);
+        }
+        if snapshot.at_cursor < self.applied {
+            return Err(InboxError::SnapshotRegression {
+                applied: self.applied,
+                snapshot: snapshot.at_cursor,
+            });
+        }
+        self.applied = snapshot.at_cursor;
+        self.recent.clear();
+        Ok(())
     }
 
     #[must_use]

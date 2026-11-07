@@ -390,3 +390,90 @@ impl IntoEvents for Resume {
         }
     }
 }
+
+#[test]
+fn inbox_applies_snapshot_then_continues_without_false_gap() {
+    let mut limits = limits();
+    limits.max_retained_events = 2;
+    limits.max_replay_batch = 2;
+    let mut log = log_with(limits);
+    append_n(&mut log, 4);
+
+    let Resume::SnapshotRequired { at_cursor, .. } =
+        log.resume(DurableCursor::from_raw(1), 2).expect("gap")
+    else {
+        panic!("cursor below the floor must require a snapshot");
+    };
+    let snapshot = log.snapshot(9, json!({"sessions": []}));
+
+    let mut inbox = EventInbox::new(stream(), 8).expect("inbox");
+    inbox
+        .apply_snapshot(&snapshot)
+        .expect("snapshot positions the inbox");
+    assert_eq!(inbox.applied(), at_cursor);
+
+    let next = log.append(status_event(5), NOW).expect("append");
+    assert_eq!(
+        inbox.apply(&next).expect("next event applies"),
+        ApplyOutcome::Applied {
+            cursor: DurableCursor::from_raw(5)
+        }
+    );
+
+    let rewound = EventInbox::resume_from(stream(), DurableCursor::from_raw(5), 8).expect("inbox");
+    let mut rewound = rewound;
+    assert_eq!(
+        rewound.apply_snapshot(&snapshot),
+        Err(InboxError::SnapshotRegression {
+            applied: DurableCursor::from_raw(5),
+            snapshot: DurableCursor::from_raw(4),
+        })
+    );
+
+    let mut resumed = EventInbox::resume_from(stream(), DurableCursor::from_raw(4), 8)
+        .expect("resume from checkpoint");
+    assert_eq!(
+        resumed.apply(&next).expect("applies"),
+        ApplyOutcome::Applied {
+            cursor: DurableCursor::from_raw(5)
+        }
+    );
+}
+
+#[test]
+fn restore_rejects_retention_floor_that_hides_events() {
+    let limits = limits();
+    let events = vec![
+        event_with_cursor(EventId::new("event-10").expect("valid"), 10),
+        event_with_cursor(EventId::new("event-11").expect("valid"), 11),
+    ];
+    assert!(
+        matches!(
+            EventLog::restore(
+                stream(),
+                events.clone(),
+                DurableCursor::from_raw(11),
+                DurableCursor::from_raw(2),
+                limits
+            ),
+            Err(SyncError::InvalidDurableLog(_))
+        ),
+        "retained events 10..=11 with floor 2 would hide 3..=9"
+    );
+
+    let mut wrong_generation = events;
+    wrong_generation[0].protocol = ukk_protocol::ProtocolGeneration::from_raw(2);
+    assert!(
+        matches!(
+            EventLog::restore(
+                stream(),
+                wrong_generation,
+                DurableCursor::from_raw(11),
+                DurableCursor::from_raw(9),
+                limits
+            ),
+            Err(SyncError::InvalidDurableLog(_))
+        ),
+        "restored events must belong to the current generation"
+    );
+}

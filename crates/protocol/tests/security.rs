@@ -41,6 +41,7 @@ fn revoked_device_loses_access_mid_session() {
             CommandResult::Completed {
                 detail: Some("dispatched".to_owned()),
             },
+            NOW,
         )
         .expect("completed");
 
@@ -159,6 +160,7 @@ fn duplicate_commands_are_idempotent_and_conflicts_are_typed() {
             CommandResult::Completed {
                 detail: Some("done".to_owned()),
             },
+            NOW,
         )
         .expect("completed");
     assert_eq!(
@@ -202,6 +204,7 @@ fn idempotency_keys_are_scoped_to_principal() {
             CommandResult::Accepted {
                 dispatch_id: RequestId::new_random(),
             },
+            NOW,
         )
         .expect("completed");
 
@@ -218,23 +221,23 @@ fn approval_and_pointer_are_never_replay_queued() {
     let approval_envelope = envelope(approval(ApprovalDecision::Approve));
     assert_eq!(approval_envelope.replay_policy(), ReplayPolicy::NeverReplay);
     assert_eq!(
-        queue.enqueue(approval_envelope.clone()),
+        queue.enqueue(approval_envelope.clone(), NOW),
         Err(ukk_protocol::QueueError::ReplayForbidden)
     );
     assert_eq!(
-        queue.enqueue(envelope(support::pointer(None))),
+        queue.enqueue(envelope(support::pointer(None)), NOW),
         Err(ukk_protocol::QueueError::ReplayForbidden)
     );
     assert!(queue.is_empty());
 
     let replayable = envelope(agent_send("safe retry"));
-    queue.enqueue(replayable.clone()).expect("idempotent");
-    assert_eq!(queue.drain(10), vec![replayable]);
+    queue.enqueue(replayable.clone(), NOW).expect("idempotent");
+    assert_eq!(queue.drain(10, NOW), vec![replayable]);
     assert!(queue.is_empty());
 }
 
 #[test]
-fn admitted_approval_and_pointer_are_marked_in_session_only() {
+fn admitted_approval_and_pointer_are_marked_never_replay() {
     let mut service = service();
     let fixture = register_device(
         &mut service,
@@ -459,5 +462,67 @@ fn revoked_device_leases_are_withdrawn() {
             .verify(&lease.id, &fixture.device_id, &session_id(), NOW),
         Err(Denial::ControllerLeaseMismatch),
         "revocation removes the lease rather than leaving a dormant capability"
+    );
+}
+
+#[test]
+fn revoked_device_stops_receiving_events_mid_subscription() {
+    let mut service = service();
+    let fixture = register_device(&mut service, &[Scope::SessionObserve]);
+    let session = remote_session(&service, &fixture);
+
+    assert_eq!(service.authorize_delivery(&session, NOW), Ok(()));
+    assert_eq!(service.authorize_subscribe(&session, NOW), Ok(()));
+
+    service.revoke_device(&fixture.device_id).expect("revoked");
+    assert_eq!(
+        service.authorize_delivery(&session, NOW),
+        Err(Denial::DeviceRevoked),
+        "an open stream must be re-checked before each delivery batch"
+    );
+    assert_eq!(
+        service.authorize_subscribe(&session, NOW),
+        Err(Denial::DeviceRevoked)
+    );
+
+    let local = local_session(&service);
+    assert_eq!(
+        service.authorize_delivery(&local, NOW),
+        Ok(()),
+        "local IPC remains a distinct, OS-authenticated plane"
+    );
+}
+
+#[test]
+fn grant_expiry_and_key_rotation_stop_open_delivery() {
+    let mut expiry_service = service();
+    let expiring =
+        register_device_with_ttl(&mut expiry_service, &[Scope::SessionObserve], NOW + 100);
+    let expiring_session = remote_session(&expiry_service, &expiring);
+    assert_eq!(
+        expiry_service.authorize_delivery(&expiring_session, NOW),
+        Ok(())
+    );
+    assert_eq!(
+        expiry_service.authorize_delivery(&expiring_session, NOW + 100),
+        Err(Denial::GrantExpired {
+            scope: Scope::SessionObserve
+        })
+    );
+
+    let mut rotated_service = service();
+    let rotated = register_device(&mut rotated_service, &[Scope::SessionObserve]);
+    let rotated_session = remote_session(&rotated_service, &rotated);
+    rotated_service
+        .trust
+        .rotate_key(
+            &rotated.device_id,
+            KeyFingerprint::new("fingerprint-rotated-delivery").expect("valid"),
+        )
+        .expect("rotation");
+    assert_eq!(
+        rotated_service.authorize_delivery(&rotated_session, NOW),
+        Err(Denial::StaleIdentity),
+        "rotation invalidates an open stream's key generation"
     );
 }

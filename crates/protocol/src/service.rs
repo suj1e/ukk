@@ -24,7 +24,6 @@ use crate::idempotency::{
     CommandResult, IdempotencyAdmission, IdempotencyError, IdempotencyStore, RequestFingerprint,
 };
 use crate::limits::{LimitError, Limits};
-use crate::scope::Scope;
 use crate::version::{NegotiationError, ServerPolicy};
 use crate::wire::{ClientHello, ServerHello};
 use std::error::Error;
@@ -246,9 +245,10 @@ impl ProtocolService {
         &mut self,
         key: &IdempotencyKey,
         result: CommandResult,
+        now_ms: i64,
     ) -> Result<(), CommandError> {
         self.idempotency
-            .complete(key, result)
+            .complete(key, result, now_ms)
             .map_err(CommandError::from)
     }
 
@@ -259,27 +259,28 @@ impl ProtocolService {
         Ok(())
     }
 
-    /// Re-checks subscription rights against live grants.
+    /// Re-checks delivery rights against live grants before every outbound
+    /// event batch.
+    ///
+    /// A subscription is not a durable capability. Revocation, key rotation
+    /// and grant expiry must terminate an already-open stream, so transports
+    /// call this immediately before sending each batch. A denial closes the
+    /// subscription; it is not a retryable command error.
+    pub fn authorize_delivery(
+        &self,
+        session: &AuthenticatedSession,
+        now_ms: i64,
+    ) -> Result<(), crate::authz::Denial> {
+        session.authorize_observe(&self.trust, now_ms)
+    }
+
+    /// Subscription-request authorization. Same live check as delivery; the
+    /// delivery check must still run for every later batch.
     pub fn authorize_subscribe(
         &self,
         session: &AuthenticatedSession,
         now_ms: i64,
     ) -> Result<(), crate::authz::Denial> {
-        session.authorize_observe()?;
-        if let Some(device) = session.device() {
-            let (scopes, expired) = self.trust.live_grants(device, now_ms)?;
-            if !scopes.contains(Scope::SessionObserve) {
-                return Err(if expired.contains(Scope::SessionObserve) {
-                    crate::authz::Denial::GrantExpired {
-                        scope: Scope::SessionObserve,
-                    }
-                } else {
-                    crate::authz::Denial::MissingScope {
-                        scope: Scope::SessionObserve,
-                    }
-                });
-            }
-        }
-        Ok(())
+        self.authorize_delivery(session, now_ms)
     }
 }

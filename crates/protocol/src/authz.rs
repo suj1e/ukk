@@ -14,7 +14,7 @@
 use crate::device::{AuthenticatedDevice, TrustRegistry};
 use crate::envelope::Command;
 use crate::id::{DeviceId, DomainId, LeaseId, RequestId};
-use crate::limits::{LimitError, Limits};
+use crate::limits::Limits;
 use crate::scope::{Scope, ScopeSet};
 use crate::version::ProtocolGeneration;
 use serde::{Deserialize, Serialize};
@@ -209,19 +209,37 @@ impl AuthenticatedSession {
         }
     }
 
-    /// Subscription authorization. Local owners observe everything; devices
-    /// need `session.observe`.
-    pub fn authorize_observe(&self) -> Result<(), Denial> {
+    /// Stream delivery authorization, evaluated against the live registry.
+    ///
+    /// This is the only observe check exposed to transports. It must be called
+    /// before every outbound event batch, not just when a subscription starts:
+    /// revocation, key rotation and grant expiry must stop an already-open
+    /// stream. The handshake scope snapshot is never authoritative here.
+    pub fn authorize_observe(&self, trust: &TrustRegistry, now_ms: i64) -> Result<(), Denial> {
         match &self.peer {
-            Peer::LocalOwner { .. } => Ok(()),
-            Peer::Device(device) => {
-                if device.scopes.contains(Scope::SessionObserve) {
-                    Ok(())
-                } else {
-                    Err(Denial::MissingScope {
-                        scope: Scope::SessionObserve,
-                    })
+            Peer::LocalOwner { .. } => {
+                if self.plane != Plane::LocalIpc {
+                    return Err(Denial::PlaneMismatch);
                 }
+                Ok(())
+            }
+            Peer::Device(device) => {
+                if self.plane != Plane::Remote {
+                    return Err(Denial::PlaneMismatch);
+                }
+                let (valid, expired) = trust.live_grants(device, now_ms)?;
+                if !valid.contains(Scope::SessionObserve) {
+                    return Err(if expired.contains(Scope::SessionObserve) {
+                        Denial::GrantExpired {
+                            scope: Scope::SessionObserve,
+                        }
+                    } else {
+                        Denial::MissingScope {
+                            scope: Scope::SessionObserve,
+                        }
+                    });
+                }
+                Ok(())
             }
         }
     }
@@ -420,7 +438,13 @@ pub fn authorize_command(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueueError {
     ReplayForbidden,
-    Full { max: usize },
+    /// The command is older than the idempotency retention window, or claims a
+    /// timestamp far in the future. Replaying it could execute after the Host
+    /// has expired the corresponding retry record.
+    Stale,
+    Full {
+        max: usize,
+    },
 }
 
 impl fmt::Display for QueueError {
@@ -429,21 +453,13 @@ impl fmt::Display for QueueError {
             Self::ReplayForbidden => {
                 formatter.write_str("command class is forbidden from reconnect replay")
             }
+            Self::Stale => formatter.write_str("queued command is outside the replay window"),
             Self::Full { max } => write!(formatter, "reconnect queue is full ({max})"),
         }
     }
 }
 
 impl Error for QueueError {}
-
-impl From<LimitError> for QueueError {
-    fn from(error: LimitError) -> Self {
-        match error {
-            LimitError::QueueFull { max } => Self::Full { max },
-            _ => Self::Full { max: 0 },
-        }
-    }
-}
 
 /// Bounded outbound queue used only for replay-safe commands.
 ///
@@ -467,9 +483,17 @@ impl ReplayQueue {
     pub fn enqueue(
         &mut self,
         envelope: crate::envelope::CommandEnvelope,
+        now_ms: i64,
     ) -> Result<(), QueueError> {
         if !envelope.replay_policy().is_replayable() {
             return Err(QueueError::ReplayForbidden);
+        }
+        if !Self::is_fresh(
+            envelope.issued_at_ms,
+            now_ms,
+            self.limits.idempotency_retention_ms,
+        ) {
+            return Err(QueueError::Stale);
         }
         if self.pending.len() >= self.limits.max_queue_depth {
             return Err(QueueError::Full {
@@ -481,9 +505,25 @@ impl ReplayQueue {
     }
 
     /// Removes up to `max` replay-safe commands in original order.
-    pub fn drain(&mut self, max: usize) -> Vec<crate::envelope::CommandEnvelope> {
+    ///
+    /// Entries that fell outside the idempotency retention window are dropped
+    /// rather than replayed: the Host would refuse the expired key, and
+    /// executing it would reintroduce duplicate side effects.
+    pub fn drain(&mut self, max: usize, now_ms: i64) -> Vec<crate::envelope::CommandEnvelope> {
+        let retention = self.limits.idempotency_retention_ms;
+        self.pending
+            .retain(|envelope| Self::is_fresh(envelope.issued_at_ms, now_ms, retention));
         let count = max.min(self.pending.len());
         self.pending.drain(..count).collect()
+    }
+
+    /// A command is replayable only inside the window during which its
+    /// idempotency record still produces a duplicate classification. Far-future
+    /// timestamps are rejected rather than trusted as "fresh forever".
+    fn is_fresh(issued_at_ms: i64, now_ms: i64, retention_ms: i64) -> bool {
+        let age = now_ms.saturating_sub(issued_at_ms);
+        let future = issued_at_ms.saturating_sub(now_ms);
+        age < retention_ms && future < retention_ms
     }
 
     #[must_use]

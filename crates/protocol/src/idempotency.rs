@@ -76,7 +76,12 @@ pub enum IdempotencyError {
     FingerprintMismatch,
     CrossPlane,
     CrossPrincipal,
-    Capacity { max: usize },
+    /// The record's retention window ended. A retry must not execute again;
+    /// the caller reconciles the outcome out of band.
+    Expired,
+    Capacity {
+        max: usize,
+    },
     UnknownKey,
     AlreadyCompleted,
     InvalidResultDetail,
@@ -96,6 +101,9 @@ impl fmt::Display for IdempotencyError {
             Self::CrossPrincipal => {
                 formatter.write_str("idempotency key belongs to a different authenticated peer")
             }
+            Self::Expired => formatter.write_str(
+                "idempotency record expired; reconcile the earlier outcome before retrying",
+            ),
             Self::Capacity { max } => {
                 write!(formatter, "idempotency store is full ({max} records)")
             }
@@ -119,20 +127,34 @@ impl From<LimitError> for IdempotencyError {
 }
 
 #[derive(Debug)]
+enum RecordState {
+    /// Admitted, side effect not yet classified. Never expires: dropping it
+    /// would let a retry execute a second time.
+    InFlight,
+    Completed {
+        result: CommandResult,
+        completed_at_ms: i64,
+    },
+    /// Retention ended. The result is dropped but the key remains as a
+    /// tombstone so a late retry is refused instead of re-executed.
+    Expired,
+}
+
+#[derive(Debug)]
 struct Record {
     fingerprint: RequestFingerprint,
     plane: Plane,
     principal: Principal,
-    recorded_at_ms: i64,
-    result: Option<CommandResult>,
+    state: RecordState,
 }
 
-/// Bounded store of in-flight and completed commands.
+/// Bounded store of in-flight, completed and expired commands.
 ///
 /// When full, it refuses new keys. Evicting a record would allow the same
 /// command to execute twice after a reconnect, so capacity exhaustion is a
 /// typed error for the caller to handle (reject or shed load), not a silent
-/// correctness change.
+/// correctness change. Completed records become tombstones after retention;
+/// in-flight records never expire.
 #[derive(Debug)]
 pub struct IdempotencyStore {
     limits: Limits,
@@ -167,9 +189,13 @@ impl IdempotencyStore {
             if &record.fingerprint != fingerprint {
                 return Err(IdempotencyError::FingerprintMismatch);
             }
-            return Ok(IdempotencyAdmission::Duplicate {
-                result: record.result.clone(),
-            });
+            return match &record.state {
+                RecordState::InFlight => Ok(IdempotencyAdmission::Duplicate { result: None }),
+                RecordState::Completed { result, .. } => Ok(IdempotencyAdmission::Duplicate {
+                    result: Some(result.clone()),
+                }),
+                RecordState::Expired => Err(IdempotencyError::Expired),
+            };
         }
         if self.records.len() >= self.limits.max_idempotency_records {
             return Err(IdempotencyError::Capacity {
@@ -182,8 +208,7 @@ impl IdempotencyStore {
                 fingerprint: fingerprint.clone(),
                 plane,
                 principal: principal.clone(),
-                recorded_at_ms: now_ms,
-                result: None,
+                state: RecordState::InFlight,
             },
         );
         Ok(IdempotencyAdmission::Execute)
@@ -193,6 +218,7 @@ impl IdempotencyStore {
         &mut self,
         key: &IdempotencyKey,
         result: CommandResult,
+        now_ms: i64,
     ) -> Result<(), IdempotencyError> {
         if let CommandResult::Completed {
             detail: Some(detail),
@@ -206,20 +232,38 @@ impl IdempotencyStore {
             .records
             .get_mut(key)
             .ok_or(IdempotencyError::UnknownKey)?;
-        if record.result.is_some() {
+        if !matches!(record.state, RecordState::InFlight) {
             return Err(IdempotencyError::AlreadyCompleted);
         }
-        record.result = Some(result);
+        record.state = RecordState::Completed {
+            result,
+            completed_at_ms: now_ms,
+        };
         Ok(())
     }
 
-    /// Drops records older than the retention window and returns the count.
+    /// Converts completed records past retention into tombstones and returns
+    /// how many were expired.
+    ///
+    /// In-flight records are never expired, regardless of age. A completed
+    /// record's window starts at completion, not first attempt, so a slow
+    /// command still has a full retry window after it finishes.
     pub fn purge_expired(&mut self, now_ms: i64) -> usize {
         let retention = self.limits.idempotency_retention_ms;
-        let before = self.records.len();
-        self.records
-            .retain(|_, record| now_ms.saturating_sub(record.recorded_at_ms) < retention);
-        before - self.records.len()
+        let mut expired = 0;
+        for record in self.records.values_mut() {
+            let should_expire = match &record.state {
+                RecordState::Completed {
+                    completed_at_ms, ..
+                } => now_ms.saturating_sub(*completed_at_ms) >= retention,
+                RecordState::InFlight | RecordState::Expired => false,
+            };
+            if should_expire {
+                record.state = RecordState::Expired;
+                expired += 1;
+            }
+        }
+        expired
     }
 
     #[must_use]

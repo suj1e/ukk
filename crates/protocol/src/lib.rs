@@ -31,7 +31,7 @@ pub mod wire;
 
 pub use authz::{
     authorize_command, AuthenticatedSession, BindingError, CommandClass, ControllerLease, Denial,
-    LeaseError, LeaseRegistry, Peer, Plane, QueueError, ReplayPolicy, ReplayQueue,
+    LeaseError, LeaseRegistry, Peer, Plane, Principal, QueueError, ReplayPolicy, ReplayQueue,
     TransportBinding, MAX_CONTROLLER_LEASE_MS,
 };
 pub use cursor::{

@@ -311,3 +311,47 @@ fn approval_without_revision_is_rejected() {
         EnvelopeError::Invalid("approval requires a positive revision")
     );
 }
+
+#[test]
+fn unknown_fields_inside_tagged_payloads_are_rejected() {
+    let limits = limits();
+
+    let raw = ClientMessage::Command(envelope(agent_send("hello")))
+        .encode(&limits)
+        .expect("encodes");
+    let mut value: Value = serde_json::from_str(&raw).expect("json");
+    value["command"]["unexpected"] = json!(1);
+    assert!(
+        matches!(
+            ClientMessage::decode(&value.to_string(), &limits),
+            Err(EnvelopeError::Json(_))
+        ),
+        "unknown command payload fields must fail closed"
+    );
+
+    let raw = ClientMessage::Command(envelope(support::pointer(None)))
+        .encode(&limits)
+        .expect("encodes");
+    let mut value: Value = serde_json::from_str(&raw).expect("json");
+    value["command"]["events"][0]["unexpected"] = json!(true);
+    assert!(
+        matches!(
+            ClientMessage::decode(&value.to_string(), &limits),
+            Err(EnvelopeError::Json(_))
+        ),
+        "unknown pointer event fields must fail closed"
+    );
+
+    let mut log = log();
+    let event = log.append(status_event(1), 0).expect("append");
+    let raw = event.encode(&limits).expect("encodes");
+    let mut value: Value = serde_json::from_str(&raw).expect("json");
+    value["event"]["unexpected"] = json!("x");
+    assert!(
+        matches!(
+            EventEnvelope::decode(&value.to_string(), &limits),
+            Err(EnvelopeError::Json(_))
+        ),
+        "unknown event payload fields must fail closed"
+    );
+}
