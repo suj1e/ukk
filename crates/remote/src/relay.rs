@@ -779,11 +779,22 @@ mod tests {
         assert_eq!(RelayMessage::decode(&encoded).unwrap(), message);
 
         let mut value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        value["extra"] = serde_json::json!(true);
+        assert_eq!(
+            RelayMessage::decode(value.to_string().as_bytes()),
+            Err(RelayError::Malformed)
+        );
+
+        let mut value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         value["body"]["extra"] = serde_json::json!(true);
         assert_eq!(
             RelayMessage::decode(value.to_string().as_bytes()),
             Err(RelayError::Malformed)
         );
+
+        let mut trailing = encoded.clone();
+        trailing.push(b'x');
+        assert_eq!(RelayMessage::decode(&trailing), Err(RelayError::Malformed));
 
         let mut value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         value["body"]["v"] = serde_json::json!(2);
