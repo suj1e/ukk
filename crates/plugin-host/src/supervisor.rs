@@ -410,6 +410,10 @@ impl PluginHost {
             }
             slot.runtime = Some(runtime);
             slot.state = PluginState::Ready;
+            // A fresh helper starts with an empty drop counter; reset the
+            // coalescing watermark so its first overflow is audited again.
+            slot.dropped_audited
+                .store(0, std::sync::atomic::Ordering::Relaxed);
             self.record(
                 Some(plugin_id),
                 AuditKind::PluginEnabled,
