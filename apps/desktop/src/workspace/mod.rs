@@ -14,6 +14,7 @@ mod panes;
 mod render;
 mod resize;
 mod sidebar;
+mod splits;
 mod state;
 mod toolbar;
 
