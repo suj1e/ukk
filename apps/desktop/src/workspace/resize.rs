@@ -71,7 +71,7 @@ impl Workspace {
         match &self.split_drag_preview {
             Some(preview)
                 if preview.split_id == split_id
-                    && self.selected_session.as_deref() == Some(&preview.session_id) =>
+                    && self.selected_session.as_deref() == Some(preview.session_id.as_str()) =>
             {
                 preview.ratio
             }
