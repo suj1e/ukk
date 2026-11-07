@@ -1,9 +1,9 @@
 //! Local, read-only integration spike: GPUI -> ukk Host -> herdr-core.
 //!
-//! The prototype uses a private Unix-domain socket. It deliberately does not
-//! expose a network server, remote pairing, agent mutation, or plugin execution.
-//! A production Host will need durable state, identity, permissions and an
-//! event broker before the mobile client can connect.
+//! The prototype uses a private Unix-domain socket on macOS/Linux and an
+//! ACL-protected Named Pipe on Windows. It exposes no public network server,
+//! remote pairing, agent mutation or plugin execution. The in-memory event
+//! broker is not yet a durable, authenticated cross-device event service.
 
 mod broker;
 
