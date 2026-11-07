@@ -290,7 +290,11 @@ impl Workspace {
                         }
                         if view.selected_session.is_none() && view.selected.is_none() {
                             view.selected_session = domain.sessions.iter()
-                                .find(|s| !s.archived).map(|s| s.id.clone());
+                                .find(|s| !s.archived &&
+                                    view.selected_space.as_ref().is_none_or(
+                                        |space| &s.space_id == space
+                                    ))
+                                .map(|s| s.id.clone());
                         }
                         view.domain = domain;
                     }
