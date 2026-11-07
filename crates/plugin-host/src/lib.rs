@@ -43,21 +43,27 @@
 //! persistence, no GPUI types, no OS sandbox/entitlements, no automatic
 //! restart, and no capture/input implementation. See `docs/PLUGINS.md`.
 mod audit;
+mod config;
 mod contributions;
+mod dispatch;
+mod error;
 mod grant;
 mod helper;
 mod in_process;
+mod messages;
+mod state;
 mod supervisor;
 
 pub use audit::{AuditKind, AuditOutcome, AuditRecord, AuditSink, MemoryAuditSink, NullAuditSink};
+pub use config::HostConfig;
 pub use contributions::{CommandDescriptor, ContributionSnapshot, ViewDescriptor};
+pub use error::HostError;
 pub use grant::{
     is_authorized, Grant, GrantError, GrantRequest, GrantScope, GrantStore, InMemoryGrantStore,
     MAX_GRANT_TTL_MS, MAX_SENSITIVE_GRANT_TTL_MS,
 };
 pub use helper::{HelperCommand, HelperError, HelperLimits, HelperProcess, ShutdownReport};
 pub use in_process::{EchoInProcessPlugin, InProcessPlugin, InvokeContext, PluginFailure};
-pub use supervisor::{
-    HostConfig, HostError, HostEvent, InvokeOutcome, InvokeRequest, PluginHost, PluginInstall,
-    PluginState, PluginStatus, PublishReport,
-};
+pub use messages::{HostEvent, InvokeOutcome, InvokeRequest, PublishReport};
+pub use state::{PluginState, PluginStatus};
+pub use supervisor::{PluginHost, PluginInstall};

@@ -12,11 +12,15 @@
 //!   restore grants.
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use ukk_plugin_api::{Capability, PluginId, RiskLevel};
 
-use crate::audit::{lock, now_ms};
+use crate::audit::{lock, now_ms, AuditKind, AuditOutcome};
+use crate::error::HostError;
+use crate::state::read;
+use crate::supervisor::PluginHost;
 
 /// Scope a grant was issued for.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -261,5 +265,93 @@ impl GrantStore for InMemoryGrantStore {
             .filter(|((id, _, _), _)| id == plugin_id)
             .map(|(_, grant)| grant.clone())
             .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Host-facing grant surface
+// ---------------------------------------------------------------------------
+
+impl PluginHost {
+    /// Issue a grant after checking the capability is declared by the plugin.
+    pub fn grant(&self, request: GrantRequest) -> Result<Grant, HostError> {
+        let plugin_id = request.plugin_id.clone();
+        let capability_text = request.capability.to_text();
+        {
+            let plugins = read(&self.inner.plugins);
+            let slot = plugins
+                .get(&plugin_id)
+                .ok_or_else(|| HostError::UnknownPlugin {
+                    plugin_id: plugin_id.to_string(),
+                })?;
+            if !slot
+                .manifest
+                .declared_capabilities()
+                .contains(&request.capability)
+            {
+                drop(plugins);
+                self.record(
+                    Some(&plugin_id),
+                    AuditKind::GrantGranted,
+                    AuditOutcome::Denied,
+                    format!("capability `{capability_text}` is not declared"),
+                );
+                return Err(HostError::UndeclaredCapability {
+                    plugin_id: plugin_id.to_string(),
+                    capability: capability_text,
+                });
+            }
+        }
+        let scope = request.scope.clone();
+        let grant = request.into_grant(now_ms()).map_err(HostError::Grant)?;
+        self.inner.grants.upsert(&plugin_id, grant.clone());
+        self.record(
+            Some(&plugin_id),
+            AuditKind::GrantGranted,
+            AuditOutcome::Allowed,
+            format!("{capability_text} scope={scope}"),
+        );
+        Ok(grant)
+    }
+
+    /// Revoke one grant; returns whether it existed.
+    pub fn revoke(
+        &self,
+        plugin_id: &PluginId,
+        capability: &Capability,
+        scope: &GrantScope,
+    ) -> bool {
+        let removed = self.inner.grants.revoke(plugin_id, capability, scope);
+        self.record(
+            Some(plugin_id),
+            AuditKind::GrantRevoked,
+            if removed {
+                AuditOutcome::Allowed
+            } else {
+                AuditOutcome::Denied
+            },
+            format!("{capability} scope={scope}"),
+        );
+        removed
+    }
+
+    /// Remove every grant for a plugin (e.g. a user "deny all" action).
+    pub fn revoke_all_grants(&self, plugin_id: &PluginId) -> usize {
+        let removed = self.inner.grants.revoke_all(plugin_id);
+        self.record(
+            Some(plugin_id),
+            AuditKind::GrantRevoked,
+            AuditOutcome::Allowed,
+            format!("all grants revoked ({removed})"),
+        );
+        removed
+    }
+
+    pub fn grants(&self, plugin_id: &PluginId) -> Vec<Grant> {
+        self.inner.grants.list(plugin_id)
+    }
+
+    pub fn grant_store(&self) -> &Arc<dyn GrantStore> {
+        &self.inner.grants
     }
 }

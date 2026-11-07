@@ -34,7 +34,12 @@ cleared environment, bounded framing, deadlines and kill-on-disable.
 | `crates/plugin-api/src/version.rs` | API version and range negotiation (`>=0.1,<0.2`) |
 | `crates/plugin-api/src/capability.rs` | Capability vocabulary, risk classes, capability sets |
 | `crates/plugin-api/src/wire.rs` | Helper stdio protocol v1 frames |
-| `crates/plugin-host/src/supervisor.rs` | `PluginHost`: install, enable/disable, invoke, events, snapshot |
+| `crates/plugin-host/src/supervisor.rs` | `PluginHost`: install, enable/disable/restart/uninstall, supervision |
+| `crates/plugin-host/src/dispatch.rs` | Command authorization, event delivery, contribution snapshot |
+| `crates/plugin-host/src/state.rs` | Slots, runtime handles, life-cycle state, lock helpers |
+| `crates/plugin-host/src/config.rs` | `HostConfig` tunables and limits |
+| `crates/plugin-host/src/error.rs` | `HostError` with stable codes |
+| `crates/plugin-host/src/messages.rs` | Invoke requests, outcomes, events, publish report |
 | `crates/plugin-host/src/helper.rs` | Child-process spawn, bounded framing, deadlines, kill |
 | `crates/plugin-host/src/grant.rs` | Scoped grants, TTL rules, revocation |
 | `crates/plugin-host/src/audit.rs` | `AuditSink` and redaction rules |
