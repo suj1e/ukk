@@ -54,7 +54,7 @@ print(json.dumps({
         "status": {"state": "working"}
     }]}
 }), flush=True)
-time.sleep(0.8)
+time.sleep(1.2)
 print(json.dumps({
     "jsonrpc": "2.0", "method": "event",
     "params": {"seq": 5, "type": "created", "terminal": "t4",
@@ -81,7 +81,7 @@ time.sleep(3)
         .env("UKK_HC_BIN", &hc_bin)
         .env("UKK_SOCKET", &socket)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("start host binary");
     let _fixture = Fixture { child, directory };
@@ -107,9 +107,13 @@ time.sleep(3)
     assert_eq!(spawned.snapshot.terminals.len(), 2);
     assert_eq!(spawned.snapshot.hierarchy()[1].1, 1);
 
-    let updated = client
-        .wait_for_change(&spawned.host_epoch, spawned.revision)
-        .expect("receive child agent status update");
+    let updated = if spawned.snapshot.terminals[1].state_label() == "Needs you" {
+        spawned
+    } else {
+        client
+            .wait_for_change(&spawned.host_epoch, spawned.revision)
+            .expect("receive child agent status update")
+    };
     assert_eq!(updated.snapshot.terminals[1].state_label(), "Needs you");
     assert!(updated.revision > initial.revision);
 }
