@@ -1,0 +1,10 @@
+[package]
+name = "ukk-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Local-first agent host integration spike"
+
+[dependencies]
+ukk-hc-client = { path = "../hc-client" }
+serde_json = "1.0"
