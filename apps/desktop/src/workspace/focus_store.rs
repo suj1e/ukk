@@ -377,21 +377,22 @@ impl Workspace {
     /// Reconcile loaded focus with the layout that arrived independently from
     /// the Host. A removed Pane cannot keep or steal focus.
     fn adopt_loaded_focus(&mut self) {
-        if self.focus_touched {
-            // A user action happened before the read completed; it wins.
+        if self.focus_touched || self.selected.is_some() {
+            // A user action or terminal view happened before the read
+            // completed; local intent wins over the stored snapshot.
             return;
         }
         self.local_focus.reconcile(&self.domain);
-        if self.selected_session.is_none() && self.selected.is_none() {
-            if let Some(session_id) = self.local_focus.selected_session.clone() {
-                if self
-                    .domain
-                    .sessions
-                    .iter()
-                    .any(|session| session.id == session_id)
-                {
-                    self.selected_session = Some(session_id);
-                }
+        // The Host refresh may already have auto-selected the first Session.
+        // That is not a user choice, so the stored Session still wins.
+        if let Some(session_id) = self.local_focus.selected_session.clone() {
+            if self
+                .domain
+                .sessions
+                .iter()
+                .any(|session| session.id == session_id && !session.archived)
+            {
+                self.selected_session = Some(session_id);
             }
         }
     }
