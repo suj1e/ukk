@@ -1,0 +1,19 @@
+{
+  "fixture_version": 1,
+  "provider": "codex_app_server",
+  "wire_protocol": "v2",
+  "captured_at": "2026-11-08",
+  "capture_method": "hand-authored from documented fields; not a live capture",
+  "sources": [
+    "https://learn.chatgpt.com/docs/app-server.md",
+    "https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/item.rs",
+    "https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/turn.rs",
+    "https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/thread_data.rs"
+  ],
+  "files": {
+    "turn.jsonl": "thread, turn, item, delta and turn-completion happy path",
+    "approval.jsonl": "command approval request, serverRequest/resolved and declined item",
+    "resume.jsonl": "thread/started matching an integration resume hint",
+    "unsupported.jsonl": "unknown notification and unknown item type"
+  }
+}
