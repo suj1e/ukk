@@ -83,4 +83,4 @@ No real screenshot, successful binary, provider API nor multi-session persistenc
 5. Wire structured Agent adapters for native chat/tools/approval and optional terminal inspector, then Diff/Files.
 6. Keep the approved mobile floating Remote Screen concept entirely separate from this Desktop read-only UI spike.
 
-See [PRODUCT.md](PRODUCT.md), [ARCHITECTURE.md](ARCHITECTURE.md), [DOMAIN_MODEL.md](DOMAIN_MODEL.md), [ROADMAP.md](ROADMAP.md).
+See [PRODUCT.md](PRODUCT.md), [ARCHITECTURE.md](ARCHITECTURE.md), [DOMAIN_MODEL.md](DOMAIN_MODEL.md), [roadmap.md](roadmap.md).

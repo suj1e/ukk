@@ -130,4 +130,4 @@ The CLI uses quoted arguments. The example angle-bracket placeholders must be re
 4. Reconcile explicit AgentRun bindings with hc identity and structured Agent provider events.
 5. Then native chat, Diff, Files, Git, approvals and plugin contribution slots.
 
-Related: [Domain Model](DOMAIN_MODEL.md), [Architecture](ARCHITECTURE.md), [Roadmap](ROADMAP.md).
+Related: [Domain Model](DOMAIN_MODEL.md), [Architecture](ARCHITECTURE.md), [Roadmap](roadmap.md).

@@ -103,7 +103,7 @@ Mac 启动多个 Agent（包括子 Agent）→ 关掉桌面窗口但不结束 Ag
 - [传输和事件同步](PROTOCOL.md)
 - [远控悬浮插件](REMOTE_SCREEN.md)
 - [安全设计](SECURITY.md)
-- [开发路线](ROADMAP.md)
+- [开发路线](roadmap.md)
 - [技术选型决策](adr/0001-platform-and-runtime.md)
 
 ## 待验证而非已实现

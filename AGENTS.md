@@ -51,4 +51,4 @@ Read [docs/OVERVIEW.zh-CN.md](docs/OVERVIEW.zh-CN.md), [docs/ARCHITECTURE.md](do
 
 Describe the user journey; provide reproducible build/run steps; show tests; identify platform constraints; verify offline/reconnect and permission-denial cases where relevant.
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for milestones. Initial code should build a small vertical slice rather than introducing every module as a stub.
+See [docs/status.md](docs/status.md) for verified implementation status and [docs/roadmap.md](docs/roadmap.md) for claimable Agent task IDs and milestones. Initial code should build a small vertical slice rather than introducing every module as a stub.

@@ -99,4 +99,4 @@ Host controls activation, health, restart budget, update, revoke, uninstall, mig
 
 Remote Screen (floating live screen + fullscreen control), Browser Use, Computer Use, Git integration, Search, Notifications, Discord/GitHub integrations and automations. Not all are promised for the first release; they are part of the full product inventory.
 
-See [remote screen](REMOTE_SCREEN.md), [security](SECURITY.md), and [roadmap](ROADMAP.md).
+See [remote screen](REMOTE_SCREEN.md), [security](SECURITY.md), and [roadmap](roadmap.md).

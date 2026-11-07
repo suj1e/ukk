@@ -153,7 +153,8 @@ Host 已增加基于 SQLite v2 变更版本的 `workspace.state` / `workspace.wa
 | [Remote Protocol](docs/PROTOCOL.md) | Commands、Events、重连与同步 |
 | [Remote Screen](docs/REMOTE_SCREEN.md) | 悬浮屏幕、授权、WebRTC 传输 |
 | [Security](docs/SECURITY.md) | 威胁模型、权限、风险与测试 |
-| [Roadmap](docs/ROADMAP.md) | 完整产品开发阶段和验收标准 |
+| [Project Status](docs/status.md) | 已实现、CI、未完成验收与任务入口 |
+| [Roadmap](docs/roadmap.md) | 完整产品开发阶段、依赖和并行 Agent 工作队列 |
 | [Development](docs/DEVELOPMENT.md) | 预期代码目录和工程验证步骤 |
 | [Runtime Spike 01](docs/RUNTIME_SPIKE.md) | Rust Host 原型、命令、模拟测试和真实 Mac 验收项 |
 | [Windows IPC](docs/WINDOWS_IPC.md) | Windows Named Pipe、用户 ACL、安全约束、验收清单 |
@@ -169,7 +170,7 @@ Host 已增加基于 SQLite v2 变更版本的 `workspace.state` / `workspace.wa
 
 在 macOS / Windows / Linux 电脑上启动多个 Agent → 退出 Desktop 窗口但 Agent 继续运行 → iPhone 扫码连接并恢复会话 → 查看 Diff / 发送命令 / 审批 → 临时打开悬浮 Remote Screen 完成一项桌面操作 → 收起小窗继续 Agent 对话。
 
-详细验收拆解见 [Roadmap](docs/ROADMAP.md)。
+详细验收拆解见 [Roadmap](docs/roadmap.md)。
 
 ## Project status
 

@@ -55,6 +55,6 @@ docs/                       architecture, product, ADR and roadmap
 
 Unit: command validation, entity mapping, grant checks, idempotency. Integration: hc API/event restart; plugin crash; protocol cursor gaps; multi-client read/write. E2E: Mac/iPhone pairing, revoked device, denied screen permissions, local sleep, relay disconnect and TURN fallback.
 
-See [roadmap](ROADMAP.md).
+See [roadmap](roadmap.md).
 
 Implemented source and CLI usage: [Workspace Persistence](WORKSPACE_PERSISTENCE.md).
