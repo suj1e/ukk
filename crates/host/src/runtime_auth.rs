@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use ukk_domain::new_id;
+#[cfg(unix)]
 use ukk_host_client::HostClient;
 
 const MIN_SECRET_LEN: usize = 60;
@@ -37,11 +38,7 @@ impl AgentControlAuth {
     pub fn default_path() -> PathBuf {
         std::env::var_os("UKK_AGENT_CONTROL_TOKEN_FILE")
             .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                HostClient::from_env()
-                    .socket_path()
-                    .with_extension("agent-control")
-            })
+            .unwrap_or_else(default_token_path)
     }
 
     pub fn audit_path() -> PathBuf {
@@ -206,6 +203,23 @@ impl AgentControlAuth {
     }
 }
 
+#[cfg(unix)]
+fn default_token_path() -> PathBuf {
+    HostClient::from_env()
+        .socket_path()
+        .with_extension("agent-control")
+}
+
+#[cfg(windows)]
+fn default_token_path() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:\\nonexistent\\ukk"))
+        .join("ukk")
+        .join("run")
+        .join("agent-host.agent-control")
+}
+
 fn constant_time_matches(left: &[u8], right: &[u8]) -> bool {
     let mut difference = left.len() ^ right.len();
     for (&a, &b) in left.iter().zip(right.iter()) {
@@ -280,6 +294,11 @@ impl AuditLog {
                     options.mode(0o600);
                 }
                 let mut file = options.open(path)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+                }
                 let value = serde_json::json!({
                     "at_ms": entry.at_ms,
                     "request_id": entry.request_id,
