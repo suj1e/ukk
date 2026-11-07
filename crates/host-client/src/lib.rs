@@ -6,6 +6,7 @@
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+#[cfg(unix)]
 use std::env;
 use std::error::Error;
 use std::fmt;
