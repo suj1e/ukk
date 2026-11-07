@@ -19,6 +19,7 @@ impl Workspace {
             .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
             .hover(|style| style.bg(rgb(SURFACE)))
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.cancel_split_drag(cx);
                 this.selected_space = Some(id.clone());
                 this.selected_session = this
                     .domain
@@ -49,6 +50,7 @@ impl Workspace {
             .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
             .hover(|style| style.bg(rgb(SURFACE)))
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.cancel_split_drag(cx);
                 this.selected_session = Some(id.clone());
                 this.selected = None;
                 cx.notify();
@@ -61,9 +63,7 @@ impl Workspace {
             )
     }
 
-    /// Recursive native composition. Splits are ordinary GPUI layout nodes;
-    /// only the Host changes durable layout data. No Pane owns an Agent.
-
+    /// Render a terminal from the live Host snapshot; display only.
     pub(super) fn terminal_row(
         &self,
         terminal: &Terminal,
@@ -96,6 +96,7 @@ impl Workspace {
             .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
             .hover(|style| style.bg(rgb(if active { 0xe9ebf7 } else { SURFACE })))
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.cancel_split_drag(cx);
                 this.selected = Some(address.clone());
                 this.selected_session = None;
                 this.tab = DetailTab::Overview;
@@ -106,17 +107,17 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().size(px(7.0)).rounded_full().bg(rgb(if !self.online {
-                        0xbfc3cc
-                    } else if terminal.lifecycle == "finished" {
-                        0xbfc3cc
-                    } else if terminal.reported_status.as_deref() == Some("blocked") {
-                        0xe4a84e
-                    } else if terminal.reported_status.as_deref() == Some("working") {
-                        0x58ab83
-                    } else {
-                        0xa5aab6
-                    })))
+                    .child(div().size(px(7.0)).rounded_full().bg(rgb(
+                        if !self.online || terminal.lifecycle == "finished" {
+                            0xbfc3cc
+                        } else if terminal.reported_status.as_deref() == Some("blocked") {
+                            0xe4a84e
+                        } else if terminal.reported_status.as_deref() == Some("working") {
+                            0x58ab83
+                        } else {
+                            0xa5aab6
+                        },
+                    )))
                     .child(
                         div()
                             .flex_1()

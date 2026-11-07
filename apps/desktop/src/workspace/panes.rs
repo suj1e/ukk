@@ -165,68 +165,7 @@ impl Workspace {
                 ratio,
                 first,
                 second,
-            } => {
-                let smaller = (*ratio - 0.1).max(0.15);
-                let larger = (*ratio + 0.1).min(0.85);
-                let controls = div()
-                    .flex()
-                    .justify_end()
-                    .items_center()
-                    .gap_2()
-                    .mb_2()
-                    .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                        "{}% / {}%",
-                        (*ratio * 100.0).round() as i32,
-                        ((1.0 - *ratio) * 100.0).round() as i32
-                    )))
-                    .child(self.pane_button(
-                        cx,
-                        format!("{id}-smaller"),
-                        "−",
-                        PaneAction::Resize {
-                            split_id: id.clone(),
-                            ratio: smaller,
-                        },
-                    ))
-                    .child(self.pane_button(
-                        cx,
-                        format!("{id}-larger"),
-                        "+",
-                        PaneAction::Resize {
-                            split_id: id.clone(),
-                            ratio: larger,
-                        },
-                    ));
-                let first_view = div()
-                    .flex()
-                    .flex_shrink_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .flex_basis(gpui::DefiniteLength::Fraction(*ratio))
-                    .child(self.session_pane(first, cx));
-                let second_view = div()
-                    .flex()
-                    .flex_shrink_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .flex_basis(gpui::DefiniteLength::Fraction(1.0 - *ratio))
-                    .child(self.session_pane(second, cx));
-                let columns = div().flex().flex_1().min_w_0().min_h_0().gap_3();
-                let columns = if *axis == SplitAxis::Vertical {
-                    columns.flex_col()
-                } else {
-                    columns.flex_row()
-                };
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .child(controls)
-                    .child(columns.child(first_view).child(second_view))
-                    .into_any_element()
-            }
+            } => self.split_container(id, *axis, *ratio, first, second, cx),
         }
     }
 
