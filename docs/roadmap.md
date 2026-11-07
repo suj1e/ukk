@@ -91,6 +91,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** render real per-Agent conversation/events and framed terminal attachment; read-only Git status, files, diff/hunks and activity; session navigation, source/error/loading indicators, copyable diagnostics and safe no-data state. Do not synthesize fake chats. Add reviewed write operations only behind specific capabilities. Preserve independent Pane/Tab membership and Agent lifetimes.
 - **Exit:** start two Agents, switch content views, inspect real changed files, close/reopen UI and retain ongoing runtime; proof via native window and tests on all three platforms.
 - **Dependency:** R1/R2 structured data; read-only file/diff views can start against explicit fixtures now.
+- **Status (2026-11-08):** read-only slice merged as `83b5b76` (PR #24): bounded worktree service + Files/Diff/Activity panes, review-fixed pathspec/truncation/HEAD defects, three-OS CI. Live Agent conversation, structured turns and terminal attach/input remain blocked on R1/R2; real GUI interaction is **NOT VERIFIED**.
 
 ## Wave C — Extensibility and secure cross-device foundations (P1, independent contracts)
 
@@ -146,7 +147,8 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Suggested ownership:** Integration/Release Agent.
 - **Do:** installer/updater and user-service setup on macOS, Windows, Linux; native application signing where applicable; SQLite migration/backup/recovery; logs and diagnostics without credentials; perf/memory and multi-observer backpressure tests; accessibility and locale; threat review, plugin sandbox and device revocation checks. iOS TestFlight/App Store requirements separately.
 - **Exit:** documented end-to-end matrix showing *actual* running Agents survive Desktop close, reattach on all three OSes, an iPhone pairs over a different network, an Agent instruction and approval work where supported, and Remote Screen opens/closes on demand without leaving the Session. Every unsupported combination named.
-- **Dependency:** continuous quality owner throughout all waves, final closure after D3 + P1 + S2 + I1 + M1.
+- **Dependency:** continuous quality owner throughout all waves; final closure after D3 + P1 + S2 + I1 + M1.
+- **Status (2026-11-08):** first slice merged as `7461a39` (PR #29): unsigned macOS/Windows/Linux release archives with deterministic packaging, SHA-256 manifests and embedded `--version` identity; artifacts built and downloaded/verified. Signing/notarization, installers/updater, backup/recovery, full E2E, locale and final security gate remain.
 
 ## Parallelization / merge discipline
 
