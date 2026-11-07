@@ -2,6 +2,7 @@
 mod entities;
 mod ids;
 mod panes;
+mod tab_transfer;
 mod tabs;
 
 pub use entities::{AgentRun, DomainSnapshot, Session, Space};

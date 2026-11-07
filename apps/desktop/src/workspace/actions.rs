@@ -154,6 +154,18 @@ impl Workspace {
                     "tab_id":tab_id,"direction":direction,"expected_revision":revision
                 }),
             ),
+            PaneAction::TabMove {
+                source_group_id,
+                destination_pane_id,
+                tab_id,
+            } => (
+                "workspace.tab.move",
+                json!({
+                    "session_id":session_id,"source_group_id":source_group_id,
+                    "destination_pane_id":destination_pane_id,
+                    "tab_id":tab_id,"expected_revision":revision
+                }),
+            ),
         };
         self.mutate(method, params, false, cx);
     }

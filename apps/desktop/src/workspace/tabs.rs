@@ -13,6 +13,31 @@ pub(super) fn find_tab_group<'a>(node: &'a PaneNode, group_id: &str) -> Option<&
 }
 
 impl Workspace {
+    /// The UI may receive drag payloads after a Session switch; never let
+    /// stale drag events edit another Session. Host still enforces local
+    /// authorization and layout revision on every actual mutation.
+    pub(super) fn accept_dragged_tab(
+        &mut self,
+        payload: &DraggedPaneTab,
+        destination: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.mutation_busy
+            || self.selected_session.as_deref() != Some(payload.session_id.as_str())
+            || payload.source_group_id == destination
+        {
+            return;
+        }
+        self.pane_action(
+            PaneAction::TabMove {
+                source_group_id: payload.source_group_id.clone(),
+                destination_pane_id: destination.to_owned(),
+                tab_id: payload.tab_id.clone(),
+            },
+            cx,
+        );
+    }
+
     fn selected_tab_id<'a>(&self, group_id: &str, tabs: &'a [PaneTab]) -> &'a str {
         let key = (
             self.selected_session.as_deref().unwrap_or("").to_owned(),
@@ -72,6 +97,14 @@ impl Workspace {
                             cx.notify();
                         }
                     }))
+                    .on_drag(
+                        DraggedPaneTab {
+                            session_id: current_session.clone(),
+                            source_group_id: group_id_owned.clone(),
+                            tab_id: tab.id.clone(),
+                        },
+                        |_, _, _, cx| cx.new(|_| gpui::Empty),
+                    )
                     .child(tab.title.clone())
             }));
 
@@ -136,10 +169,12 @@ impl Workspace {
         // Only the active surface is rendered, but all tab membership remains
         // in the validated SQLite tree. This transient leaf is never stored.
         let surface = PaneNode::Leaf {
-            id: group_id_owned,
+            id: group_id_owned.clone(),
             content: active.content.clone(),
         };
+        let destination = group_id_owned;
         div()
+            .id(format!("drop-target-tabs-{group_id}"))
             .flex()
             .flex_col()
             .flex_1()
@@ -158,6 +193,9 @@ impl Workspace {
                     .child(controls),
             )
             .child(self.session_pane(&surface, cx))
+            .on_drop::<DraggedPaneTab>(cx.listener(move |this, payload: &DraggedPaneTab, _, cx| {
+                this.accept_dragged_tab(payload, &destination, cx);
+            }))
             .into_any_element()
     }
 }

@@ -384,6 +384,7 @@ impl HostClient {
                 | "workspace.tab.add"
                 | "workspace.tab.close"
                 | "workspace.tab.reorder"
+                | "workspace.tab.move"
         ) {
             return Err(HostError::Protocol(
                 "method is not an allowed local workspace mutation".into(),

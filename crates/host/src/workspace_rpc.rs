@@ -180,6 +180,25 @@ fn dispatch_with(store: &mut Store, method: &str, params: &Value) -> Result<Valu
                 message: error.to_string(),
             })
         }
+        "workspace.tab.move" => {
+            let session_id = str_arg(params, "session_id")?;
+            let source_group_id = str_arg(params, "source_group_id")?;
+            let tab_id = str_arg(params, "tab_id")?;
+            let destination_pane_id = str_arg(params, "destination_pane_id")?;
+            let expected = revision_arg(params)?;
+            let current = store.get_layout(session_id)?;
+            if current.revision != expected {
+                return Err(StoreError::Conflict.into());
+            }
+            let next = current
+                .root
+                .move_tab(source_group_id, tab_id, destination_pane_id)?;
+            let layout = store.set_layout(session_id, expected, next)?;
+            serde_json::to_value(layout).map_err(|error| RpcError {
+                code: -32032,
+                message: error.to_string(),
+            })
+        }
         "workspace.tab.reorder" => {
             let session_id = str_arg(params, "session_id")?;
             let group_id = str_arg(params, "group_id")?;
@@ -351,6 +370,51 @@ mod tests {
         assert_eq!(closed["revision"], 3);
         assert_eq!(closed["root"]["kind"], "leaf");
         assert!(store.snapshot().unwrap().agent_runs.is_empty());
+    }
+
+    #[test]
+    fn cross_pane_move_requires_fresh_revision_and_preserves_agent_binding() {
+        let mut store = Store::open_memory().unwrap();
+        let space = store.create_space("ukk", "/repo").unwrap();
+        let session = store.create_session(&space.id, "tabs").unwrap();
+        let agent = store
+            .bind_agent(&session.id, "core", "t1", "codex", None)
+            .unwrap();
+        let layout = store.get_layout(&session.id).unwrap();
+        let source = layout
+            .root
+            .add_tab(
+                layout.root.id(),
+                "Agent".into(),
+                PaneContent::Agent {
+                    agent_run_id: agent.id.clone(),
+                },
+            )
+            .unwrap();
+        let source_id = source.id().to_owned();
+        let tab_id = source.leaves()[1].0.to_owned();
+        let tree = source
+            .split_leaf(source.id(), SplitAxis::Horizontal, 0.5, PaneContent::Diff)
+            .unwrap();
+        let destination_pane_id = tree.leaves()[2].0.to_owned();
+        store.set_layout(&session.id, 0, tree).unwrap();
+        let request = json!({
+            "session_id":session.id,
+            "source_group_id":source_id,
+            "destination_pane_id":destination_pane_id,
+            "tab_id":tab_id,
+            "expected_revision":1
+        });
+        let saved = dispatch_with(&mut store, "workspace.tab.move", &request).unwrap();
+        assert_eq!(saved["revision"], 2);
+        let restored: PaneNode = serde_json::from_value(saved["root"].clone()).unwrap();
+        assert!(matches!(
+            restored.leaves()[2].1,
+            PaneContent::Agent { agent_run_id } if agent_run_id == &agent.id
+        ));
+        let old = dispatch_with(&mut store, "workspace.tab.move", &request).unwrap_err();
+        assert_eq!(old.code, -32031);
+        assert_eq!(store.snapshot().unwrap().agent_runs[0].id, agent.id);
     }
 
     #[test]

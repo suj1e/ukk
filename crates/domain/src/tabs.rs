@@ -1,7 +1,7 @@
 //! Immutable tab membership edits, independent of window focus and agents.
 use crate::{new_id, LayoutError, PaneContent, PaneNode, PaneTab};
 
-fn default_title(content: &PaneContent) -> &'static str {
+pub(super) fn default_title(content: &PaneContent) -> &'static str {
     match content {
         PaneContent::Activity => "Activity",
         PaneContent::Files => "Files",
@@ -13,7 +13,7 @@ fn default_title(content: &PaneContent) -> &'static str {
 
 /// Only the group containing the target is changed. Other Pane IDs, Session
 /// bindings and split ratios are retained. Never mutate herdr-core processes.
-fn rewrite_target(
+pub(super) fn rewrite_target(
     node: &PaneNode,
     target: &str,
     edit: &impl Fn(&PaneNode) -> Result<PaneNode, LayoutError>,
