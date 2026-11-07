@@ -2,6 +2,15 @@
 
 > Dates are intentionally not promised. The product scope is **complete multi-agent workspace + plugin platform + mobile companion**; milestones define risk-reducing delivery order, not permanent omissions.
 
+## Implementation progress (2026-11-07)
+
+- **Spike 01:** Rust `hc connect` JSON-RPC client, read-only Host socket, mock tests — committed; Mac validation pending.
+- **Spike 02:** new GPUI shell, typed Host IPC client, dynamic Agent tree — committed; macOS compile and screenshot pending.
+- **Spike 03:** live `events.subscribe` broker, sequence gap/`missed` recovery, process-local revisioned Host snapshots/long-poll, automatic GPUI update; unit and integration test source — committed; CI/macOS validation pending.
+- **Still not started:** persistent ukk-domain Session/AgentRun data model, multiple independent native panes, structured Agent adapters, plugin runtime, QR pairing, iOS UI, Remote Screen.
+
+This progress is a **technical vertical slice**, not completion of the full milestone gates below. See [Live Runtime Sync](LIVE_EVENTS.md).
+
 ## Milestone 0 — Source and interface feasibility
 
 - Pin reference commits/versions for herdr-core, GPUI, Alma Relay and chosen media stack.
