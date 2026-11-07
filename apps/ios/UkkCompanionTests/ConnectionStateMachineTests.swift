@@ -74,6 +74,46 @@ final class ConnectionStateMachineTests: XCTestCase {
         XCTAssertEqual(machine.state, .online)
     }
 
+    func testFixtureModeSurvivesBackgroundAndForeground() {
+        var machine = ConnectionStateMachine()
+        machine.handle(.appEnteredBackground)
+        XCTAssertEqual(machine.state, .fixtureData)
+
+        machine.handle(.appEnteredForeground)
+        XCTAssertEqual(machine.state, .fixtureData)
+        XCTAssertFalse(machine.isLiveClaim)
+        XCTAssertFalse(machine.indicator.isLive)
+        XCTAssertFalse(machine.isRetryAvailable)
+    }
+
+    func testOfflineStateIsNotTurnedIntoPhantomReconnectByBackgrounding() {
+        var machine = ConnectionStateMachine(initial: .offline(.hostUnreachable))
+        machine.handle(.appEnteredBackground)
+        XCTAssertEqual(machine.state, .offline(.hostUnreachable))
+
+        machine.handle(.appEnteredForeground)
+        XCTAssertEqual(machine.state, .offline(.hostUnreachable))
+        XCTAssertTrue(machine.isRetryAvailable)
+    }
+
+    func testTransportOpenedWhileSuspendedIsIgnoredUntilForegroundHandshake() {
+        var machine = ConnectionStateMachine(initial: .online)
+        machine.handle(.appEnteredBackground)
+        XCTAssertEqual(machine.state, .suspended)
+
+        machine.handle(.transportOpened)
+        XCTAssertEqual(machine.state, .suspended)
+        XCTAssertFalse(machine.isLiveClaim)
+
+        machine.handle(.appEnteredForeground)
+        XCTAssertEqual(machine.state, .reconnecting(attempt: 1))
+        XCTAssertFalse(machine.isLiveClaim)
+
+        machine.handle(.transportOpened)
+        XCTAssertEqual(machine.state, .online)
+        XCTAssertTrue(machine.isLiveClaim)
+    }
+
     func testForegroundWithoutSuspensionIsIgnored() {
         var machine = ConnectionStateMachine(initial: .online)
         machine.handle(.appEnteredForeground)

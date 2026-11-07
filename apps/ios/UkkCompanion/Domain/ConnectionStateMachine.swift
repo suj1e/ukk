@@ -86,7 +86,12 @@ struct ConnectionStateMachine: Equatable, Sendable {
 
         switch event {
         case .transportOpened:
-            state = .online
+            // While suspended the OS has paused transports. A late open must not
+            // bypass the foreground handshake; only a post-foreground
+            // `.reconnecting` state may become live.
+            if state != .suspended {
+                state = .online
+            }
 
         case .transportClosed:
             if state == .online {
@@ -111,7 +116,15 @@ struct ConnectionStateMachine: Equatable, Sendable {
             }
 
         case .appEnteredBackground:
-            state = .suspended
+            // Only a state with a transport/session suspends. Fixture data and
+            // terminal offline states have nothing to pause and must not turn
+            // into a phantom reconnect on foreground.
+            switch state {
+            case .online, .reconnecting:
+                state = .suspended
+            default:
+                break
+            }
 
         case .appEnteredForeground:
             if state == .suspended {

@@ -46,22 +46,35 @@ final class AppModel: ObservableObject {
         deviceActionNotice = deviceStore.revoke(id).message
     }
 
+    /// Validates the payload the user pasted into the visible field.
     func validatePairingDraft(now: Date = Date()) {
-        let trimmed = pairingPayloadDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            pairingParseMessage = "Paste a pairing invite payload first."
-            return
-        }
-        switch PairingInviteParser.parse(payload: trimmed, now: now) {
-        case .success(let invite):
-            pairingParseMessage = "Invite parsed for host \(invite.hostID.uuidString). Host confirmation is still required; this build does not connect."
-        case .failure(let error):
-            pairingParseMessage = error.message
-        }
+        validatePairing(payload: pairingPayloadDraft, now: now)
     }
 
+    /// Validates an invite payload without copying it into the visible draft.
+    /// Scanned QR payloads contain `invite_secret`, so they must never be bound
+    /// to the always-visible editor.
+    @discardableResult
+    func validatePairing(payload: String, now: Date = Date()) -> String {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message: String
+        if trimmed.isEmpty {
+            message = "Paste a pairing invite payload first."
+        } else {
+            switch PairingInviteParser.parse(payload: trimmed, now: now) {
+            case .success(let invite):
+                message = "Invite parsed for host \(invite.hostID.uuidString). Host confirmation is still required; this build does not connect."
+            case .failure(let error):
+                message = error.message
+            }
+        }
+        pairingParseMessage = message
+        return message
+    }
+
+    /// Scanned payloads are validated in memory only; they never reach
+    /// `pairingPayloadDraft`, the UI, logs or disk.
     func handleScannedCode(_ payload: String) {
-        pairingPayloadDraft = payload
-        validatePairingDraft()
+        validatePairing(payload: payload)
     }
 }

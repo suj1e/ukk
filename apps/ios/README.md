@@ -127,20 +127,25 @@ revocation and the simulator camera-unavailable pairing screen.
 - Generic simulator build with **Xcode 27.2** (iOS 27.2 SDK) succeeded. The host's
   CoreSimulator mismatch warning appears during resolution but does not affect
   compilation.
-- The full test scheme ran on an **iPhone 16 simulator, iOS 26.0 (23A343)**:
-  **58 unit tests + 3 UI tests passed, 0 failures**. Xcode 27.2 could not load
+- **CI** (`.github/workflows/ios.yml`) builds the committed project and runs the
+  unit suite (70 tests) on the first available iPhone simulator on
+  `macos-latest`. The 3 UI tests are not run in CI.
+- The full local test scheme (58 unit tests + 3 UI tests at that time) ran on an
+  **iPhone 16 simulator, iOS 26.0 (23A343)**. Xcode 27.2 could not load
   simulator devices on this host because CoreSimulator 1174.21 is not installed;
   the run therefore used **Xcode 27.0 beta** (matching CoreSimulator 1174.9.2).
   That Xcode's instrument helpers were rejected by AMFI on macOS 27.2, so
   newer signed `DTServiceHub`/`dtarbiter`/`dtsecurity` helper binaries were
   temporarily substituted for the run and then restored (signatures verified).
   The supported long-term fix is installing the matching Xcode components.
-- This is a single-host simulator result, not CI and not device acceptance.
+- This is a single-host simulator result, not device acceptance.
 
 ## Security notes
 
 - No credentials or trust material are stored. The pairing invite secret is held
-  only in memory while validating a pasted payload, is never displayed, logged or
+  only in memory while validating a payload. Scanned QR payloads are validated
+  directly and are **never copied into the visible paste field**; that editor only
+  contains text the user typed or pasted. The secret is never displayed, logged or
   persisted, and `PairingInvite.description` redacts it.
 - The QR scanner stops capture after the first successful read.
 - No permissions are widened implicitly: every capability flag starts false and

@@ -31,6 +31,7 @@
 		9B14F85A80771087CA24ACE6 /* FixtureShellUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAAC2D647FB3BF352F0E7B86 /* FixtureShellUITests.swift */; };
 		A6FFE3E5C40E34FB5613FE62 /* ConnectionStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA9AC0CDAFA2208E255ABD1 /* ConnectionStateMachine.swift */; };
 		A76775FEB71673AD6C7AF0F2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5EFBE656060DCD5A53505FCF /* Assets.xcassets */; };
+		AE0FF0BCF6AD4A7266846345 /* AppModelPairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42566F977CE8887B5B1FB21B /* AppModelPairingTests.swift */; };
 		BA955AAED3DB2094A4D2A01C /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51ADA552392D6B74C0A63699 /* QRScannerView.swift */; };
 		C3F3FE40FEBD329DE81B23EB /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 353DB8DFF712A961210E01ED /* AppModel.swift */; };
 		C83FAC0691CB84DA4063E667 /* NavigationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CF8B1A46883A8C60EED20C /* NavigationState.swift */; };
@@ -71,6 +72,7 @@
 		29D4C962EE9B9F241D6FE2D5 /* Fixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fixtures.swift; sourceTree = "<group>"; };
 		2EF718841ACA73110593737D /* UkkCompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UkkCompanionApp.swift; sourceTree = "<group>"; };
 		353DB8DFF712A961210E01ED /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		42566F977CE8887B5B1FB21B /* AppModelPairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelPairingTests.swift; sourceTree = "<group>"; };
 		51ADA552392D6B74C0A63699 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		5EFBE656060DCD5A53505FCF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		75175DDF254EB3B04F933A5A /* ChatBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBubbleView.swift; sourceTree = "<group>"; };
@@ -182,6 +184,7 @@
 		C485FA5CFFF19BA0F33CBF24 /* UkkCompanionTests */ = {
 			isa = PBXGroup;
 			children = (
+				42566F977CE8887B5B1FB21B /* AppModelPairingTests.swift */,
 				088BAC136771EBA13D0AB02E /* ApprovalCapabilityTests.swift */,
 				261EBB4A699B2CB8874BB355 /* CameraAvailabilityTests.swift */,
 				16F1B93D9BD18DCED1F2140B /* ConnectionStateMachineTests.swift */,
@@ -344,6 +347,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AE0FF0BCF6AD4A7266846345 /* AppModelPairingTests.swift in Sources */,
 				8CFF14B4A1357AF0A2243B1F /* ApprovalCapabilityTests.swift in Sources */,
 				0F441031CDC504BF62281C8A /* CameraAvailabilityTests.swift in Sources */,
 				54EF6674ED44254F2ED3A70A /* ConnectionStateMachineTests.swift in Sources */,

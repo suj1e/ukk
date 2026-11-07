@@ -4,13 +4,15 @@ import UIKit
 
 /// Owns one `AVCaptureSession`. Payloads are delivered once; the session stops
 /// immediately after the first successful QR read. No payload is logged.
-final class QRScannerController: NSObject, AVCaptureMetadataOutputObjectsDelegate {
+final class QRScannerController: NSObject, ObservableObject, AVCaptureMetadataOutputObjectsDelegate {
     let session = AVCaptureSession()
 
     private let pipeline = DispatchQueue(label: "dev.ukk.companion.qr.pipeline")
     private var isConfigured = false
     private var hasDelivered = false
-    private(set) var configurationError: String?
+    /// Published so the pairing screen can replace the black preview with an
+    /// actionable message when capture cannot be configured.
+    @Published private(set) var configurationError: String?
 
     var onPayload: ((String) -> Void)?
 

@@ -69,7 +69,7 @@ struct FixtureCatalog: Equatable, Sendable {
 // MARK: - Fixed clock
 
 enum FixtureTime {
-    /// 2026-11-07T00:00:00Z. Fixed so transcripts render identically every launch.
+    /// 2026-11-07T10:40:00Z. Fixed so transcripts render identically every launch.
     static let base = Date(timeIntervalSince1970: 1_794_048_000)
 
     static func minutes(_ value: Int) -> Date {

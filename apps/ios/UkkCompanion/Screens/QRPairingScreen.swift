@@ -7,9 +7,8 @@ import SwiftUI
 struct QRPairingScreen: View {
     @ObservedObject var model: AppModel
 
-    @State private var scanner = QRScannerController()
-
-    private let availability = CameraAvailability.current()
+    @StateObject private var scanner = QRScannerController()
+    @State private var availability = CameraAvailability.current()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,6 +18,8 @@ struct QRPairingScreen: View {
                     switch availability {
                     case .available:
                         scannerSection
+                    case .requestingPermission:
+                        requestingSection
                     case .unavailable(let reason):
                         unavailableSection(reason)
                     }
@@ -45,8 +46,19 @@ struct QRPairingScreen: View {
             scanner.onPayload = { payload in
                 model.handleScannedCode(payload)
             }
-            if availability.isAvailable {
+        }
+        .task {
+            let resolved = await CameraAvailability.resolve()
+            availability = resolved
+            if resolved.isAvailable {
                 scanner.start()
+            }
+        }
+        .onChange(of: availability) { _, newValue in
+            if newValue.isAvailable {
+                scanner.start()
+            } else {
+                scanner.stop()
             }
         }
         .onDisappear {
@@ -56,20 +68,66 @@ struct QRPairingScreen: View {
 
     private var scannerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                QRScannerView(controller: scanner)
-                    .frame(height: 300)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.9), lineWidth: 3)
-                    .frame(width: 180, height: 180)
-                    .accessibilityHidden(true)
+            if let error = scanner.configurationError {
+                configurationErrorCard(error)
+            } else {
+                ZStack {
+                    QRScannerView(controller: scanner)
+                        .frame(height: 300)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.9), lineWidth: 3)
+                        .frame(width: 180, height: 180)
+                        .accessibilityHidden(true)
+                }
+                Text("Point the camera at the Desktop pairing QR code. The first code read stops the capture session.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Text("Point the camera at the Desktop pairing QR code. The first code read stops the capture session.")
+        }
+        .accessibilityIdentifier("qrScannerContainer")
+    }
+
+    private var requestingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Requesting camera access…")
+                    .font(.headline)
+            }
+            Text("QR scanning needs camera permission. This build never connects to a Host.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .accessibilityIdentifier("qrScannerContainer")
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(
+            Color(.secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("pairingCameraRequesting")
+    }
+
+    private func configurationErrorCard(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Camera could not start", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Text("You can still validate the shape of an invite payload below. Validation is local and performs no network request.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(
+            Color.orange.opacity(0.10),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("qrConfigurationError")
     }
 
     private func unavailableSection(_ reason: CameraAvailability.UnavailableReason) -> some View {
