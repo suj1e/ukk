@@ -24,13 +24,16 @@ use std::io::{BufRead, Read, Write};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_ORPHAN_FRAMES: usize = 64;
+const MAX_ORPHAN_CHANNELS: usize = 64;
+const MAX_REQUEST_PAYLOAD: usize = 1024 * 1024;
 const MAX_ORPHAN_BYTES: usize = 256 * 1024;
 const MAX_SEND_CACHE: usize = 256;
 const HELLO_ID: u64 = 0;
@@ -53,6 +56,35 @@ pub struct SendOutcome {
 #[derive(Clone)]
 struct SendFingerprint(String);
 
+enum SendEntry {
+    InFlight(SendFingerprint),
+    Done(SendFingerprint, SendResult),
+}
+
+#[derive(Default)]
+struct SendCache {
+    entries: HashMap<String, SendEntry>,
+    order: VecDeque<String>,
+}
+
+impl SendCache {
+    fn evict_done(&mut self) {
+        let mut scanned = 0;
+        while self.order.len() > MAX_SEND_CACHE && scanned < self.order.len() {
+            let Some(key) = self.order.pop_front() else {
+                break;
+            };
+            let done = matches!(self.entries.get(&key), Some(SendEntry::Done(..)));
+            if done {
+                self.entries.remove(&key);
+            } else {
+                self.order.push_back(key);
+            }
+            scanned += 1;
+        }
+    }
+}
+
 enum ChannelSink {
     Stream(Arc<StreamQueue>),
     Events(Arc<EventQueue>),
@@ -71,8 +103,8 @@ struct Shared {
     pending: Mutex<HashMap<u64, SyncSender<Result<Value>>>>,
     routing: Mutex<Routing>,
     closed: Mutex<Option<String>>,
-    send_cache: Mutex<HashMap<String, (SendFingerprint, SendResult)>>,
-    send_cache_order: Mutex<VecDeque<String>>,
+    send_cache: Mutex<SendCache>,
+    send_cache_ready: Condvar,
 }
 
 impl Shared {
@@ -114,6 +146,9 @@ impl Shared {
             return;
         }
         let cost = frame.payload_len();
+        if !routing.orphans.contains_key(&channel) && routing.orphans.len() >= MAX_ORPHAN_CHANNELS {
+            return;
+        }
         let entry = routing
             .orphans
             .entry(channel)
@@ -138,11 +173,19 @@ impl Shared {
         }
     }
 
-    fn register(&self, channel: u32, sink: ChannelSink) {
+    fn register(&self, channel: u32, sink: ChannelSink) -> Result<()> {
         // One lock covers orphan removal, sink insertion and draining, so a
         // frame cannot slip through the gap between registration steps. This
         // race used to drop the first paint on Windows.
         let mut routing = self.routing.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(reason) = self
+            .closed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            return Err(HcError::Closed(reason));
+        }
         let orphan = routing.orphans.remove(&channel);
         routing.channels.insert(channel, sink);
         if let Some((frames, _)) = orphan {
@@ -152,6 +195,7 @@ impl Shared {
                 }
             }
         }
+        Ok(())
     }
 
     fn dispatch_json(&self, payload: &[u8]) {
@@ -193,11 +237,11 @@ impl Shared {
 
 impl ChannelLifecycle for Shared {
     fn detach(&self, channel: u32) {
-        self.routing
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .channels
-            .remove(&channel);
+        let mut routing = self.routing.lock().unwrap_or_else(|e| e.into_inner());
+        routing.channels.remove(&channel);
+        // A reused channel id must not inherit a previous stream's queued
+        // frames, including a CLOSE acknowledgement.
+        routing.orphans.remove(&channel);
     }
 }
 
@@ -211,10 +255,25 @@ pub struct FramedConnection {
 impl FramedConnection {
     /// Spawn `hc connect`, negotiate framed mode, and start the reader.
     pub fn connect(binary: &OsStr) -> Result<Self> {
-        Self::connect_with_timeout(binary, DEFAULT_REQUEST_TIMEOUT)
+        Self::connect_with_timeouts(binary, DEFAULT_REQUEST_TIMEOUT, DEFAULT_HELLO_TIMEOUT)
     }
 
     pub fn connect_with_timeout(binary: &OsStr, request_timeout: Duration) -> Result<Self> {
+        Self::connect_with_timeouts(
+            binary,
+            request_timeout,
+            request_timeout.min(DEFAULT_HELLO_TIMEOUT),
+        )
+    }
+
+    /// Bounded handshake: a core that accepts the connection but never answers
+    /// `hello` cannot pin the caller. The child is killed and reaped on both
+    /// timeout and parse failure.
+    pub fn connect_with_timeouts(
+        binary: &OsStr,
+        request_timeout: Duration,
+        hello_timeout: Duration,
+    ) -> Result<Self> {
         let mut child = Command::new(binary)
             .arg("connect")
             .stdin(Stdio::piped())
@@ -236,30 +295,63 @@ impl FramedConnection {
             "method":"hello",
             "params":{"framed":true,"generation":PROTOCOL_GENERATION}
         }))?;
-        let handshake = (|| -> Result<Hello> {
+        if let Err(error) = (|| -> Result<()> {
             stdin.write_all(&hello_request)?;
             stdin.write_all(b"\n")?;
             stdin.flush()?;
-            let line = read_limited_line(&mut stdout, MAX_HELLO_LINE)?;
-            let result = crate::protocol::parse_reply(&line, HELLO_ID)?;
-            let hello = Hello::from_result(&result)?;
-            if !hello.framed {
-                return Err(HcError::Unsupported {
-                    method: "hello.framed".into(),
-                    reason: "core did not switch this connection to framed mode".into(),
-                });
-            }
-            hello.require_method("hello")?;
-            Ok(hello)
-        })();
-        let hello = match handshake {
-            Ok(hello) => hello,
-            Err(error) => {
+            Ok(())
+        })() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let handshake = thread::Builder::new()
+            .name("hc-hello-reader".into())
+            .spawn(move || {
+                let result = read_limited_line(&mut stdout, MAX_HELLO_LINE)
+                    .and_then(|line| crate::protocol::parse_reply(&line, HELLO_ID))
+                    .and_then(|result| Hello::from_result(&result))
+                    .and_then(|hello| {
+                        if !hello.framed {
+                            return Err(HcError::Unsupported {
+                                method: "hello.framed".into(),
+                                reason: "core did not switch this connection to framed mode".into(),
+                            });
+                        }
+                        hello.require_method("hello")?;
+                        Ok(hello)
+                    });
+                let _ = sender.send(result);
+                stdout
+            })?;
+        let hello = match receiver.recv_timeout(hello_timeout) {
+            Ok(Ok(hello)) => hello,
+            Ok(Err(error)) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = handshake.join();
                 return Err(error);
             }
+            Err(RecvTimeoutError::Timeout) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = handshake.join();
+                return Err(HcError::Timeout {
+                    operation: "hello".into(),
+                    seconds: hello_timeout.as_secs(),
+                });
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = handshake.join();
+                return Err(HcError::Protocol("hello reader vanished".into()));
+            }
         };
+        let stdout = handshake
+            .join()
+            .map_err(|_| HcError::Protocol("hello reader panicked".into()))?;
 
         let writer = Arc::new(FrameWriter::new(stdin));
         let shared = Arc::new(Shared {
@@ -269,8 +361,8 @@ impl FramedConnection {
             pending: Mutex::new(HashMap::new()),
             routing: Mutex::new(Routing::default()),
             closed: Mutex::new(None),
-            send_cache: Mutex::new(HashMap::new()),
-            send_cache_order: Mutex::new(VecDeque::new()),
+            send_cache: Mutex::new(SendCache::default()),
+            send_cache_ready: Condvar::new(),
         });
         let reader_shared = Arc::clone(&shared);
         let reader = thread::Builder::new()
@@ -326,6 +418,25 @@ impl FramedConnection {
         let payload = serde_json::to_vec(&json!({
             "jsonrpc":"2.0","id":id,"method":method,"params":params
         }))?;
+        if payload.len() > MAX_REQUEST_PAYLOAD {
+            self.shared
+                .pending
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&id);
+            return Err(HcError::InvalidArgument(format!(
+                "request payload {} exceeds {MAX_REQUEST_PAYLOAD} bytes",
+                payload.len()
+            )));
+        }
+        if let Some(reason) = self.shared.is_closed() {
+            self.shared
+                .pending
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&id);
+            return Err(HcError::Closed(reason));
+        }
         if let Err(error) = self.shared.writer.send(&Frame::Data {
             channel: 0,
             payload,
@@ -452,45 +563,74 @@ impl FramedConnection {
         idempotency_key: &str,
         request: &SendRequest,
     ) -> Result<SendOutcome> {
-        let fingerprint = SendFingerprint(format!(
-            "{}|{}|{}|{}",
-            request.terminal, request.text, request.force, request.wait
-        ));
-        {
-            let cache = self
-                .shared
-                .send_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some((cached, result)) = cache.get(idempotency_key) {
-                if cached.0 == fingerprint.0 {
-                    return Ok(SendOutcome {
-                        result: result.clone(),
-                        replayed: true,
-                    });
-                }
-                return Err(HcError::IdempotencyConflict(idempotency_key.to_owned()));
-            }
-        }
-        let result = self.terminal_send(request)?;
+        // The fingerprint covers every serialized field (force, if, wait,
+        // timeout, caller), not just text, so a changed request cannot be
+        // mistaken for a retry.
+        let fingerprint = SendFingerprint(serde_json::to_string(request)?);
         let mut cache = self
             .shared
             .send_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        cache.insert(idempotency_key.to_owned(), (fingerprint, result.clone()));
-        let mut order = self
-            .shared
-            .send_cache_order
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        order.push_back(idempotency_key.to_owned());
-        while order.len() > MAX_SEND_CACHE {
-            if let Some(oldest) = order.pop_front() {
-                cache.remove(&oldest);
+        loop {
+            match cache.entries.get(idempotency_key) {
+                Some(SendEntry::InFlight(existing)) => {
+                    if existing.0 != fingerprint.0 {
+                        return Err(HcError::IdempotencyConflict(idempotency_key.to_owned()));
+                    }
+                    // Another caller owns the send. Wait for its outcome so a
+                    // concurrent retry never issues a second send.
+                    cache = self
+                        .shared
+                        .send_cache_ready
+                        .wait(cache)
+                        .unwrap_or_else(|e| e.into_inner());
+                }
+                Some(SendEntry::Done(existing, result)) => {
+                    if existing.0 != fingerprint.0 {
+                        return Err(HcError::IdempotencyConflict(idempotency_key.to_owned()));
+                    }
+                    return Ok(SendOutcome {
+                        result: result.clone(),
+                        replayed: true,
+                    });
+                }
+                None => {
+                    cache.entries.insert(
+                        idempotency_key.to_owned(),
+                        SendEntry::InFlight(fingerprint.clone()),
+                    );
+                    cache.order.push_back(idempotency_key.to_owned());
+                    break;
+                }
             }
         }
-        Ok(SendOutcome {
+        drop(cache);
+
+        let result = self.terminal_send(request);
+        let mut cache = self
+            .shared
+            .send_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match &result {
+            Ok(value) => {
+                cache.entries.insert(
+                    idempotency_key.to_owned(),
+                    SendEntry::Done(fingerprint, value.clone()),
+                );
+                cache.evict_done();
+            }
+            Err(_) => {
+                cache.entries.remove(idempotency_key);
+                if let Some(position) = cache.order.iter().position(|key| key == idempotency_key) {
+                    cache.order.remove(position);
+                }
+            }
+        }
+        drop(cache);
+        self.shared.send_cache_ready.notify_all();
+        result.map(|result| SendOutcome {
             result,
             replayed: false,
         })
@@ -552,7 +692,7 @@ impl FramedConnection {
         let result: AttachResult = serde_json::from_value(value)?;
         let queue = Arc::new(StreamQueue::new(MAX_STREAM_BUFFER_BYTES));
         self.shared
-            .register(result.channel, ChannelSink::Stream(Arc::clone(&queue)));
+            .register(result.channel, ChannelSink::Stream(Arc::clone(&queue)))?;
         Ok(Attachment::new(
             result,
             request.observe,
@@ -574,7 +714,7 @@ impl FramedConnection {
         };
         let queue = Arc::new(EventQueue::new(MAX_STREAM_BUFFER_BYTES));
         self.shared
-            .register(channel, ChannelSink::Events(Arc::clone(&queue)));
+            .register(channel, ChannelSink::Events(Arc::clone(&queue)))?;
         EventSubscription::new(
             result,
             filter.is_filtered(),
@@ -635,6 +775,15 @@ impl FramedConnection {
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
+    }
+}
+
+impl std::fmt::Debug for FramedConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FramedConnection")
+            .field("core", &self.shared.hello.core.id)
+            .field("closed", &self.shared.is_closed())
+            .finish()
     }
 }
 
@@ -915,6 +1064,59 @@ mod tests {
         );
     }
 
+    fn test_shared() -> Arc<Shared> {
+        use crate::types::CoreInfo;
+        use std::collections::BTreeSet;
+
+        Arc::new(Shared {
+            hello: Hello {
+                generation: 1,
+                version: "test".into(),
+                core: CoreInfo {
+                    id: "core".into(),
+                    name: "test".into(),
+                },
+                framed: true,
+                methods: BTreeSet::new(),
+                features: BTreeSet::new(),
+            },
+            writer: Arc::new(FrameWriter::new(Vec::new())),
+            next_id: AtomicU64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            routing: Mutex::new(Routing::default()),
+            closed: Mutex::new(None),
+            send_cache: Mutex::new(SendCache::default()),
+            send_cache_ready: Condvar::new(),
+        })
+    }
+
+    #[test]
+    fn detach_drops_orphans_so_a_reused_channel_starts_clean() {
+        let shared = test_shared();
+        shared.route(Frame::Data {
+            channel: 7,
+            payload: b"stale".to_vec(),
+        });
+        shared.detach(7);
+        let queue = Arc::new(crate::stream::StreamQueue::new(1024));
+        shared
+            .register(7, ChannelSink::Stream(Arc::clone(&queue)))
+            .unwrap();
+        assert!(matches!(
+            queue.next_event(Duration::from_millis(1)),
+            Err(HcError::Timeout { .. })
+        ));
+    }
+
+    #[test]
+    fn registration_after_connection_failure_is_typed_closed() {
+        let shared = test_shared();
+        shared.fail("boom".into());
+        let queue = Arc::new(crate::stream::StreamQueue::new(1024));
+        let error = shared.register(8, ChannelSink::Stream(queue)).unwrap_err();
+        assert!(matches!(error, HcError::Closed(reason) if reason.contains("boom")));
+    }
+
     #[test]
     fn registration_never_drops_or_reorders_frames() {
         use crate::stream::StreamQueue;
@@ -938,8 +1140,8 @@ mod tests {
             pending: Mutex::new(HashMap::new()),
             routing: Mutex::new(Routing::default()),
             closed: Mutex::new(None),
-            send_cache: Mutex::new(HashMap::new()),
-            send_cache_order: Mutex::new(VecDeque::new()),
+            send_cache: Mutex::new(SendCache::default()),
+            send_cache_ready: Condvar::new(),
         });
         let queue = Arc::new(StreamQueue::new(1024 * 1024));
         const TOTAL: usize = 60;
@@ -955,7 +1157,9 @@ mod tests {
             })
         };
         thread::yield_now();
-        shared.register(9, ChannelSink::Stream(Arc::clone(&queue)));
+        shared
+            .register(9, ChannelSink::Stream(Arc::clone(&queue)))
+            .unwrap();
         router.join().unwrap();
         for index in 0..TOTAL {
             match queue.next_event(Duration::from_millis(10)).unwrap() {

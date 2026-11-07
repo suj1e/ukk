@@ -7,7 +7,10 @@
 use crate::error::{FrameError, HcError, Result};
 use crate::types::MAX_FRAME_PAYLOAD;
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 pub const HEADER_LEN: usize = 9;
 
@@ -279,29 +282,120 @@ pub fn encode_frame(frame: &Frame) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// A writer shared by the connection and every attachment. Each frame is
-/// serialized first and written under one mutex, so interleaving is
-/// impossible even with concurrent input.
+/// How long a frame may wait for the writer thread before the caller gets a
+/// typed timeout. A peer that stops reading fills the OS pipe and then this
+/// bounded queue; it can never pin the caller in `write_all`.
+pub const WRITE_QUEUE_TIMEOUT: Duration = Duration::from_secs(5);
+const WRITE_QUEUE_CAPACITY: usize = 16;
+
+/// A writer shared by the connection and every attachment.
+///
+/// Frames are serialized before enqueueing, so concurrent senders cannot
+/// interleave headers, and one writer thread preserves frame order. The queue
+/// is bounded by count and by [`WRITE_QUEUE_TIMEOUT`]; a stalled peer turns
+/// into `HcError::Timeout` instead of a blocked worker.
 pub struct FrameWriter {
-    inner: Mutex<Box<dyn Write + Send>>,
+    sender: Mutex<Option<SyncSender<Vec<u8>>>>,
+    handle: Mutex<Option<JoinHandle<()>>>,
+    failed: Arc<Mutex<Option<String>>>,
+    timeout: Duration,
 }
 
 impl FrameWriter {
     pub fn new(writer: impl Write + Send + 'static) -> Self {
+        Self::with_timeout(writer, WRITE_QUEUE_TIMEOUT)
+    }
+
+    pub(crate) fn with_timeout(writer: impl Write + Send + 'static, timeout: Duration) -> Self {
+        let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(WRITE_QUEUE_CAPACITY);
+        let failed = Arc::new(Mutex::new(None));
+        let thread_failed = Arc::clone(&failed);
+        let handle = thread::Builder::new()
+            .name("hc-frame-writer".into())
+            .spawn(move || writer_loop(Box::new(writer), receiver, thread_failed))
+            .ok();
         Self {
-            inner: Mutex::new(Box::new(writer)),
+            sender: Mutex::new(Some(sender)),
+            handle: Mutex::new(handle),
+            failed,
+            timeout,
         }
     }
 
-    pub fn send(&self, frame: &Frame) -> Result<()> {
-        let bytes = encode_frame(frame)?;
-        let mut inner = self
-            .inner
+    fn failed(&self) -> Option<String> {
+        self.failed
             .lock()
-            .map_err(|_| HcError::Protocol("frame writer lock poisoned".into()))?;
-        inner.write_all(&bytes)?;
-        inner.flush()?;
-        Ok(())
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn send(&self, frame: &Frame) -> Result<()> {
+        if let Some(reason) = self.failed() {
+            return Err(HcError::Closed(reason));
+        }
+        let mut payload = encode_frame(frame)?;
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| HcError::Closed("frame writer is stopped".into()))?;
+        let deadline = Instant::now() + self.timeout;
+        loop {
+            match sender.try_send(payload) {
+                Ok(()) => return Ok(()),
+                Err(TrySendError::Full(returned)) => payload = returned,
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(HcError::Closed(
+                        self.failed()
+                            .unwrap_or_else(|| "frame writer stopped".into()),
+                    ))
+                }
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(HcError::Timeout {
+                    operation: "frame write".into(),
+                    seconds: self.timeout.as_secs(),
+                });
+            }
+            thread::sleep((deadline - now).min(Duration::from_millis(2)));
+        }
+    }
+}
+
+fn writer_loop(
+    mut writer: Box<dyn Write + Send>,
+    receiver: Receiver<Vec<u8>>,
+    failed: Arc<Mutex<Option<String>>>,
+) {
+    while let Ok(bytes) = receiver.recv() {
+        if let Err(error) = writer.write_all(&bytes).and_then(|()| writer.flush()) {
+            *failed.lock().unwrap_or_else(|poison| poison.into_inner()) =
+                Some(format!("frame write failed: {error}"));
+            return;
+        }
+    }
+}
+
+impl Drop for FrameWriter {
+    fn drop(&mut self) {
+        // Dropping the sender lets the writer drain queued frames and exit.
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        drop(sender);
+        if let Some(handle) = self
+            .handle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -412,6 +506,33 @@ mod tests {
             read_all(bytes),
             Err(HcError::Frame(FrameError::InvalidPayload(_)))
         ));
+    }
+
+    #[test]
+    fn stalled_peer_times_out_instead_of_blocking_the_writer() {
+        struct SlowWriter;
+        impl Write for SlowWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                thread::sleep(Duration::from_millis(30));
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let writer = FrameWriter::with_timeout(SlowWriter, Duration::from_millis(20));
+        let frame = Frame::Data {
+            channel: 1,
+            payload: vec![1; 32],
+        };
+        let mut timed_out = false;
+        for _ in 0..64 {
+            if let Err(HcError::Timeout { .. }) = writer.send(&frame) {
+                timed_out = true;
+                break;
+            }
+        }
+        assert!(timed_out, "a non-reading peer must produce a typed timeout");
     }
 
     #[test]

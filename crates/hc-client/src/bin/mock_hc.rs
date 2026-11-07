@@ -125,12 +125,17 @@ fn framed(input: &mut impl BufRead) -> io::Result<()> {
 
     let mut send_turn = 4_u64;
     let mut next_attach_channel = 3_u32;
+    let mut await_credit: Option<u32> = None;
     loop {
         let Some((channel, kind, payload)) = read_frame(input)? else {
             return Ok(());
         };
         if kind != 0 || channel != 0 {
-            if kind == 2 {
+            if kind == 1 && await_credit == Some(channel) {
+                await_credit = None;
+                write_frame(&mut out, channel, 0, b"after credit")?;
+                out.flush()?;
+            } else if kind == 2 {
                 // A viewer detached its stream: acknowledge with an empty
                 // CLOSE, exactly as the core does.
                 write_frame(&mut out, channel, 2, &[])?;
@@ -201,6 +206,24 @@ fn framed(input: &mut impl BufRead) -> io::Result<()> {
                     other => {
                         let channel = next_attach_channel;
                         next_attach_channel += 1;
+                        if other == "t-credit" {
+                            respond(
+                                &mut out,
+                                id,
+                                json!({
+                                    "channel": channel,
+                                    "terminal": terminal(
+                                        other, other, &["sleep".into(), "60".into()], "/mock"
+                                    ),
+                                    "automatic_input": true,
+                                    "resize_notifications": true
+                                }),
+                            )?;
+                            write_frame(&mut out, channel, 0, b"first paint")?;
+                            out.flush()?;
+                            await_credit = Some(channel);
+                            continue;
+                        }
                         respond(
                             &mut out,
                             id,

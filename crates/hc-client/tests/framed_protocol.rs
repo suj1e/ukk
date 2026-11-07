@@ -7,10 +7,11 @@
 
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::time::{Duration, Instant};
 use ukk_hc_client::{
-    AttachRequest, EventFilter, HcClient, HcError, InterruptRequest, RunRequest, SendRequest,
-    StreamEvent, StreamNotice, TerminalAddress, TerminalState,
+    AttachRequest, EventFilter, FramedConnection, HcClient, HcError, InterruptRequest, RunRequest,
+    SendRequest, StreamEvent, StreamNotice, TerminalAddress, TerminalState,
 };
 
 const SHORT: Duration = Duration::from_secs(3);
@@ -292,6 +293,64 @@ fn reconnection_uses_the_new_snapshot_instead_of_reporting_a_false_gap() {
         StreamNotice::Event(event) => assert_eq!(event.seq, 3),
         other => panic!("expected event after restart, got {other:?}"),
     }
+}
+
+#[test]
+fn framed_handshake_times_out_and_reaps_a_wedged_core() {
+    let started = Instant::now();
+    let error = FramedConnection::connect_with_timeout(
+        OsStr::new(env!("CARGO_BIN_EXE_mock_hc_hang")),
+        Duration::from_millis(200),
+    )
+    .expect_err("a core that never answers hello must not block");
+    assert!(matches!(error, HcError::Timeout { .. }), "{error:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "hello deadline must be bounded"
+    );
+}
+
+#[test]
+fn concurrent_send_once_calls_reach_the_core_exactly_once() {
+    let connection = connection();
+    let request = SendRequest::new(address("t7"), "same input");
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| connection.terminal_send_once("concurrent", &request));
+        let second = scope.spawn(|| connection.terminal_send_once("concurrent", &request));
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    let first = first.expect("first send");
+    let second = second.expect("second send");
+    assert_eq!(first.result.turn, 5);
+    assert_eq!(
+        second.result.turn, 5,
+        "a second call must not reach the core"
+    );
+    assert!(
+        first.replayed ^ second.replayed,
+        "exactly one caller must be a replay"
+    );
+}
+
+#[test]
+fn read_chunk_returns_credit_and_the_core_dribbles_the_next_frame() {
+    let connection = connection();
+    let attachment = connection
+        .attach(&AttachRequest {
+            terminal: address("t-credit"),
+            cols: 80,
+            rows: 24,
+            history: 0,
+            observe: false,
+            resize_notifications: false,
+            resumed: false,
+            caller: None,
+            display: None,
+        })
+        .expect("attach");
+    assert_eq!(attachment.read_chunk(SHORT).unwrap(), b"first paint");
+    assert_eq!(attachment.read_chunk(SHORT).unwrap(), b"after credit");
+    attachment.detach().unwrap();
 }
 
 #[test]

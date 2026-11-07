@@ -46,6 +46,6 @@ pub use events::{
 pub use frame::{Frame, FrameKind, FrameReader, FrameWriter, HEADER_LEN};
 pub use stream::{
     Attachment, ChannelLifecycle, EventQueue, EventSubscription, StreamClose, StreamEvent,
-    MAX_STREAM_BUFFER_BYTES, MAX_STREAM_BUFFER_FRAMES,
+    MAX_INPUT_CHUNK, MAX_STREAM_BUFFER_BYTES, MAX_STREAM_BUFFER_FRAMES,
 };
 pub use types::*;

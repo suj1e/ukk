@@ -201,7 +201,17 @@ Observed on 2026-11-08 (macOS arm64, hc 0.1.18, client code at `73f791b`):
   paint, subscribed to events, interrupted, explicitly stopped (state
   `finished`) and removed only that terminal.
 
-Result: **2 passed** in 0.10 s. PR #25 checks (test + real-hc acceptance) were
-green on macOS, Ubuntu and Windows at `73f791b`; this documentation edit is a
-later doc-only commit. Any environment where the binary is unavailable is NOT
-VERIFIED; use the runbook above and record the version/schema hash.
+```text
+running 2 tests
+test real_core_launch_attach_reconnect_interrupt_stop_remove ... ok
+test real_core_reports_the_expected_schema_identity ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+This typed-client real-daemon run is macOS arm64 only. The CI `acceptance`
+jobs exercise the **Host plain path** against a checksum-pinned hc 0.1.18 on
+macOS, Ubuntu and Windows; the typed framed client itself is mock-tested on
+all three. Mock and acceptance checks were green at `73f791b` before the later
+framing/backpressure fixes; rerun both jobs on the final head. Any environment
+where the binary is unavailable is NOT VERIFIED; use the runbook above and
+record the version/schema hash.
