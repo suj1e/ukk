@@ -190,11 +190,9 @@ fn dispatch_with(store: &mut Store, method: &str, params: &Value) -> Result<Valu
             if current.revision != expected {
                 return Err(StoreError::Conflict.into());
             }
-            let next = current.root.move_tab(
-                source_group_id,
-                tab_id,
-                destination_pane_id,
-            )?;
+            let next = current
+                .root
+                .move_tab(source_group_id, tab_id, destination_pane_id)?;
             let layout = store.set_layout(session_id, expected, next)?;
             serde_json::to_value(layout).map_err(|error| RpcError {
                 code: -32032,
@@ -379,16 +377,20 @@ mod tests {
         let mut store = Store::open_memory().unwrap();
         let space = store.create_space("ukk", "/repo").unwrap();
         let session = store.create_session(&space.id, "tabs").unwrap();
-        let agent = store.bind_agent(
-            &session.id, "core", "t1", "codex", None
-        ).unwrap();
+        let agent = store
+            .bind_agent(&session.id, "core", "t1", "codex", None)
+            .unwrap();
         let layout = store.get_layout(&session.id).unwrap();
-        let source = layout.root
+        let source = layout
+            .root
             .add_tab(
                 layout.root.id(),
                 "Agent".into(),
-                PaneContent::Agent { agent_run_id: agent.id.clone() },
-            ).unwrap();
+                PaneContent::Agent {
+                    agent_run_id: agent.id.clone(),
+                },
+            )
+            .unwrap();
         let source_id = source.id().to_owned();
         let tab_id = source.leaves()[1].0.to_owned();
         let tree = source
