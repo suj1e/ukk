@@ -18,7 +18,8 @@
 apps/desktop/src/workspace/
   mod.rs            Workspace state + per-drag transient preview identity
   resize.rs         ratio math, drag preview, completion and pure unit tests
-  panes.rs          splitter handle, cursor, event handlers and recursive rendering
+  panes.rs          leaf Pane contents and recursive dispatch
+  splits.rs         draggable separator, split layout and native drag/drop bindings
   actions.rs        local Host mutation, never Agent lifecycle management
   sidebar.rs        Session/Agent navigation cancels a transient drag
 ```
@@ -32,7 +33,7 @@ Only layout presentation changes: `Pane` is not a terminal, AgentRun or executio
 - [x] Source: prevent cross-Split drag interference and clear previews on navigation.
 - [x] Pure ratio tests: clamp and reject invalid geometry.
 - [ ] Root `cargo fmt --check`, `cargo test --workspace`, strict Clippy on macOS / Windows / Linux.
-- [ ] GPUI native `cargo check` on all three desktop operating systems.
+- [ ] GPUI native `cargo check`, **Desktop unit tests and strict Clippy** on all three desktop operating systems.
 - [ ] Actual GUI smoke on macOS/Windows/Linux: drag nested horizontal and vertical splits, release inside/outside bounds, restart Desktop, verify saved ratio and no Agent stop.
 - [ ] Check Windows/Linux mouse cursors, focus behavior, keyboard resizing and accessibility labels.
 
