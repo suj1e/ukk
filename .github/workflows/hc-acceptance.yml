@@ -1,0 +1,57 @@
+name: Real herdr-core acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/install_hc.py'
+      - 'scripts/hc_acceptance.py'
+      - '.github/workflows/hc-acceptance.yml'
+      - 'crates/hc-client/**'
+      - 'crates/host/**'
+  pull_request:
+    paths:
+      - 'scripts/install_hc.py'
+      - 'scripts/hc_acceptance.py'
+      - '.github/workflows/hc-acceptance.yml'
+      - 'crates/hc-client/**'
+      - 'crates/host/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned, checksum-verified hc (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          dir=$(python3 scripts/install_hc.py)
+          echo "$dir" >> "$GITHUB_PATH"
+      - name: Install pinned, checksum-verified hc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = python scripts/install_hc.py
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build Host
+        run: cargo build -p ukk-host
+      - name: Real hc acceptance (Unix)
+        if: runner.os != 'Windows'
+        run: python3 scripts/hc_acceptance.py --host target/debug/ukk-host
+      - name: Real hc acceptance (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python scripts/hc_acceptance.py --host target/debug/ukk-host.exe
