@@ -173,9 +173,7 @@ impl Workspace {
         .detach();
     }
 
-    /// All native editing actions run off the UI thread and resolve to a
-    /// fresh authoritative SQLite snapshot. No direct SQLite access in GPUI.
-
+    /// Refresh authoritative Host and SQLite snapshots off the UI thread.
     pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.loading {
             return;
