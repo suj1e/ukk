@@ -6,6 +6,8 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use ukk_host_client::HostClient;
+use ukk_store::Store;
+use ukk_domain::new_id;
 
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
@@ -19,9 +21,17 @@ impl Drop for ChildGuard {
 fn windows_host_pipe_allows_read_only_local_snapshot() {
     // On a clean CI runner there is no preexisting ukk-host process.
     // The first-instance flag ensures an existing pipe cannot be hijacked.
+    let root = std::env::temp_dir().join(format!("ukk-win-ipc-{}", new_id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let db = root.join("workspace.sqlite3");
+    let mut store = Store::open(&db).unwrap();
+    let space = store.create_space("Win Space", "C:/src/ukk").unwrap();
+    let session = store.create_session(&space.id, "Windows Session").unwrap();
+    drop(store);
     let child = Command::new(env!("CARGO_BIN_EXE_ukk-host"))
         .arg("serve")
         .env("UKK_HC_BIN", "__ukk_hc_not_installed_for_win_test__")
+        .env("UKK_DB_PATH", &db)
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
         .spawn()
@@ -54,6 +64,9 @@ fn windows_host_pipe_allows_read_only_local_snapshot() {
     let state = client.host_snapshot().expect("read initial Host snapshot");
     assert!(!state.core_connected, "mock hc is deliberately unavailable");
     assert_eq!(state.snapshot.terminals.len(), 0);
+    let workspace = client.workspace_snapshot().unwrap();
+    assert_eq!(workspace.spaces[0].id, space.id);
+    assert_eq!(workspace.sessions[0].id, session.id);
 
     // Epoch mismatch must return immediately, rather than sleeping 10 sec.
     let recovered = client
@@ -61,4 +74,6 @@ fn windows_host_pipe_allows_read_only_local_snapshot() {
         .expect("read state via host.wait");
     assert_eq!(recovered.host_epoch, state.host_epoch);
     assert_eq!(recovered.snapshot.terminals.len(), 0);
+    drop(guard);
+    std::fs::remove_dir_all(root).unwrap();
 }
