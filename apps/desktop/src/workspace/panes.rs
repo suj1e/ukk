@@ -115,6 +115,16 @@ impl Workspace {
                                     .gap_1()
                                     .child(self.pane_button(
                                         cx,
+                                        format!("{id}-new-tab"),
+                                        "+ Tab",
+                                        PaneAction::TabAdd {
+                                            pane_id: id.clone(),
+                                            title: "Activity".into(),
+                                            content: PaneContent::Activity,
+                                        },
+                                    ))
+                                    .child(self.pane_button(
+                                        cx,
                                         format!("{id}-split-right"),
                                         "Split →",
                                         PaneAction::Split {
@@ -159,6 +169,7 @@ impl Workspace {
                     )
                     .into_any_element()
             }
+            PaneNode::Tabs { id, tabs } => self.tab_group(id, tabs, cx),
             PaneNode::Split {
                 id,
                 axis,

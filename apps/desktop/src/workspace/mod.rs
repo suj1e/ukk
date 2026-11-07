@@ -4,8 +4,9 @@
 use crate::theme::*;
 use gpui::{div, prelude::*, px, rgb, Context, Render, Window};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::time::Duration;
-use ukk_domain::{new_id, DomainSnapshot, PaneContent, PaneNode, Session, SplitAxis};
+use ukk_domain::{new_id, DomainSnapshot, PaneContent, PaneNode, PaneTab, Session, SplitAxis};
 use ukk_host_client::{HostClient, HostSnapshot, LiveHostState, Terminal, WorkspaceUpdate};
 
 mod actions;
@@ -16,6 +17,7 @@ mod resize;
 mod sidebar;
 mod splits;
 mod state;
+mod tabs;
 mod toolbar;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -50,6 +52,20 @@ enum PaneAction {
         split_id: String,
         ratio: f32,
     },
+    TabAdd {
+        pane_id: String,
+        title: String,
+        content: PaneContent,
+    },
+    TabClose {
+        group_id: String,
+        tab_id: String,
+    },
+    TabReorder {
+        group_id: String,
+        tab_id: String,
+        direction: i32,
+    },
 }
 
 pub(crate) struct Workspace {
@@ -63,6 +79,8 @@ pub(crate) struct Workspace {
     mutation_busy: bool,
     mutation_error: Option<String>,
     split_drag_preview: Option<SplitDragPreview>,
+    /// Per-window active tabs; membership/order are shared via SQLite.
+    tab_focus: HashMap<(String, String), String>,
     online: bool,
     message: Option<String>,
     host_epoch: String,
@@ -85,6 +103,7 @@ impl Workspace {
             mutation_busy: false,
             mutation_error: None,
             split_drag_preview: None,
+            tab_focus: HashMap::new(),
             online: false,
             message: None,
             host_epoch: String::new(),

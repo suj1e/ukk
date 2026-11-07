@@ -234,3 +234,75 @@ fn schema_v1_upgrades_without_losing_sessions() {
     drop(reopened);
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn tab_order_survives_database_reopen_without_shared_active_tab() {
+    let dir = env::temp_dir().join(format!("ukk-tabs-{}", new_id()));
+    let path = dir.join("workspace.db");
+    let session_id;
+    let expected_order;
+    {
+        let mut store = Store::open(&path).unwrap();
+        let space = store.create_space("tabs", "/repo").unwrap();
+        let session = store.create_session(&space.id, "Session tabs").unwrap();
+        session_id = session.id;
+        let original = store.get_layout(&session_id).unwrap();
+        let tabbed = original
+            .root
+            .add_tab(original.root.id(), "Files".into(), PaneContent::Files)
+            .unwrap();
+        let group_id = tabbed.id().to_owned();
+        let file_tab_id = tabbed.leaves()[1].0.to_owned();
+        let reordered = tabbed.reorder_tab(&group_id, &file_tab_id, -1).unwrap();
+        expected_order = reordered
+            .leaves()
+            .iter()
+            .map(|(id, _)| (*id).to_owned())
+            .collect::<Vec<_>>();
+        store.set_layout(&session_id, 0, reordered).unwrap();
+    }
+    {
+        let store = Store::open(&path).unwrap();
+        let saved = store.get_layout(&session_id).unwrap();
+        assert_eq!(saved.revision, 1);
+        let actual = saved
+            .root
+            .leaves()
+            .iter()
+            .map(|(id, _)| (*id).to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected_order);
+        let encoded = serde_json::to_value(saved.root).unwrap();
+        assert!(
+            encoded["active_tab"].is_null(),
+            "active focus is client-local"
+        );
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn tab_agent_binding_checks_every_hidden_tab() {
+    let mut store = Store::open_memory().unwrap();
+    let space = store.create_space("ukk", "/repo").unwrap();
+    let one = store.create_session(&space.id, "one").unwrap();
+    let two = store.create_session(&space.id, "two").unwrap();
+    let agent = store
+        .bind_agent(&one.id, "core", "t1", "codex", None)
+        .unwrap();
+    let initial = store.get_layout(&two.id).unwrap();
+    let illegal = initial
+        .root
+        .add_tab(
+            initial.root.id(),
+            "Other session agent".into(),
+            PaneContent::Agent {
+                agent_run_id: agent.id,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        store.set_layout(&two.id, initial.revision, illegal),
+        Err(StoreError::Invalid(_))
+    ));
+}

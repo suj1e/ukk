@@ -125,6 +125,35 @@ impl Workspace {
                     "ratio":ratio,"expected_revision":revision
                 }),
             ),
+            PaneAction::TabAdd {
+                pane_id,
+                title,
+                content,
+            } => (
+                "workspace.tab.add",
+                json!({
+                    "session_id":session_id,"pane_id":pane_id,
+                    "title":title,"content":content,"expected_revision":revision
+                }),
+            ),
+            PaneAction::TabClose { group_id, tab_id } => (
+                "workspace.tab.close",
+                json!({
+                    "session_id":session_id,"group_id":group_id,
+                    "tab_id":tab_id,"expected_revision":revision
+                }),
+            ),
+            PaneAction::TabReorder {
+                group_id,
+                tab_id,
+                direction,
+            } => (
+                "workspace.tab.reorder",
+                json!({
+                    "session_id":session_id,"group_id":group_id,
+                    "tab_id":tab_id,"direction":direction,"expected_revision":revision
+                }),
+            ),
         };
         self.mutate(method, params, false, cx);
     }

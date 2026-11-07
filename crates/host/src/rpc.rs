@@ -20,7 +20,10 @@ pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> 
         method @ ("workspace.session.create"
         | "workspace.pane.split"
         | "workspace.pane.close"
-        | "workspace.pane.resize") => {
+        | "workspace.pane.resize"
+        | "workspace.tab.add"
+        | "workspace.tab.close"
+        | "workspace.tab.reorder") => {
             let params = req.get("params").unwrap_or(&Value::Null);
             if !auth.authorized(params.get("auth").and_then(Value::as_str)) {
                 json!({"jsonrpc":"2.0","id":id,

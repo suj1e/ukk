@@ -141,6 +141,66 @@ fn dispatch_with(store: &mut Store, method: &str, params: &Value) -> Result<Valu
                 message: e.to_string(),
             })
         }
+        "workspace.tab.add" => {
+            let session_id = str_arg(params, "session_id")?;
+            let pane_id = str_arg(params, "pane_id")?;
+            let title = str_arg(params, "title")?.to_owned();
+            let expected = revision_arg(params)?;
+            let content: PaneContent = serde_json::from_value(
+                params
+                    .get("content")
+                    .cloned()
+                    .ok_or_else(|| RpcError::invalid("content"))?,
+            )
+            .map_err(|_| RpcError::invalid("content"))?;
+            let current = store.get_layout(session_id)?;
+            if current.revision != expected {
+                return Err(StoreError::Conflict.into());
+            }
+            let next = current.root.add_tab(pane_id, title, content)?;
+            let layout = store.set_layout(session_id, expected, next)?;
+            serde_json::to_value(layout).map_err(|error| RpcError {
+                code: -32032,
+                message: error.to_string(),
+            })
+        }
+        "workspace.tab.close" => {
+            let session_id = str_arg(params, "session_id")?;
+            let group_id = str_arg(params, "group_id")?;
+            let tab_id = str_arg(params, "tab_id")?;
+            let expected = revision_arg(params)?;
+            let current = store.get_layout(session_id)?;
+            if current.revision != expected {
+                return Err(StoreError::Conflict.into());
+            }
+            let next = current.root.close_tab(group_id, tab_id)?;
+            let layout = store.set_layout(session_id, expected, next)?;
+            serde_json::to_value(layout).map_err(|error| RpcError {
+                code: -32032,
+                message: error.to_string(),
+            })
+        }
+        "workspace.tab.reorder" => {
+            let session_id = str_arg(params, "session_id")?;
+            let group_id = str_arg(params, "group_id")?;
+            let tab_id = str_arg(params, "tab_id")?;
+            let expected = revision_arg(params)?;
+            let direction = params
+                .get("direction")
+                .and_then(Value::as_i64)
+                .filter(|direction| matches!(direction, -1 | 1))
+                .ok_or_else(|| RpcError::invalid("direction"))? as i32;
+            let current = store.get_layout(session_id)?;
+            if current.revision != expected {
+                return Err(StoreError::Conflict.into());
+            }
+            let next = current.root.reorder_tab(group_id, tab_id, direction)?;
+            let layout = store.set_layout(session_id, expected, next)?;
+            serde_json::to_value(layout).map_err(|error| RpcError {
+                code: -32032,
+                message: error.to_string(),
+            })
+        }
         _ => Err(RpcError {
             code: -32601,
             message: "workspace method not found".into(),
@@ -233,6 +293,64 @@ mod tests {
         let mut store = Store::open_memory().unwrap();
         let error = dispatch_with(&mut store, "terminal.kill", &json!({})).unwrap_err();
         assert_eq!(error.code, -32601);
+    }
+
+    #[test]
+    fn tab_mutations_are_revisioned_and_never_touch_agent_runtime() {
+        let mut store = Store::open_memory().unwrap();
+        let space = store.create_space("ukk", "/repo").unwrap();
+        let session = store.create_session(&space.id, "Tabs").unwrap();
+        let original = store.get_layout(&session.id).unwrap();
+        let leaf = original.root.id().to_owned();
+
+        let added = dispatch_with(
+            &mut store,
+            "workspace.tab.add",
+            &json!({
+                "session_id":session.id, "pane_id":leaf,
+                "title":"Files", "content":{"type":"files"}, "expected_revision":0
+            }),
+        )
+        .unwrap();
+        assert_eq!(added["revision"], 1);
+        let group = added["root"]["id"].as_str().unwrap().to_owned();
+        let last_tab = added["root"]["tabs"][1]["id"].as_str().unwrap().to_owned();
+
+        let stale = dispatch_with(
+            &mut store,
+            "workspace.tab.close",
+            &json!({
+                "session_id":session.id,"group_id":group,"tab_id":last_tab,
+                "expected_revision":0
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(stale.code, -32031);
+
+        let reordered = dispatch_with(
+            &mut store,
+            "workspace.tab.reorder",
+            &json!({
+                "session_id":session.id,"group_id":group,"tab_id":last_tab,
+                "direction":-1,"expected_revision":1
+            }),
+        )
+        .unwrap();
+        assert_eq!(reordered["revision"], 2);
+        assert_eq!(reordered["root"]["tabs"][0]["id"], last_tab);
+
+        let closed = dispatch_with(
+            &mut store,
+            "workspace.tab.close",
+            &json!({
+                "session_id":session.id,"group_id":group,"tab_id":last_tab,
+                "expected_revision":2
+            }),
+        )
+        .unwrap();
+        assert_eq!(closed["revision"], 3);
+        assert_eq!(closed["root"]["kind"], "leaf");
+        assert!(store.snapshot().unwrap().agent_runs.is_empty());
     }
 
     #[test]

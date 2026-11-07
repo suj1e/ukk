@@ -22,12 +22,35 @@ pub enum SplitAxis {
     Vertical,
 }
 
+/// A durable surface entry; selecting it is client-local UI state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneTab {
+    pub id: String,
+    pub title: String,
+    pub content: PaneContent,
+}
+
+impl PaneTab {
+    pub fn new(title: String, content: PaneContent) -> Self {
+        Self {
+            id: new_id(),
+            title,
+            content,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PaneNode {
     Leaf {
         id: String,
         content: PaneContent,
+    },
+    Tabs {
+        id: String,
+        /// Ordered tab entries. Active/focused tab intentionally not stored.
+        tabs: Vec<PaneTab>,
     },
     Split {
         id: String,
@@ -49,7 +72,7 @@ impl PaneNode {
 
     pub fn id(&self) -> &str {
         match self {
-            Self::Leaf { id, .. } | Self::Split { id, .. } => id,
+            Self::Leaf { id, .. } | Self::Tabs { id, .. } | Self::Split { id, .. } => id,
         }
     }
 
@@ -57,6 +80,11 @@ impl PaneNode {
         fn collect<'a>(node: &'a PaneNode, target: &mut Vec<(&'a str, &'a PaneContent)>) {
             match node {
                 PaneNode::Leaf { id, content } => target.push((id, content)),
+                PaneNode::Tabs { tabs, .. } => {
+                    for tab in tabs {
+                        target.push((&tab.id, &tab.content));
+                    }
+                }
                 PaneNode::Split { first, second, .. } => {
                     collect(first, target);
                     collect(second, target);
@@ -69,6 +97,16 @@ impl PaneNode {
     }
 
     pub fn validate(&self) -> Result<(), LayoutError> {
+        fn validate_content(content: &PaneContent) -> Result<(), LayoutError> {
+            if let PaneContent::Agent { agent_run_id } | PaneContent::Terminal { agent_run_id } =
+                content
+            {
+                if agent_run_id.trim().is_empty() {
+                    return Err(LayoutError::EmptyAgentId);
+                }
+            }
+            Ok(())
+        }
         fn visit(
             node: &PaneNode,
             depth: usize,
@@ -84,14 +122,26 @@ impl PaneNode {
             match node {
                 PaneNode::Leaf { content, .. } => {
                     *leaves += 1;
+                    validate_content(content)?;
                     if *leaves > 16 {
                         return Err(LayoutError::TooManyPanes);
                     }
-                    if let PaneContent::Agent { agent_run_id }
-                    | PaneContent::Terminal { agent_run_id } = content
-                    {
-                        if agent_run_id.trim().is_empty() {
-                            return Err(LayoutError::EmptyAgentId);
+                }
+                PaneNode::Tabs { tabs, .. } => {
+                    if tabs.is_empty() {
+                        return Err(LayoutError::EmptyTabs);
+                    }
+                    for tab in tabs {
+                        if tab.title.trim().is_empty() || tab.title.chars().count() > 64 {
+                            return Err(LayoutError::InvalidTabTitle);
+                        }
+                        if tab.id.trim().is_empty() || !ids.insert(tab.id.clone()) {
+                            return Err(LayoutError::DuplicateOrEmptyId);
+                        }
+                        validate_content(&tab.content)?;
+                        *leaves += 1;
+                        if *leaves > 16 {
+                            return Err(LayoutError::TooManyPanes);
                         }
                     }
                 }
@@ -135,14 +185,16 @@ impl PaneNode {
             content: &PaneContent,
         ) -> Option<PaneNode> {
             match node {
-                PaneNode::Leaf { id, .. } if id == target => Some(PaneNode::Split {
-                    id: new_id(),
-                    axis,
-                    ratio,
-                    first: Box::new(node.clone()),
-                    second: Box::new(PaneNode::leaf(content.clone())),
-                }),
-                PaneNode::Leaf { .. } => None,
+                PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target => {
+                    Some(PaneNode::Split {
+                        id: new_id(),
+                        axis,
+                        ratio,
+                        first: Box::new(node.clone()),
+                        second: Box::new(PaneNode::leaf(content.clone())),
+                    })
+                }
+                PaneNode::Leaf { .. } | PaneNode::Tabs { .. } => None,
                 PaneNode::Split {
                     id,
                     axis: old_axis,
@@ -183,7 +235,7 @@ impl PaneNode {
         }
         fn replace(node: &PaneNode, target: &str, ratio: f32) -> Option<PaneNode> {
             match node {
-                PaneNode::Leaf { .. } => None,
+                PaneNode::Leaf { .. } | PaneNode::Tabs { .. } => None,
                 PaneNode::Split {
                     id,
                     axis,
@@ -228,7 +280,7 @@ impl PaneNode {
     pub fn close_leaf(&self, target: &str) -> Result<Self, LayoutError> {
         fn remove(node: &PaneNode, target: &str) -> Option<PaneNode> {
             match node {
-                PaneNode::Leaf { .. } => None,
+                PaneNode::Leaf { .. } | PaneNode::Tabs { .. } => None,
                 PaneNode::Split {
                     id,
                     axis,
@@ -236,10 +288,12 @@ impl PaneNode {
                     first,
                     second,
                 } => {
-                    if matches!(&**first, PaneNode::Leaf { id, .. } if id == target) {
+                    if matches!(&**first, PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target)
+                    {
                         return Some((**second).clone());
                     }
-                    if matches!(&**second, PaneNode::Leaf { id, .. } if id == target) {
+                    if matches!(&**second, PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target)
+                    {
                         return Some((**first).clone());
                     }
                     if let Some(updated) = remove(first, target) {
@@ -261,7 +315,7 @@ impl PaneNode {
                 }
             }
         }
-        if matches!(self, PaneNode::Leaf { id, .. } if id == target) {
+        if matches!(self, PaneNode::Leaf { id, .. } | PaneNode::Tabs { id, .. } if id == target) {
             return Err(LayoutError::LastPane);
         }
         let updated = remove(self, target).ok_or(LayoutError::PaneNotFound)?;
@@ -296,6 +350,11 @@ pub enum LayoutError {
     EmptyAgentId,
     PaneNotFound,
     LastPane,
+    EmptyTabs,
+    InvalidTabTitle,
+    NotTabGroup,
+    TabNotFound,
+    InvalidTabOrder,
 }
 
 impl fmt::Display for LayoutError {
