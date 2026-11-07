@@ -8,7 +8,8 @@ use gpui::{
     div, prelude::*, px, rgb, size, App, Bounds, Context, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
-use ukk_host_client::{HostClient, HostSnapshot, Terminal};
+use std::time::Duration;
+use ukk_host_client::{HostClient, HostSnapshot, LiveHostState, Terminal};
 
 const INK: u32 = 0x242730;
 const MUTED: u32 = 0x858b97;
@@ -31,6 +32,8 @@ struct Workspace {
     loading: bool,
     online: bool,
     message: Option<String>,
+    host_epoch: String,
+    host_revision: u64,
 }
 
 impl Workspace {
@@ -42,8 +45,10 @@ impl Workspace {
             loading: false,
             online: false,
             message: None,
+            host_epoch: String::new(),
+            host_revision: 0,
         };
-        view.refresh(cx);
+        view.watch_updates(cx);
         view
     }
 
@@ -52,8 +57,74 @@ impl Workspace {
         self.snapshot.terminals.iter().find(|terminal| terminal.address == id)
     }
 
-    /// The socket read is performed on GPUI's background executor, not
-    /// inside render() or the foreground input handler.
+    /// Update the UI from an authoritative Host view. The Host reports
+    /// core connectivity separately from the existence of its local socket.
+    fn apply_host_state(&mut self, live: LiveHostState) {
+        if live.host_epoch == self.host_epoch && live.revision < self.host_revision {
+            return; // avoid stale concurrent refresh replies
+        }
+        self.host_epoch = live.host_epoch;
+        self.host_revision = live.revision;
+        self.online = live.core_connected;
+        self.message = live.message;
+        if !self
+            .selected
+            .as_ref()
+            .is_some_and(|address| live.snapshot.terminals.iter().any(|t| &t.address == address))
+        {
+            self.selected = live.snapshot.terminals.first().map(|t| t.address.clone());
+        }
+        self.snapshot = live.snapshot;
+    }
+
+    /// A long-poll task stays alive only as long as this GPUI entity exists.
+    /// Neither rendering nor click handlers ever block on herdr-core.
+    fn watch_updates(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut epoch = String::new();
+            let mut revision = 0_u64;
+            loop {
+                let last_epoch = epoch.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        HostClient::from_env().wait_for_change(&last_epoch, revision)
+                    })
+                    .await;
+                match result {
+                    Ok(live) => {
+                        epoch = live.host_epoch.clone();
+                        revision = live.revision;
+                        if this
+                            .update(cx, |view, cx| {
+                                view.apply_host_state(live);
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        if this
+                            .update(cx, |view, cx| {
+                                view.online = false;
+                                view.message = Some(error.to_string());
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                        cx.background_executor().timer(Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// A manual fallback for inspecting Host connectivity and state.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.loading {
             return;
@@ -64,27 +135,16 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { HostClient::from_env().list_terminals() })
+                .spawn(async move { HostClient::from_env().host_snapshot() })
                 .await;
             this.update(cx, |view, cx| {
                 view.loading = false;
                 match result {
-                    Ok(snapshot) => {
-                        view.online = true;
-                        view.message = None;
-                        if !view
-                            .selected
-                            .as_ref()
-                            .is_some_and(|selected| snapshot.terminals.iter().any(|t| &t.address == selected))
-                        {
-                            view.selected = snapshot.terminals.first().map(|t| t.address.clone());
-                        }
-                        view.snapshot = snapshot;
-                    }
+                    Ok(live) => view.apply_host_state(live),
                     Err(error) => {
                         view.online = false;
                         view.message = Some(error.to_string());
-                        // Keep last known metadata but visibly label it stale.
+                        // Keep last known metadata, but visibly label it stale.
                     }
                 }
                 cx.notify();
@@ -319,9 +379,9 @@ impl Workspace {
                     .text_xs()
                     .text_color(rgb(MUTED))
                     .child(if self.online {
-                        "●  Local Host connected"
+                        "●  herdr-core connected"
                     } else {
-                        "○  Host offline — start ukk-host"
+                        "○  Runtime offline / reconnecting"
                     }),
             )
     }
@@ -573,7 +633,7 @@ impl Workspace {
                 div()
                     .text_sm()
                     .text_color(rgb(if self.online { 0x408463 } else { 0xb06e55 }))
-                    .child(if self.online { "Host connected" } else { "Host unavailable" }),
+                    .child(if self.online { "herdr-core connected" } else { "Runtime unavailable" }),
             )
             .when_some(message, |view, error| {
                 view.child(
