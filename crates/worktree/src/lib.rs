@@ -239,6 +239,22 @@ impl Worktree {
             &["--verify".into(), "--quiet".into(), "HEAD^{commit}".into()],
         )?;
         if probe.exit_code != Some(0) {
+            // An unborn HEAD exits non-zero without any stderr. Any other
+            // failure (corruption, invalid HEAD, permission) is reported
+            // instead of being misread as an empty history.
+            let stderr = String::from_utf8_lossy(&probe.stderr);
+            if probe.stderr_truncated || !stderr.trim().is_empty() {
+                let lower = stderr.to_ascii_lowercase();
+                let unborn = lower.contains("needed a single revision")
+                    || lower.contains("needs a single revision")
+                    || lower.contains("unknown revision")
+                    || lower.contains("bad revision")
+                    || lower.contains("ambiguous argument")
+                    || lower.contains("does not have any commits yet");
+                if !unborn {
+                    return Err(self.classify_failure("rev-parse", &probe));
+                }
+            }
             return Ok(Activity::empty());
         }
         let requested = self.limits.max_commits.saturating_add(1);
