@@ -9,7 +9,8 @@ members = [
     "crates/agent-adapters",
     "crates/plugin-api",
     "crates/plugin-host",
+    "crates/protocol",
 ]
-default-members = ["crates/hc-client", "crates/host", "crates/host-client", "crates/domain", "crates/store", "crates/plugin-api", "crates/plugin-host"]
+default-members = ["crates/hc-client", "crates/host", "crates/host-client", "crates/domain", "crates/store", "crates/plugin-api", "crates/plugin-host", "crates/protocol"]
 # GPUI app is a standalone pinned workspace until its native build is validated.
 exclude = ["apps/desktop"]
