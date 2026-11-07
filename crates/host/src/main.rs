@@ -191,14 +191,17 @@ fn serve_windows() -> AppResult<()> {
     broker.start();
     println!("ukk Host listening on local Named Pipe {name}");
     println!("Read-only methods: host.ping, terminal.list, host.snapshot, host.wait");
-    let mut first = true;
+    let mut pending = windows_pipe::create_server_pipe(&name, true)?;
     loop {
-        let pipe = windows_pipe::create_server_pipe(&name, first)?;
-        first = false;
-        windows_pipe::accept_client(&pipe)?;
+        windows_pipe::accept_client(&pending)?;
+        // Keep a replacement server instance open *before* handing off the
+        // connected handle. Otherwise the pipe namespace can briefly vanish
+        // between connections and become available for name squatting.
+        let replacement = windows_pipe::create_server_pipe(&name, false)?;
+        let connected = std::mem::replace(&mut pending, replacement);
         let broker = Arc::clone(&broker);
         std::thread::spawn(move || {
-            if let Err(error) = serve_one(pipe, broker) {
+            if let Err(error) = serve_one(connected, broker) {
                 eprintln!("ukk Host named-pipe client error: {error}");
             }
         });
