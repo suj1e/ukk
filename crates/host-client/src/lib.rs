@@ -5,6 +5,7 @@
 //! A connection is opened for every request and is bounded by time and size.
 
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -98,6 +99,54 @@ pub struct HostSnapshot {
 }
 
 impl HostSnapshot {
+    /// Present terminals as a dynamic tree, using hc's actual parent field.
+    ///
+    /// Orphan and cyclic references remain visible as top-level entries.
+    /// Iterative traversal avoids recursive stack growth from malformed data.
+    pub fn hierarchy(&self) -> Vec<(&Terminal, usize)> {
+        let mut by_parent: HashMap<&str, Vec<usize>> = HashMap::new();
+        let known: HashSet<&str> = self
+            .terminals
+            .iter()
+            .map(|terminal| terminal.address.as_str())
+            .collect();
+        for (index, terminal) in self.terminals.iter().enumerate() {
+            if let Some(parent) = terminal.parent.as_deref() {
+                by_parent.entry(parent).or_default().push(index);
+            }
+        }
+        let roots = self
+            .terminals
+            .iter()
+            .enumerate()
+            .filter(|(_, terminal)| terminal.parent.as_deref().is_none_or(|p| !known.contains(p)))
+            .map(|(index, _)| index);
+        let seeds = roots.chain(0..self.terminals.len());
+        let mut seen = HashSet::new();
+        let mut output = Vec::with_capacity(self.terminals.len());
+        for seed in seeds {
+            if seen.contains(&seed) {
+                continue;
+            }
+            let mut stack = vec![(seed, 0_usize)];
+            while let Some((index, depth)) = stack.pop() {
+                if !seen.insert(index) {
+                    continue;
+                }
+                let current = &self.terminals[index];
+                output.push((current, depth));
+                if let Some(children) = by_parent.get(current.address.as_str()) {
+                    for &child in children.iter().rev() {
+                        if !seen.contains(&child) {
+                            stack.push((child, depth.saturating_add(1)));
+                        }
+                    }
+                }
+            }
+        }
+        output
+    }
+
     pub fn from_result(result: &Value) -> Result<Self, HostError> {
         let rows = result
             .get("terminals")
@@ -302,6 +351,28 @@ mod tests {
         let mut result = valid_result();
         result["terminals"][0].as_object_mut().unwrap().remove("address");
         assert!(HostSnapshot::from_result(&result).is_err());
+    }
+
+    #[test]
+    fn groups_actual_children_and_keeps_orphans_visible() {
+        let mut result = valid_result();
+        // Reverse order: the child is listed before the parent by hc.
+        result["terminals"].as_array_mut().unwrap().reverse();
+        let parsed = HostSnapshot::from_result(&result).unwrap();
+        let hierarchy = parsed.hierarchy();
+        assert_eq!(hierarchy[0].0.address, "t3");
+        assert_eq!(hierarchy[0].1, 0);
+        assert_eq!(hierarchy[1].0.address, "t4");
+        assert_eq!(hierarchy[1].1, 1);
+    }
+
+    #[test]
+    fn cycle_does_not_drop_any_terminal() {
+        let mut result = valid_result();
+        result["terminals"][0]["parent"] = json!("t4");
+        let parsed = HostSnapshot::from_result(&result).unwrap();
+        let hierarchy = parsed.hierarchy();
+        assert_eq!(hierarchy.len(), 2);
     }
 
     #[test]
