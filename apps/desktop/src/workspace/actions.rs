@@ -22,7 +22,7 @@ impl Workspace {
                     let client = HostClient::from_env();
                     let result = client.local_workspace_mutation(method, params);
                     let fresh = if result.is_ok() {
-                        Some(client.workspace_snapshot())
+                        Some(client.workspace_state())
                     } else {
                         None
                     };
@@ -38,8 +38,8 @@ impl Workspace {
                                 value.get("id").and_then(Value::as_str).map(str::to_owned);
                             view.selected = None;
                         }
-                        if let Some(Ok(domain)) = fresh {
-                            view.domain = domain;
+                        if let Some(Ok(update)) = fresh {
+                            view.apply_workspace_update(update);
                         } else {
                             view.mutation_error = Some(
                                 "Change was accepted, but workspace refresh failed; use Refresh."
