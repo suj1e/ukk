@@ -69,6 +69,54 @@ There is **no TCP listener and no TCP fallback**.
 - Credentials, tokens and Agent content must never be logged. Diagnostics may
   show endpoint paths, modes and uids, which are not secrets.
 
+## Protocol trust boundaries (implemented, S1)
+
+`crates/protocol` now implements and tests the remote authorization and
+synchronization contract. Host socket/relay wiring and pairing cryptography are
+separate follow-ups; this section describes the controls that exist in source
+and are covered by contract tests today.
+
+| Plane | Authentication | Authority |
+| --- | --- | --- |
+| Local IPC | OS-verified peer user id; transport must supply it | local OS owner; no device grant required, but still typed validation and replay classification |
+| Remote (WAN) | registered `(device_id, public-key fingerprint, key generation)` plus explicit scoped grants | only the granted scopes; every command re-checks live grants and leases |
+
+An envelope carries no plane, device id or permission bit. Those are fixed by
+the authenticated handshake, so a captured envelope cannot be replayed into a
+different trust domain. A device claim on a local binding is rejected, a local
+hello on a remote binding is rejected, and an idempotency key first used on one
+plane is rejected on the other (`cross_plane`). Idempotency records are also
+bound to the authenticated principal, so one device cannot claim another
+device's retry record or learn its result.
+
+### Enforced invariants
+
+* **Live authorization.** Cached handshake scopes are not authoritative.
+  Revocation, key rotation and grant expiry are re-read on every command and
+  subscription. Revocation also withdraws that device's controller leases.
+* **Typed denials.** `unknown_device`, `device_revoked`, `forged_identity`,
+  `stale_identity`, `missing_scope`, `grant_expired`, `plane_mismatch`,
+  `replay_forbidden`, and the three controller-lease reasons are distinct wire
+  values.
+* **Durable cursors only.** Per-stream cursors are issued by the event log and
+  persist across Host and herdr-core restarts. `hc_seq` and `host_epoch` are
+  reserved names and are rejected on durable messages and checkpoints.
+* **Snapshot on gap.** A cursor behind retained history forces a cursor-bound
+  snapshot instead of silent event loss; a cursor ahead of the head is a typed
+  error, never a reset. Event-id reuse at a different cursor is detected.
+* **No blind replay.** `approval_respond` (human decision) and `pointer_input`
+  (ephemeral input) are classified `NeverReplay`. The reconnect queue refuses
+  them, so reconnection cannot approve an action or inject input the user never
+  repeated.
+* **Bounded resources.** Envelope, payload, snapshot, queue, retention,
+  idempotency-store and replay-batch limits are validated at startup and
+  enforced before work. The idempotency store refuses new keys at capacity
+  rather than evicting records, because eviction re-enables duplicate
+  execution.
+* **Ordered checks.** Transport binding → generation negotiation → device
+  identity → semantic validation → live authorization/lease → idempotency
+  lookup. An unauthorized retry cannot discover whether a key exists or what
+  its result was.
 
 ## Threat scenarios and mitigations
 
@@ -81,7 +129,12 @@ There is **no TCP listener and no TCP fallback**.
 | Agent prompt injection asks for broad host powers | Approval, scope-bound tools, no implicit plugin/system capability escalation |
 | Unauthorized screen viewing | Distinct screen.view consent, visible local indicator, explicit stop, no always-on capture |
 | Input injection | Distinct screen.control scope, time-limited controller lease, audit, re-auth on escalation |
-| Replay of `agent.send` or approvals | Idempotency keys, expiry, nonce, revision check, never replay input on reconnect |
+| Replay of `agent.send` or approvals | Idempotency keys bound to command fingerprint, principal and plane; approvals carry a mandatory revision; approvals and pointer input are `NeverReplay` and refused by the reconnect queue |
+| Revoked or stolen device keeps acting | Live grant lookup on every command; revocation clears grants, withdraws leases and invalidates existing sessions (`device_revoked`) |
+| Forged or stale device identity | Fingerprint plus key-generation verification; rotation bumps the generation, clears grants and invalidates sessions (`forged_identity` / `stale_identity`) |
+| Duplicate execution after a dropped ACK | Durable per-stream cursor, bounded client dedup by cursor and event id, and stored idempotency classification; ACK loss causes redelivery, not re-execution |
+| Cross-plane privilege escalation | Local IPC and WAN are separate bindings; device claims are rejected locally; idempotency records reject cross-plane and cross-principal reuse |
+| Cursor reset or silent event loss | Durable cursor independent of `hc_seq`/`host_epoch`; gap requires a snapshot; cursor beyond head is a typed error |
 | Relay resource exhaustion | Size/rate limits, quotas, circuit breakers, event backpressure |
 | Notification metadata leakage | APNs opaque hints, no code/file/secrets in push payloads |
 | Local privilege escalation | User-scoped background service, OS sandbox/entitlements as appropriate, no root service by default |
@@ -97,6 +150,13 @@ There is **no TCP listener and no TCP fallback**.
 | Paired phone, operator | Yes | Optional scope | Separate approval grant | Optional explicit scope | Separate temporary lease |
 | Plugin (default) | No | No | No | No | No |
 
+The server-side scope set is `session.observe`, `session.manage`, `agent.send`,
+`approval.respond`, `screen.view`, `screen.control`, `plugin.invoke` and
+`device.manage`. Scopes are additive; holding one never implies another.
+Unknown scope strings fail to deserialize rather than widening a grant.
+Handshake scopes are advisory UI state only; authorization re-reads the live
+registry.
+
 ## Credential management
 
 Use macOS Keychain / iOS Keychain. Host identity and pairing material must never be committed to git or logged. Rotate session keys independently of device trust. Persist only public identities/metadata in SQLite; protect sensitive local data with OS file permissions and storage design review.
@@ -109,6 +169,42 @@ Use macOS Keychain / iOS Keychain. Host identity and pairing material must never
 - Input lease expires even if the phone silently disconnects.
 - Clipboard, file exchange, audio and recordings have independent grants.
 - No frame storage unless explicit user action and retention policy.
+
+## Security test evidence (S1)
+
+| Invariant | Contract test |
+| --- | --- |
+| Two clients reconnect independently; dropped ACK redelivers and dedups | `tests/sync.rs` |
+| Out-of-order delivery, event-id reuse, retention gap → snapshot | `tests/sync.rs` |
+| Cursor monotonicity across restarts; non-contiguous durable log rejected | `tests/sync.rs` |
+| Revocation mid-session; leases withdrawn | `tests/security.rs` |
+| Stale, forged and unknown identity claims; rotation invalidates sessions | `tests/security.rs` |
+| Duplicate/idempotent commands; fingerprint conflict; principal and plane scoping | `tests/security.rs` |
+| Approval and pointer replay refusal; mandatory approval revision | `tests/security.rs`, `tests/wire.rs` |
+| Pointer scope and live/expired/mismatched lease denials | `tests/security.rs` |
+| Local IPC vs WAN distinct bindings | `tests/security.rs` |
+| Oversized payload/event/snapshot rejection | `tests/wire.rs` |
+| Version negotiation mismatch and envelope generation mismatch | `tests/wire.rs` |
+| Reserved `hc_seq`/`host_epoch` rejection; unknown fields | `tests/wire.rs` |
+
+## NOT VERIFIED in S1
+
+These are explicitly out of scope for this lane and must not be claimed as
+working:
+
+* **Pairing and cryptography.** No QR challenge, key agreement, E2EE, AEAD or
+  transport replay protection is implemented here. Device fingerprints are
+  registry inputs that S2 pairing must produce and authenticate.
+* **Host transport integration.** The crate is not yet called by a live Host
+  listener or relay connection; no phone or relay packet test has run.
+* **Durable persistence.** Event logs, trust records and idempotency records are
+  modeled in memory; SQLite tables/migrations are a follow-up.
+* **Controller lease issuance UI.** Leases are API-typed and expiry-tested, but
+  no local consent surface exists yet (M1).
+* **Rate limiting and fuzzing.** Size/queue bounds exist; per-connection rate
+  limits, parser fuzzing and property tests remain release-gate work.
+* **Platform IPC.** Unix socket / Named Pipe peer verification and lifecycle
+  belong to H1 and are independent of this protocol contract.
 
 ## Required release gates
 
