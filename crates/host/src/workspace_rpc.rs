@@ -288,6 +288,44 @@ mod tests {
     }
 
     #[test]
+    fn tab_mutations_are_revisioned_and_never_touch_agent_runtime() {
+        let mut store = Store::open_memory().unwrap();
+        let space = store.create_space("ukk", "/repo").unwrap();
+        let session = store.create_session(&space.id, "Tabs").unwrap();
+        let original = store.get_layout(&session.id).unwrap();
+        let leaf = original.root.id().to_owned();
+
+        let added = dispatch_with(&mut store, "workspace.tab.add", &json!({
+            "session_id":session.id, "pane_id":leaf,
+            "title":"Files", "content":{"type":"files"}, "expected_revision":0
+        })).unwrap();
+        assert_eq!(added["revision"], 1);
+        let group = added["root"]["id"].as_str().unwrap().to_owned();
+        let last_tab = added["root"]["tabs"][1]["id"].as_str().unwrap().to_owned();
+
+        let stale = dispatch_with(&mut store, "workspace.tab.close", &json!({
+            "session_id":session.id,"group_id":group,"tab_id":last_tab,
+            "expected_revision":0
+        })).unwrap_err();
+        assert_eq!(stale.code, -32031);
+
+        let reordered = dispatch_with(&mut store, "workspace.tab.reorder", &json!({
+            "session_id":session.id,"group_id":group,"tab_id":last_tab,
+            "direction":-1,"expected_revision":1
+        })).unwrap();
+        assert_eq!(reordered["revision"], 2);
+        assert_eq!(reordered["root"]["tabs"][0]["id"], last_tab);
+
+        let closed = dispatch_with(&mut store, "workspace.tab.close", &json!({
+            "session_id":session.id,"group_id":group,"tab_id":last_tab,
+            "expected_revision":2
+        })).unwrap();
+        assert_eq!(closed["revision"], 3);
+        assert_eq!(closed["root"]["kind"], "leaf");
+        assert!(store.snapshot().unwrap().agent_runs.is_empty());
+    }
+
+    #[test]
     fn invalid_or_out_of_range_ratio_is_rejected() {
         let mut store = Store::open_memory().unwrap();
         let err = dispatch_with(
