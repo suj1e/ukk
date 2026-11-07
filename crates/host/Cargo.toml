@@ -8,6 +8,8 @@ description = "Local-first agent host integration spike"
 [dependencies]
 ukk-hc-client = { path = "../hc-client" }
 serde_json = "1.0"
+ukk-store = { path = "../store" }
+ukk-domain = { path = "../domain" }
 
 [dev-dependencies]
 ukk-host-client = { path = "../host-client" }
