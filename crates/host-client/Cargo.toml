@@ -1,0 +1,9 @@
+[package]
+name = "ukk-host-client"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Local read-only IPC client for ukk Agent Host"
+
+[dependencies]
+serde_json = "1.0"
