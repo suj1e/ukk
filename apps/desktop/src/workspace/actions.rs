@@ -296,6 +296,7 @@ impl Workspace {
         self.focus_touched = true;
         self.local_focus.set_selected_session(Some(&session_id));
         self.persist_local_focus(cx);
+        self.sync_repository_surfaces(cx);
         cx.notify();
     }
 }

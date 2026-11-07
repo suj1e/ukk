@@ -80,7 +80,10 @@ impl Workspace {
                             .text_color(rgb(INK))
                             .cursor_pointer()
                             .hover(|style| style.bg(rgb(SURFACE)))
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh(cx);
+                                this.reload_repository_surfaces(cx);
+                            }))
                             .child(if is_loading {
                                 "Refreshing…"
                             } else {

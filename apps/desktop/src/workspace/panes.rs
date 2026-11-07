@@ -46,15 +46,15 @@ impl Workspace {
                 let (heading, description) = match content {
                     PaneContent::Activity => (
                         "Activity".to_string(),
-                        "Structured activity stream will be connected here.".to_string(),
+                        "Recent commits for this Session's project root.".to_string(),
                     ),
                     PaneContent::Files => (
                         "Files".to_string(),
-                        "Project browser is not connected yet.".to_string(),
+                        "Read-only changed files for this Session's project root.".to_string(),
                     ),
                     PaneContent::Diff => (
                         "Diff".to_string(),
-                        "Git diff integration is upcoming.".to_string(),
+                        "Read-only unified diff for this Session's project root.".to_string(),
                     ),
                     PaneContent::Agent { agent_run_id } => {
                         let binding = self
@@ -88,6 +88,25 @@ impl Workspace {
                         }
                     }
                 };
+                let body: gpui::AnyElement =
+                    if let Some(surface) = repository::RepositorySurface::for_content(content) {
+                        self.repository_surface_view(surface, id, cx)
+                    } else {
+                        match content {
+                            PaneContent::Agent { agent_run_id } => {
+                                self.unsupported_agent_pane(agent_run_id, id, cx)
+                            }
+                            PaneContent::Terminal { agent_run_id } => {
+                                self.unsupported_terminal_pane(agent_run_id, id, cx)
+                            }
+                            // Unreachable today; reported instead of panicking.
+                            _ => div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Unknown pane surface")
+                                .into_any_element(),
+                        }
+                    };
                 let new_content = super::pane_focus::adjacent_content(content);
                 let destination = id.clone();
                 let focused = self.is_focused_pane(id);
@@ -180,13 +199,15 @@ impl Workspace {
                     .child(
                         div()
                             .mt_3()
-                            .text_sm()
-                            .text_color(rgb(MUTED))
-                            .child(description),
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h_0()
+                            .child(body),
                     )
                     .child(
                         div()
-                            .mt_5()
+                            .mt_2()
                             .text_xs()
                             .text_color(rgb(MUTED))
                             .child(format!("View ID: {id}")),
@@ -220,6 +241,13 @@ impl Workspace {
             .iter()
             .find(|layout| layout.session_id == session.id)
             .map(|layout| &layout.root);
+        let project_root = self
+            .domain
+            .spaces
+            .iter()
+            .find(|space| space.id == session.space_id)
+            .map(|space| space.project_root.clone())
+            .unwrap_or_default();
         let title = session.title.clone();
         let scope = self
             .domain
@@ -261,6 +289,15 @@ impl Workspace {
                     )
                     .child(div().mt_2().text_sm().text_color(rgb(MUTED)).child(
                         "Pane layout is restored from SQLite; no view owns an Agent process.",
+                    ))
+                    .child(div().mt_1().text_xs().text_color(rgb(MUTED)).child(
+                        if project_root.trim().is_empty() {
+                            "Project root not configured for this Space.".to_owned()
+                        } else {
+                            format!(
+                                "Project root · {project_root} · read-only local Git inspection"
+                            )
+                        },
                     )),
             );
         if let Some(root) = root {

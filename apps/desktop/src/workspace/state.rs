@@ -243,6 +243,9 @@ impl Workspace {
         if focus_changed {
             self.persist_local_focus(cx);
         }
+        // Re-read Git only when the selected Session or its project root
+        // changed; this is a local, read-only inspection.
+        self.sync_repository_surfaces(cx);
     }
 
     /// Listen for metadata writes from a second Desktop or the local CLI.
