@@ -1,9 +1,11 @@
 # Device pairing and remote trust
 
 > Status: S2 pairing/device-trust **core implemented** in `crates/remote` ·
-> 2026-11-08. Relay networking, OS key storage, iOS UI and end-to-end media are
-> **not** part of this slice. Do not describe this as production-ready
-> cryptography; no external security review has happened.
+> 2026-11-08. The outbound relay signalling boundary (ukk-internal envelope +
+> driver) is implemented and mock-tested; a real WSS relay adapter, OS key
+> storage, iOS UI and end-to-end media are **not** part of this slice. Do not
+> describe this as production-ready cryptography; no external security review
+> has happened.
 
 ## Goal
 
@@ -20,7 +22,8 @@ stays paired until revoked.
 | Scoped device grants layered on `crates/protocol` trust registry | implemented and tested |
 | `DeviceKeyStore` trait + in-memory test store | implemented |
 | OS Keychain / iOS Keychain / Secure Enclave adapter | **not implemented** |
-| Relay adapter, outbound WSS, reconnect | **not implemented** (trait only) |
+| Relay signalling envelope + driver (`crates/remote::relay`) | implemented and mock-tested |
+| Real outbound WSS adapter / TLS / relay authentication | **not implemented** |
 | iOS QR scanner, desktop confirmation UI | **not implemented** |
 | Real relay/iPhone/security review | **NOT VERIFIED** |
 
@@ -197,37 +200,110 @@ authorization. This is **NOT VERIFIED / NOT IMPLEMENTED** in S2.
 
 ## Relay boundary
 
-`crates/remote::transport::RelayTransport` is an opaque, ordered,
-reliable, outbound frame channel. The pairing core does not know a relay wire
-format. Adapters must enforce:
+`crates/remote` separates the outbound connection seam from its protocol:
 
-* Host dials out; no inbound listener, port forwarding or TCP fallback.
+* `transport::RelayConnection` — an opaque, ordered, reliable, **outbound**
+  frame channel. `generation()` is a monotonic reconnect generation (`0`
+  means "not connected"); an adapter must advance it after every successful
+  reconnect and never reuse one. `recv_frame(max_bytes)` is a hard allocation
+  bound: an adapter must not read or buffer beyond `max_bytes` and must return
+  its own error on a larger frame.
+* `relay::RelayDriver` — the state machine for one Host or phone registration
+  and one active routed session. It performs no I/O, opens no listener and
+  knows no invite secret, private key or grant content.
+
+Adapters must enforce:
+
+* Host dials out; there is no inbound listener, port forwarding or TCP
+  fallback. The relay never dials the Host.
 * TLS with platform trust-store validation; no insecure-skip-verify.
 * The relay sees routing metadata and ciphertext, never the invite secret,
   private static keys or grant contents.
-* Frames are bounded by `MAX_PAIRING_FRAME_BYTES` (4096).
-  `RelayTransport::recv_frame(max_bytes)` makes the bound part of the trait
-  contract: an adapter must not read or buffer beyond `max_bytes` and must
-  return its own error on an oversized frame.
-* A relay reconnect is a new pairing attempt. Started or completed invitations
-  are never replayed.
+* Frames are bounded both by the pairing limit (`MAX_PAIRING_FRAME_BYTES`,
+  4096) and by the signalling envelope limit
+  (`MAX_SIGNALLING_FRAME_BYTES`, 8192).
+* A relay reconnect is a new pairing attempt at a strictly higher generation.
+  Started or completed invitations are never replayed, and state never
+  crosses a generation boundary.
+* Resume is **not part of** envelope v1. `register`/`connect` carry no resume
+  field; a frame that adds one is rejected as an unknown field (`malformed`)
+  before the driver or relay acts, rather than guessed.
+
+### ukk-internal signalling envelope v1
+
+This envelope is **ukk-internal**. It is deliberately not the alma-relay wire
+protocol and no interoperability is claimed. One JSON object per frame,
+`{"type":"…","body":{"v":1,…}}`; only that single-object form is accepted
+(the serde adjacent-tagging array form is rejected), and unknown fields, wrong
+types and trailing input are rejected. The encoded payload length is checked
+before base64 decoding. Session ids are relay-assigned
+`[A-Za-z0-9_-]{16,128}`.
+
+| Type | Direction | Purpose |
+| --- | --- | --- |
+| `register` | Host → relay | Outbound registration with the reconnect `generation`. |
+| `registered` | relay → Host | Registration accepted; echoes `host_id` and `generation`. |
+| `connect` | phone → relay | Ask to be routed to a registered `host_id`. |
+| `session` | relay → phone | Route established; carries the session id. |
+| `route` | relay → Host | A phone session was routed to this Host. |
+| `frame` | both | One opaque pairing frame (base64url, ≤ 4096 decoded bytes). |
+| `close` | both | Typed close (`offline`, `revoked`, `reconnect`, `protocol_error`). |
+| `error` | relay → peer | Typed refusal (`duplicate_registration`, `unknown_route`, `revoked`, …). |
+
+Failure posture: duplicate registration is refused without evicting the first
+connection; a route for an unknown/closed session is refused; an oversized
+envelope or payload is rejected before parsing/buffering; a stale generation,
+wrong Host, out-of-order message or typed relay error permanently closes the
+driver. Per-peer delivery queues are bounded: the mock relay caps a peer at
+64 undrained frames and disconnects it on overflow instead of growing memory;
+a production adapter must apply an equivalent bound. The v1 driver tracks one routed session per connection; a second
+`route` is a protocol error rather than a silent misroute. A production
+multiplexer would keep a per-session table, which is out of scope here.
 
 ### Alma relay compatibility record
 
-Source-inspected only; this is **not** a live compatibility test.
+Source-inspected only at revision
+`06594179b7dc44a500e0c53e814314426bcb9241` (package version 1.3.0, MIT
+licensed); this is **not** a live compatibility test. Its `docs/PROTOCOL.md`
+describes:
 
-* Repository: <https://github.com/yetone/alma-relay>
-* Pinned revision: `06594179b7dc44a500e0c53e814314426bcb9241` (package version
-  1.3.0, MIT licensed).
-* Its `docs/PROTOCOL.md` states: desktop agents connect with outbound WSS to
-  `/agent`, phones reach a desktop through HTTPS/WSS `/c/<token>/…`, routing
-  tokens are `[A-Za-z0-9_-]{16,128}`, the relay routes by `sha256(token)` and
-  treats everything above its frame as opaque. Alma's own E2E layer rides
-  inside that tunnel; it is not a reusable ukk pairing SDK.
-* **Compatibility status: NOT VERIFIED.** No relay was run, no frame was
-  exchanged, and no ukk adapter was written. Mapping `PairingRequest` and Noise
-  frames onto a relay WebSocket (`wmsg`/`wopen`) is future S2 transport work,
-  not part of this PR.
+* Host/agent: outbound WSS `/agent?th=<tokenHash>`, first frame
+  `{t:'register', tokenHash, name?, ver?, key?, proto?}`, reply
+  `{t:'registered', proto?}`. Close codes `4002` (bad hash), `4003` (bad key),
+  `4401` (bad relay token) and `4000` (another agent registered the same
+  hash).
+* Phone: HTTPS/WSS `/c/<token>/…`. Tokens are `[A-Za-z0-9_-]{16,128}`; the
+  relay routes by `sha256(token)` and stores only the hash.
+* Payload multiplexing: `hreq`/`hres`/`hchunk`/`hend` for HTTP and
+  `wopen`/`wopened`/`wmsg`/`wclose` for bridged WebSockets. Protocol 2 adds
+  binary frames (`[kind:u8][idLen:u8][id][payload]`) and streamed request
+  bodies. Alma's own E2E layer rides inside this tunnel.
+* Limits: 32 MiB agent frame, 24 MiB phone WebSocket message, 10 s
+  registration window, per-agent request/socket caps. `POST /turn` issues
+  short-lived TURN credentials when configured.
+
+**Exact gaps (not bridged here):**
+
+1. **Frame format.** alma-relay is an HTTP/WebSocket tunnel keyed by
+   `tokenHash`, not a per-session opaque-frame router. The ukk envelope's
+   `register`/`connect`/`route`/`frame` messages have no alma equivalent;
+   carrying pairing frames would require an adapter that opens one alma
+   `wopen` bridge per phone and maps `wmsg`, or a different relay endpoint.
+   None is implemented.
+2. **Authentication.** alma's agent `register` may carry an operator-supplied
+   `key`/relay token; failures are close codes `4002`/`4003`/`4401`. The ukk
+   envelope has no relay credential or `tokenHash` derivation, and the QR
+   invite carries only the relay URL. Relay authentication is unimplemented.
+3. **TURN / media.** `POST /turn` credential delivery and the WebRTC media
+   path are out of scope for S2; neither is implemented or tested.
+4. **Limits and push.** alma allows MiB-scale frames and has APNs/FCM push
+   frames; ukk's relay envelope is deliberately 8 KiB/4 KiB-bounded and has
+   no push path. No rate limiting or quota behaviour is implemented.
+
+**Compatibility status: NOT VERIFIED.** No relay process was started, no WSS
+connection or TLS handshake ran, no alma frame was exchanged, no relay
+credential was issued and no TURN credential was requested. Tests use only the in-memory mock in
+`crates/remote/tests/relay.rs`; they are not interoperability evidence.
 
 ## Crypto and dependency record
 
@@ -255,7 +331,7 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 (BSD-3-Clause),
 
 ## What the tests prove
 
-`crates/remote/tests` (62 tests including unit tests):
+`crates/remote/tests` (77 tests including unit tests):
 
 * invite round-trip, strict unknown/missing field rejection, oversized and
   trailing input, unsafe relay schemes, secret redaction and zeroize-on-demand;
@@ -275,9 +351,20 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 (BSD-3-Clause),
   device, carries a wrong fingerprint or zero generation, or has an
   unrequested/forbidden scope;
 * revocation and key rotation invalidating existing sessions, independent
-  scopes and fingerprinted device binding.
+  scopes and fingerprinted device binding;
+* the in-memory mock relay (`tests/relay.rs`): outbound Host registration only,
+  phone routing, a full Noise pairing exchange carried as bounded opaque
+  frames, duplicate registration, offline/unknown-route, resume-field rejection,
+  reconnect generation advancement, oversized frame/encoded-payload
+  rejection, bounded-queue overflow, session close and revocation. Driver unit
+  tests also cover wrong Host, a second `route` while routed, close with a
+  wrong session id, lower-generation `begin`, `NotRouted`, malformed/array-form
+  frame closure and typed relay refusals. The mock is synchronous and deterministic; it
+  opens no socket and makes no external call.
 
-**NOT VERIFIED:** real alma-relay interoperability, OS Keychain/Keyring storage,
-a physical iPhone, relay outage/reconnect, and independent security review.
+**NOT VERIFIED:** real alma-relay interoperability (no WSS, TLS, relay
+credential or TURN exchange ran), OS Keychain/Keyring storage, a physical
+iPhone, relay outage/reconnect against a real process, and independent
+security review.
 **MAJOR GATE:** no WAN proof-of-possession is bound to the paired device static
 key yet; do not expose a relay listener until the gate above is implemented.
