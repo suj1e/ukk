@@ -45,7 +45,7 @@ jobs:
     name: Simulator unit tests
     needs: build
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -76,8 +76,11 @@ jobs:
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}" \
             -configuration Debug \
             -only-testing:UkkCompanionTests \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 180 \
             -resultBundlePath "${{ runner.temp }}/UkkCompanionUnitTests.xcresult" \
-            -quiet \
             test
 
       - name: Upload unit test result bundle

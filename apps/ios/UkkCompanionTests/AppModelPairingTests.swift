@@ -2,63 +2,82 @@ import SwiftUI
 import XCTest
 @testable import UkkCompanion
 
-@MainActor
 final class AppModelPairingTests: XCTestCase {
     private let secret = String(repeating: "s", count: 24)
 
-    func testScannedPayloadNeverEntersVisibleDraft() throws {
-        let model = AppModel()
-        model.handleScannedCode(makePayload(secret: secret))
+    func testScannedPayloadNeverEntersVisibleDraft() async throws {
+        let payload = makePayload(secret: secret)
+        let outcome = await MainActor.run { () -> (draft: String, message: String?) in
+            let model = AppModel()
+            model.handleScannedCode(payload)
+            return (model.pairingPayloadDraft, model.pairingParseMessage)
+        }
 
-        XCTAssertEqual(model.pairingPayloadDraft, "")
-        XCTAssertFalse(model.pairingPayloadDraft.contains(secret))
+        XCTAssertEqual(outcome.draft, "")
+        XCTAssertFalse(outcome.draft.contains(secret))
 
-        let message = try XCTUnwrap(model.pairingParseMessage)
+        let message = try XCTUnwrap(outcome.message)
         XCTAssertTrue(message.contains("Invite parsed for host"))
         XCTAssertFalse(message.contains(secret))
     }
 
-    func testValidatePairingDoesNotCopyPayloadIntoDraft() {
-        let model = AppModel()
-        model.validatePairing(payload: makePayload(secret: secret), now: FixtureTime.base)
-
-        XCTAssertEqual(model.pairingPayloadDraft, "")
-        XCTAssertFalse(model.pairingPayloadDraft.contains(secret))
-    }
-
-    func testInvalidScanLeavesUserDraftAndParseMessageIntact() {
-        let model = AppModel()
-        model.pairingPayloadDraft = "user-authored draft"
-
-        model.handleScannedCode("not an invite")
-
-        XCTAssertEqual(model.pairingPayloadDraft, "user-authored draft")
-        XCTAssertEqual(model.pairingParseMessage, PairingInviteParseError.malformedJSON.message)
-    }
-
-    func testManualDraftValidationStillValidatesTheVisibleDraft() throws {
+    func testValidatePairingDoesNotCopyPayloadIntoDraft() async {
         let payload = makePayload(secret: secret)
-        let model = AppModel()
-        model.pairingPayloadDraft = payload
+        let draft = await MainActor.run { () -> String in
+            let model = AppModel()
+            model.validatePairing(payload: payload, now: FixtureTime.base)
+            return model.pairingPayloadDraft
+        }
 
-        model.validatePairingDraft(now: FixtureTime.base)
+        XCTAssertEqual(draft, "")
+        XCTAssertFalse(draft.contains(secret))
+    }
 
-        XCTAssertEqual(model.pairingPayloadDraft, payload)
-        let message = try XCTUnwrap(model.pairingParseMessage)
+    func testInvalidScanLeavesUserDraftAndParseMessageIntact() async {
+        let outcome = await MainActor.run { () -> (draft: String, message: String?) in
+            let model = AppModel()
+            model.pairingPayloadDraft = "user-authored draft"
+            model.handleScannedCode("not an invite")
+            return (model.pairingPayloadDraft, model.pairingParseMessage)
+        }
+
+        XCTAssertEqual(outcome.draft, "user-authored draft")
+        XCTAssertEqual(outcome.message, PairingInviteParseError.malformedJSON.message)
+    }
+
+    func testManualDraftValidationStillValidatesTheVisibleDraft() async throws {
+        let payload = makePayload(secret: secret)
+        let outcome = await MainActor.run { () -> (draft: String, message: String?) in
+            let model = AppModel()
+            model.pairingPayloadDraft = payload
+            model.validatePairingDraft(now: FixtureTime.base)
+            return (model.pairingPayloadDraft, model.pairingParseMessage)
+        }
+
+        XCTAssertEqual(outcome.draft, payload)
+        let message = try XCTUnwrap(outcome.message)
         XCTAssertFalse(message.contains(secret))
     }
 
-    func testScenePhaseKeepsFixtureModeAcrossBackgrounding() {
-        let model = AppModel()
+    func testScenePhaseKeepsFixtureModeAcrossBackgrounding() async {
+        let outcome = await MainActor.run {
+            () -> (background: ConnectionState, foreground: ConnectionState, isLive: Bool, retry: Bool) in
+            let model = AppModel()
+            model.handleScenePhase(.background)
+            let background = model.connection.state
+            model.handleScenePhase(.active)
+            return (
+                background,
+                model.connection.state,
+                model.connection.indicator.isLive,
+                model.connection.isRetryAvailable
+            )
+        }
 
-        model.handleScenePhase(.background)
-        XCTAssertEqual(model.connection.state, .fixtureData)
-        XCTAssertFalse(model.connection.indicator.isLive)
-
-        model.handleScenePhase(.active)
-        XCTAssertEqual(model.connection.state, .fixtureData)
-        XCTAssertFalse(model.connection.indicator.isLive)
-        XCTAssertFalse(model.connection.isRetryAvailable)
+        XCTAssertEqual(outcome.background, .fixtureData)
+        XCTAssertEqual(outcome.foreground, .fixtureData)
+        XCTAssertFalse(outcome.isLive)
+        XCTAssertFalse(outcome.retry)
     }
 
     private func makePayload(secret: String) -> String {
