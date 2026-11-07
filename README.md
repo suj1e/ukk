@@ -3,7 +3,7 @@
 **Native, extensible Multi-Agent Workspace.**
 
 > **设计阶段 / Architecture-first** · GPUI Desktop + SwiftUI iOS + herdr-core + Relay + Plugins  
-> **当前阶段：Runtime Spike 01 + Desktop Spike 02。** 已提交本地只读 Rust Host / hc-client 与 GPUI 桌面原生窗口源码，含真实终端快照读取；尚未经过真实 Mac + herdr-core 联调，也未确认 macOS GPUI 编译通过。下面的完整架构与功能仍是目标设计。
+> **当前阶段：Runtime Spike 01 + Desktop Spike 02 + Live Sync Spike 03。** 已提交本地只读 Rust Host / hc-client 与 GPUI 桌面原生窗口源码，含真实终端快照读取；尚未经过真实 Mac + herdr-core 联调，也未确认 macOS GPUI 编译通过。下面的完整架构与功能仍是目标设计。
 
 ukk 是一个从零打造的原生 Coding Agent 工作空间：同时运行多个 Codex、Claude Code 或其他兼容 Agent，保留可持久恢复的工作会话，通过 iPhone 扫码连接电脑，并在必要时以**悬浮小窗**查看或操控电脑屏幕。
 
@@ -84,6 +84,23 @@ cargo run --manifest-path apps/desktop/Cargo.toml
 
 See [Desktop Spike 02](docs/DESKTOP_SPIKE.md) for exact setup, limitations and Mac verification tasks.
 
+## Live Agent State — Spike 03
+
+The local Agent Host now subscribes to herdr-core `events.subscribe`, reconciles missed or restarted streams, and exposes **read-only**, versioned `host.snapshot` / `host.wait` methods over its private Unix socket. GPUI watches these Host revisions in the background: Agent status and dynamic child Agent rows update without manually refreshing.
+
+```bash
+# Terminal 1: start hc, then ukk Host
+cargo run -p ukk-host -- serve
+# Terminal 2: inspect event-backed snapshot
+cargo run -p ukk-host -- request host.snapshot
+# Terminal 3: launch Desktop on macOS
+cargo run --manifest-path apps/desktop/Cargo.toml
+```
+
+**Status:** source, mock protocol and end-to-end test code committed; compilation/CI and real Mac testing are not yet confirmed. This is a local read-only event broker, not durable Session sync or mobile remote access.
+
+See [Live Runtime Sync](docs/LIVE_EVENTS.md) for state ownership, API envelope, reconnection and acceptance checklist.
+
 ## Documentation
 
 | Document | Contents |
@@ -101,6 +118,7 @@ See [Desktop Spike 02](docs/DESKTOP_SPIKE.md) for exact setup, limitations and M
 | [Development](docs/DEVELOPMENT.md) | 预期代码目录和工程验证步骤 |
 | [Runtime Spike 01](docs/RUNTIME_SPIKE.md) | Rust Host 原型、命令、模拟测试和真实 Mac 验收项 |
 | [Desktop Spike 02](docs/DESKTOP_SPIKE.md) | GPUI 原生窗口、真实终端状态、macOS 构建验收项 |
+| [Live Runtime Sync](docs/LIVE_EVENTS.md) | Host 实时订阅、事件缺口恢复、Desktop 自动刷新和测试 |
 | [Upstream References](docs/REFERENCES.md) | 官方依赖、许可和待确认事项 |
 | [ADR-0001](docs/adr/0001-platform-and-runtime.md) | GPUI + SwiftUI + herdr-core 的技术决策 |
 | [ADR-0002](docs/adr/0002-remote-control-is-plugin.md) | 远控作为会话插件的交互决策 |
