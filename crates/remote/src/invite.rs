@@ -12,7 +12,7 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use ukk_protocol::DomainId;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// Current QR invite version.
 pub const INVITE_VERSION: u8 = 1;
@@ -160,8 +160,8 @@ impl InviteSecret {
         &self.0
     }
 
-    fn to_base64(&self) -> String {
-        encode(&self.0)
+    fn to_base64(&self) -> Zeroizing<String> {
+        Zeroizing::new(encode(&self.0))
     }
 
     fn from_base64(value: &str) -> Result<Self, PairingError> {
@@ -185,7 +185,8 @@ impl fmt::Display for InviteSecret {
 
 impl Serialize for InviteSecret {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_base64())
+        let encoded = self.to_base64();
+        serializer.serialize_str(encoded.as_str())
     }
 }
 

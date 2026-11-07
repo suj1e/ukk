@@ -6,14 +6,17 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use zeroize::Zeroize;
 
 pub(crate) fn encode(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
 pub(crate) fn decode_exact<const N: usize>(value: &str) -> Option<[u8; N]> {
-    let decoded = URL_SAFE_NO_PAD.decode(value).ok()?;
-    let bytes: [u8; N] = decoded.try_into().ok()?;
+    let mut decoded = URL_SAFE_NO_PAD.decode(value).ok()?;
+    let result = decoded.as_slice().try_into().ok();
+    decoded.zeroize();
+    let bytes: [u8; N] = result?;
     if encode(&bytes) != value {
         return None;
     }
