@@ -11,7 +11,9 @@ use broker::Broker;
 use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(unix)]
 use std::sync::Arc;
 
 use ukk_hc_client::HcClient;
@@ -63,6 +65,10 @@ fn execute() -> AppResult<()> {
             .map_err(Into::into),
         #[cfg(unix)]
         "serve" => serve(),
+        #[cfg(windows)]
+        "serve" => Err("Windows Named Pipe Host transport is not implemented yet; see docs/PLATFORM_SUPPORT.md".into()),
+        #[cfg(windows)]
+        "request" => Err("Windows Named Pipe client transport is not implemented yet; see docs/PLATFORM_SUPPORT.md".into()),
         #[cfg(unix)]
         "request" => {
             let method = env::args().nth(2).unwrap_or_else(|| "host.ping".into());
