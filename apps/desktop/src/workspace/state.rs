@@ -78,6 +78,101 @@ impl Workspace {
         .detach();
     }
 
+    /// Domain metadata has its own durable SQLite cursor, independent from
+    /// the volatile herdr-core Agent event stream. Preserve user selection
+    /// whenever the corresponding Space/Session still exists.
+    pub(super) fn apply_workspace_update(&mut self, update: WorkspaceUpdate) {
+        let Some(domain) = update.snapshot else {
+            return; // normal long-poll timeout
+        };
+        if self.workspace_epoch == update.db_epoch && update.revision < self.workspace_revision {
+            return; // older concurrent response, do not overwrite new layout
+        }
+        self.workspace_epoch = update.db_epoch;
+        self.workspace_revision = update.revision;
+        self.workspace_sync_error = None;
+
+        if self
+            .selected_space
+            .as_ref()
+            .is_some_and(|id| !domain.spaces.iter().any(|space| &space.id == id))
+        {
+            self.selected_space = None;
+        }
+        if self.selected_space.is_none() {
+            self.selected_space = domain.spaces.first().map(|space| space.id.clone());
+        }
+        if self
+            .selected_session
+            .as_ref()
+            .is_some_and(|id| !domain.sessions.iter().any(|session| &session.id == id))
+        {
+            self.selected_session = None;
+        }
+        if self.selected_session.is_none() && self.selected.is_none() {
+            self.selected_session = domain
+                .sessions
+                .iter()
+                .find(|session| {
+                    !session.archived
+                        && self
+                            .selected_space
+                            .as_ref()
+                            .is_none_or(|space| &session.space_id == space)
+                })
+                .map(|session| session.id.clone());
+        }
+        self.domain = domain;
+    }
+
+    /// Listen for metadata writes from a second Desktop or the local CLI.
+    /// Reads happen on the background executor; GPUI only applies snapshots.
+    pub(super) fn watch_workspace(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut epoch = String::new();
+            let mut revision = -1_i64;
+            loop {
+                let last_epoch = epoch.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        HostClient::from_env().wait_for_workspace_change(&last_epoch, revision)
+                    })
+                    .await;
+                match result {
+                    Ok(update) => {
+                        epoch = update.db_epoch.clone();
+                        revision = update.revision;
+                        if this
+                            .update(cx, |view, cx| {
+                                view.apply_workspace_update(update);
+                                view.workspace_sync_error = None;
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        if this
+                            .update(cx, |view, cx| {
+                                view.workspace_sync_error =
+                                    Some(format!("Workspace sync paused: {error}"));
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                        cx.background_executor().timer(Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
     /// All native editing actions run off the UI thread and resolve to a
     /// fresh authoritative SQLite snapshot. No direct SQLite access in GPUI.
 
@@ -93,7 +188,7 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     let client = HostClient::from_env();
-                    (client.host_snapshot(), client.workspace_snapshot())
+                    (client.host_snapshot(), client.workspace_state())
                 })
                 .await;
             this.update(cx, |view, cx| {
@@ -108,41 +203,10 @@ impl Workspace {
                     }
                 }
                 match domain {
-                    Ok(domain) => {
-                        if view
-                            .selected_space
-                            .as_ref()
-                            .is_some_and(|id| !domain.spaces.iter().any(|s| &s.id == id))
-                        {
-                            view.selected_space = None;
-                        }
-                        if view.selected_space.is_none() {
-                            view.selected_space = domain.spaces.first().map(|s| s.id.clone());
-                        }
-                        if view
-                            .selected_session
-                            .as_ref()
-                            .is_some_and(|id| !domain.sessions.iter().any(|s| &s.id == id))
-                        {
-                            view.selected_session = None;
-                        }
-                        if view.selected_session.is_none() && view.selected.is_none() {
-                            view.selected_session = domain
-                                .sessions
-                                .iter()
-                                .find(|s| {
-                                    !s.archived
-                                        && view
-                                            .selected_space
-                                            .as_ref()
-                                            .is_none_or(|space| &s.space_id == space)
-                                })
-                                .map(|s| s.id.clone());
-                        }
-                        view.domain = domain;
-                    }
+                    Ok(update) => view.apply_workspace_update(update),
                     Err(error) => {
-                        view.message = Some(format!("Workspace storage unavailable: {error}"));
+                        view.workspace_sync_error =
+                            Some(format!("Workspace storage unavailable: {error}"));
                     }
                 }
                 cx.notify();

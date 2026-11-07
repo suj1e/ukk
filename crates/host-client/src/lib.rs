@@ -271,6 +271,39 @@ impl LiveHostState {
     }
 }
 
+/// Durable Workspace metadata update. SQLite database identity changes
+/// when a new database is created, while revision increases on any write.
+#[derive(Debug, Clone)]
+pub struct WorkspaceUpdate {
+    pub db_epoch: String,
+    pub revision: i64,
+    /// None means the bounded wait timed out without a change.
+    pub snapshot: Option<DomainSnapshot>,
+}
+
+impl WorkspaceUpdate {
+    pub fn from_result(result: &Value) -> Result<Self, HostError> {
+        let db_epoch = result
+            .get("db_epoch")
+            .and_then(Value::as_str)
+            .ok_or_else(|| HostError::Protocol("workspace result missing db_epoch".into()))?
+            .to_owned();
+        let revision = result
+            .get("revision")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| HostError::Protocol("workspace result missing revision".into()))?;
+        let snapshot = match result.get("snapshot") {
+            Some(value) if !value.is_null() => Some(serde_json::from_value(value.clone())?),
+            _ => None,
+        };
+        Ok(Self {
+            db_epoch,
+            revision,
+            snapshot,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HostClient {
     path: PathBuf,
@@ -378,6 +411,29 @@ impl HostClient {
     pub fn workspace_snapshot(&self) -> Result<DomainSnapshot, HostError> {
         let value = self.request("workspace.snapshot")?;
         Ok(serde_json::from_value(value)?)
+    }
+
+    pub fn workspace_state(&self) -> Result<WorkspaceUpdate, HostError> {
+        WorkspaceUpdate::from_result(&self.request("workspace.state")?)
+    }
+
+    /// Wait for SQLite Workspace metadata changes caused by any process.
+    /// Unlike Agent event sequences, revisions persist across Host restarts.
+    pub fn wait_for_workspace_change(
+        &self,
+        after_epoch: &str,
+        after_revision: i64,
+    ) -> Result<WorkspaceUpdate, HostError> {
+        let value = self.request_with(
+            "workspace.wait",
+            json!({
+                "after_epoch": after_epoch,
+                "after_revision": after_revision,
+                "timeout_ms": 10_000
+            }),
+            Duration::from_secs(13),
+        )?;
+        WorkspaceUpdate::from_result(&value)
     }
 
     /// Long-poll the Host broker. A return with the same epoch/revision means
@@ -630,6 +686,27 @@ mod tests {
             client.local_workspace_mutation("agent.approval.respond", json!({})),
             Err(HostError::Protocol(_))
         ));
+    }
+
+    #[test]
+    fn workspace_update_requires_cursor_and_supports_no_change() {
+        let initial = serde_json::json!({
+            "db_epoch": "local-db-a", "revision": 2,
+            "snapshot": {"spaces":[],"sessions":[],"agent_runs":[],"layouts":[]}
+        });
+        let parsed = WorkspaceUpdate::from_result(&initial).unwrap();
+        assert_eq!(parsed.revision, 2);
+        assert_eq!(parsed.db_epoch, "local-db-a");
+        assert_eq!(parsed.snapshot.unwrap().spaces.len(), 0);
+        let idle = WorkspaceUpdate::from_result(&serde_json::json!({
+            "db_epoch":"local-db-a","revision":2,"snapshot":null
+        }))
+        .unwrap();
+        assert!(idle.snapshot.is_none());
+        assert!(WorkspaceUpdate::from_result(&serde_json::json!({
+            "revision":1,"snapshot":null
+        }))
+        .is_err());
     }
 
     #[test]

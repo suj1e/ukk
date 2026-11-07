@@ -6,7 +6,7 @@ use gpui::{div, prelude::*, px, rgb, Context, Render, Window};
 use serde_json::{json, Value};
 use std::time::Duration;
 use ukk_domain::{new_id, DomainSnapshot, PaneContent, PaneNode, Session, SplitAxis};
-use ukk_host_client::{HostClient, HostSnapshot, LiveHostState, Terminal};
+use ukk_host_client::{HostClient, HostSnapshot, LiveHostState, Terminal, WorkspaceUpdate};
 
 mod actions;
 mod agent_detail;
@@ -52,6 +52,9 @@ pub(crate) struct Workspace {
     message: Option<String>,
     host_epoch: String,
     host_revision: u64,
+    workspace_epoch: String,
+    workspace_revision: i64,
+    workspace_sync_error: Option<String>,
 }
 
 impl Workspace {
@@ -70,8 +73,12 @@ impl Workspace {
             message: None,
             host_epoch: String::new(),
             host_revision: 0,
+            workspace_epoch: String::new(),
+            workspace_revision: -1,
+            workspace_sync_error: None,
         };
         view.watch_updates(cx);
+        view.watch_workspace(cx);
         view.refresh(cx);
         view
     }

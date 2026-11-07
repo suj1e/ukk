@@ -6,6 +6,7 @@ mod local_auth;
 mod rpc;
 mod transport;
 mod workspace_rpc;
+mod workspace_watch;
 
 use broker::Broker;
 use local_auth::LocalAuth;

@@ -33,6 +33,31 @@ pub(super) fn handle_request(req: &Value, broker: &Broker, auth: &LocalAuth) -> 
                 }
             }
         }
+        "workspace.state" => match workspace_watch::snapshot() {
+            Ok(value) => json!({"jsonrpc":"2.0","id":id,"result":value}),
+            Err(error) => json!({"jsonrpc":"2.0","id":id,
+                "error":{"code":-32011,"message":error.to_string()}}),
+        },
+        "workspace.wait" => {
+            let params = req.get("params");
+            let after_epoch = params
+                .and_then(|p| p.get("after_epoch"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let after_revision = params
+                .and_then(|p| p.get("after_revision"))
+                .and_then(Value::as_i64)
+                .unwrap_or(-1);
+            let timeout_ms = params
+                .and_then(|p| p.get("timeout_ms"))
+                .and_then(Value::as_u64)
+                .unwrap_or(10_000);
+            match workspace_watch::wait(after_epoch, after_revision, timeout_ms) {
+                Ok(value) => json!({"jsonrpc":"2.0","id":id,"result":value}),
+                Err(error) => json!({"jsonrpc":"2.0","id":id,
+                    "error":{"code":-32011,"message":error.to_string()}}),
+            }
+        }
         "workspace.snapshot" => match Store::open_default().and_then(|store| store.snapshot()) {
             Ok(snapshot) => json!({"jsonrpc":"2.0","id":id,"result":snapshot}),
             Err(error) => json!({"jsonrpc":"2.0","id":id,

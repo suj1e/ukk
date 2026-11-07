@@ -114,6 +114,22 @@ time.sleep(3)
     assert_eq!(workspace.sessions[0].id, session.id);
     assert_eq!(workspace.layouts[0].root.leaves().len(), 1);
 
+    // A separate SQLite writer (such as a CLI process) should wake the
+    // Desktop's independent metadata subscription without manual Refresh.
+    let initial_workspace = client.workspace_state().unwrap();
+    let observer = client.clone();
+    let db_identity = initial_workspace.db_epoch.clone();
+    let cursor = initial_workspace.revision;
+    let waiter = thread::spawn(move || observer.wait_for_workspace_change(&db_identity, cursor));
+    thread::sleep(Duration::from_millis(80));
+    Store::open(&db)
+        .unwrap()
+        .create_space("Second project", "/src/other")
+        .unwrap();
+    let changed_workspace = waiter.join().unwrap().unwrap();
+    assert!(changed_workspace.revision > initial_workspace.revision);
+    assert_eq!(changed_workspace.snapshot.unwrap().spaces.len(), 2);
+
     // User-authorized local edits go through the SAME Unix IPC as the UI.
     let request_id = new_id();
     let params = json!({

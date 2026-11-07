@@ -2,6 +2,10 @@
 
 > Dates are intentionally not promised. The product scope is **complete multi-agent workspace + plugin platform + mobile companion**; milestones define risk-reducing delivery order, not permanent omissions.
 
+### Workspace metadata sync (Spike 05 — candidate)
+
+A cross-process SQLite revision and DB incarnation ID are being added to let GPUI windows automatically reconcile Session and Pane changes without manual Refresh. Source is on a feature branch; tests and native window acceptance remain required. See [Workspace Live Sync](WORKSPACE_LIVE_SYNC.md).
+
 ## Implementation progress (2026-11-07)
 
 - **Spike 01:** Rust `hc connect` JSON-RPC client, read-only Host socket, mock tests — committed; Mac validation pending.

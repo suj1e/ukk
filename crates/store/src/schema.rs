@@ -77,18 +77,33 @@ impl Store {
     }
 
     fn migrate(&mut self) -> Result<()> {
+        // Most opens are reads on an up-to-date database: no writer lock.
         let version: i64 = self
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(StoreError::UnsupportedVersion(version));
         }
-        if version == 1 {
+        if version == 2 {
             return Ok(());
         }
-        let tx = self.conn.transaction()?;
-        tx.execute_batch(
-            r#"
+        // Upgrade under one IMMEDIATE transaction. A second process waiting
+        // to migrate rechecks the version *after* acquiring the writer lock,
+        // so it never tries to recreate tables already installed by another.
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version > 2 {
+            return Err(StoreError::UnsupportedVersion(version));
+        }
+        if version == 2 {
+            tx.commit()?;
+            return Ok(());
+        }
+        if version == 0 {
+            tx.execute_batch(
+                r#"
             CREATE TABLE spaces (
                 id TEXT PRIMARY KEY NOT NULL,
                 title TEXT NOT NULL,
@@ -122,7 +137,41 @@ impl Store {
             );
             PRAGMA user_version = 1;
             "#,
-        )?;
+            )?;
+        }
+        // v2: a durable, monotonic revision for Spaces, Sessions, AgentRuns
+        // and persisted pane layouts. Triggers catch writes from *every*
+        // connection, including an independent CLI process.
+        if version < 2 {
+            tx.execute_batch(
+                "CREATE TABLE workspace_revision (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    revision INTEGER NOT NULL CHECK(revision >= 0),
+                    db_epoch TEXT NOT NULL
+                );
+                INSERT INTO workspace_revision(id, revision, db_epoch)
+                VALUES(1, 0, lower(hex(randomblob(16))));",
+            )?;
+            for table in ["spaces", "sessions", "agent_runs", "session_layouts"] {
+                for (operation, suffix) in [
+                    ("INSERT", "insert"),
+                    ("UPDATE", "update"),
+                    ("DELETE", "delete"),
+                ] {
+                    // All identifiers are static source literals; never
+                    // interpolate untrusted SQL identifiers here.
+                    tx.execute_batch(&format!(
+                        "CREATE TRIGGER ukk_rev_{table}_{suffix}
+                         AFTER {operation} ON {table}
+                         BEGIN
+                            UPDATE workspace_revision
+                            SET revision = revision + 1 WHERE id=1;
+                         END;"
+                    ))?;
+                }
+            }
+            tx.execute_batch("PRAGMA user_version = 2;")?;
+        }
         tx.commit()?;
         Ok(())
     }
