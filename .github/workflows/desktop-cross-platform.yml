@@ -29,6 +29,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+      - name: Check Desktop Rust formatting
+        run: cargo fmt --manifest-path apps/desktop/Cargo.toml --all -- --check
       - name: Linux GPU and windowing build dependencies
         if: runner.os == 'Linux'
         run: |
