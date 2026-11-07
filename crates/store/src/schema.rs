@@ -77,17 +77,33 @@ impl Store {
     }
 
     fn migrate(&mut self) -> Result<()> {
-        let version: i64 = self
-            .conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        // Most opens are reads on an up-to-date database: no writer lock.
+        let version: i64 = self.conn.pragma_query_value(
+            None, "user_version", |row| row.get(0)
+        )?;
         if version > 2 {
             return Err(StoreError::UnsupportedVersion(version));
         }
         if version == 2 {
             return Ok(());
         }
+        // Upgrade under one IMMEDIATE transaction. A second process waiting
+        // to migrate rechecks the version *after* acquiring the writer lock,
+        // so it never tries to recreate tables already installed by another.
+        let tx = self.conn.transaction_with_behavior(
+            rusqlite::TransactionBehavior::Immediate
+        )?;
+        let version: i64 = tx.pragma_query_value(
+            None, "user_version", |row| row.get(0)
+        )?;
+        if version > 2 {
+            return Err(StoreError::UnsupportedVersion(version));
+        }
+        if version == 2 {
+            tx.commit()?;
+            return Ok(());
+        }
         if version == 0 {
-            let tx = self.conn.transaction()?;
             tx.execute_batch(
                 r#"
             CREATE TABLE spaces (
@@ -124,13 +140,11 @@ impl Store {
             PRAGMA user_version = 1;
             "#,
             )?;
-            tx.commit()?;
         }
         // v2: a durable, monotonic revision for Spaces, Sessions, AgentRuns
         // and persisted pane layouts. Triggers catch writes from *every*
         // connection, including an independent CLI process.
         if version < 2 {
-            let tx = self.conn.transaction()?;
             tx.execute_batch(
                 "CREATE TABLE workspace_revision (
                     id INTEGER PRIMARY KEY CHECK(id=1),
@@ -159,8 +173,8 @@ impl Store {
                 }
             }
             tx.execute_batch("PRAGMA user_version = 2;")?;
-            tx.commit()?;
         }
+        tx.commit()?;
         Ok(())
     }
 }
