@@ -1187,6 +1187,7 @@ mod tests {
     use super::*;
     use crate::invite::DEFAULT_INVITE_TTL_MS;
     use crate::keys::InMemoryDeviceKeyStore;
+    use crate::trust::DEFAULT_GRANT_TTL_MS;
     use ukk_protocol::Scope;
 
     const NOW: i64 = 1_000_000;
@@ -1384,6 +1385,59 @@ mod tests {
             pending.await_approval(&oversized, NOW + 40),
             Err(PairingError::FrameTooLarge { .. })
         ));
+    }
+
+    #[test]
+    fn host_rejects_ack_for_another_device() {
+        let mut host = PairingHost::new(
+            HostId::new("host-1").unwrap(),
+            StaticKeypair::generate().unwrap(),
+        );
+        let invite = host
+            .create_invite(
+                RelayUrl::parse("https://relay.example.invalid").unwrap(),
+                NOW,
+                DEFAULT_INVITE_TTL_MS,
+            )
+            .unwrap();
+        let client = PairingClient::new(
+            invite,
+            Box::new(InMemoryDeviceKeyStore::new()),
+            &[Scope::SessionObserve],
+        )
+        .unwrap();
+        let device_id = client.device_id().clone();
+        let request = client.request_frame().unwrap();
+        let (hello, handshake) = client.start(NOW + 10).unwrap();
+        let attempt = host.accept(&request, &hello, NOW + 20).unwrap();
+        let mut pending_client = handshake
+            .finish(attempt.response_frame(), NOW + 30)
+            .unwrap();
+        let code = attempt.confirmation_code().digits();
+        let confirmed = attempt.confirm(&code).unwrap();
+        let pending = host
+            .approve(
+                confirmed,
+                &[Scope::SessionObserve],
+                DEFAULT_GRANT_TTL_MS,
+                NOW + 40,
+            )
+            .unwrap();
+
+        let mut transport = pending_client.transport.take().unwrap();
+        let ack = PairingAck {
+            v: PAIRING_PROTOCOL_VERSION,
+            device_id: DeviceId::new("other-device").unwrap(),
+        };
+        let encoded = serde_json::to_vec(&ack).unwrap();
+        let mut frame = vec![0_u8; encoded.len() + AEAD_TAG_BYTES];
+        let len = transport.write_message(&encoded, &mut frame).unwrap();
+        frame.truncate(len);
+        assert!(matches!(
+            host.complete(pending, &frame, NOW + 50),
+            Err(PairingError::AckInvalid)
+        ));
+        assert!(host.trust().status(&device_id).is_none());
     }
 
     #[test]

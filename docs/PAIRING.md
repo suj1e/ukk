@@ -255,7 +255,7 @@ Notable transitive crates: `curve25519-dalek` 4.1.3 (BSD-3-Clause),
 
 ## What the tests prove
 
-`crates/remote/tests` (61 tests including unit tests):
+`crates/remote/tests` (62 tests including unit tests):
 
 * invite round-trip, strict unknown/missing field rejection, oversized and
   trailing input, unsafe relay schemes, secret redaction and zeroize-on-demand;
