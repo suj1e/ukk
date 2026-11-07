@@ -1,7 +1,7 @@
 //! Safe, read-only local IPC adapter for ukk Agent Host.
 //!
-//! The Host's current JSON-RPC Unix socket is a bootstrap interface, not the
-//! versioned remote protocol. Do not expose this socket on a TCP listener.
+//! This bootstrap IPC is local only: Unix sockets on macOS/Linux, a private
+//! per-user Named Pipe on Windows. It is not the public remote protocol.
 //! A connection is opened for every request and is bounded by time and size.
 
 use serde_json::{json, Value};
@@ -9,8 +9,10 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::error::Error;
 use std::fmt;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io::{BufReader, Read, Write};
+#[cfg(windows)]
+pub mod windows_pipe;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -257,6 +259,12 @@ impl HostClient {
         Self { path: path.into() }
     }
 
+    #[cfg(windows)]
+    pub fn from_env() -> Self {
+        Self::new(windows_pipe::pipe_name().unwrap_or_default())
+    }
+
+    #[cfg(unix)]
     pub fn from_env() -> Self {
         let path = env::var_os("UKK_SOCKET")
             .map(PathBuf::from)
@@ -348,7 +356,46 @@ impl HostClient {
         })
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn request_with(&self, method: &str, params: Value, _timeout: Duration) -> Result<Value, HostError> {
+        // Named Pipe endpoint has an explicit same-user ACL; no TCP fallback.
+        let mut stream = windows_pipe::open_client()?;
+        serde_json::to_writer(
+            &mut stream,
+            &json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}),
+        )?;
+        stream.write_all(b"\n")?;
+        stream.flush()?;
+        let mut reader = BufReader::new(stream);
+        let mut bytes = Vec::with_capacity(2048);
+        loop {
+            let mut byte = [0u8; 1];
+            if reader.read(&mut byte)? == 0 {
+                return Err(HostError::Protocol("Host pipe closed before full response".into()));
+            }
+            bytes.push(byte[0]);
+            if bytes.len() > MAX_REPLY_BYTES {
+                return Err(HostError::Protocol("Host reply exceeded size cap".into()));
+            }
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        let reply: Value = serde_json::from_slice(&bytes)?;
+        if reply.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+            || reply.get("id") != Some(&json!(1))
+        {
+            return Err(HostError::Protocol("invalid Host JSON-RPC reply".into()));
+        }
+        if let Some(error) = reply.get("error") {
+            return Err(HostError::Remote(error.clone()));
+        }
+        reply.get("result").cloned().ok_or_else(|| {
+            HostError::Protocol("Host reply missing result".into())
+        })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn request_with(&self, _method: &str, _params: Value, _timeout: Duration) -> Result<Value, HostError> {
         Err(HostError::UnsupportedPlatform)
     }
