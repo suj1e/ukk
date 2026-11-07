@@ -45,6 +45,12 @@ flowchart TB
 
 **核心关系：** `Host → Spaces → Sessions → AgentRuns → herdr-core TerminalRefs`。Tabs/Panes 仅控制视图；关闭窗口不会终止 Agent。控制协议与屏幕媒体链路分离。
 
+## Desktop platforms / 桌面跨平台
+
+**macOS、Windows、Linux 都是 ukk Desktop 的一等目标平台。** 同一套 Rust + GPUI 原生 UI，共用 Host 协议与 herdr-core Runtime。macOS 使用 Metal，Windows 使用 Win32/DirectWrite，Linux 使用 Wayland/X11。
+
+已加入三端构建检查，但还不能宣称三端已运行通过：当前 Unix Socket Host 路径仅适用于 macOS/Linux，Windows 尚需 Named Pipe 适配。详见 [跨平台支持矩阵](docs/PLATFORM_SUPPORT.md) 和 [Windows IPC Issue #4](https://github.com/suj1e/ukk/issues/4)。
+
 ## Product direction
 
 - **Multi-agent:** 动态 Agent 和子 Agent、并行会话，不预设固定角色流水线。
@@ -117,7 +123,7 @@ See [Live Runtime Sync](docs/LIVE_EVENTS.md) for state ownership, API envelope, 
 | [Roadmap](docs/ROADMAP.md) | 完整产品开发阶段和验收标准 |
 | [Development](docs/DEVELOPMENT.md) | 预期代码目录和工程验证步骤 |
 | [Runtime Spike 01](docs/RUNTIME_SPIKE.md) | Rust Host 原型、命令、模拟测试和真实 Mac 验收项 |
-| [Desktop Spike 02](docs/DESKTOP_SPIKE.md) | GPUI 原生窗口、真实终端状态、macOS 构建验收项 |
+| [Platform Support](docs/PLATFORM_SUPPORT.md) | macOS / Windows / Linux 一等桌面支持、OS 特定适配及测试清单 |\n| [Desktop Spike 02](docs/DESKTOP_SPIKE.md) | GPUI 原生窗口、真实终端状态、macOS 构建验收项 |
 | [Live Runtime Sync](docs/LIVE_EVENTS.md) | Host 实时订阅、事件缺口恢复、Desktop 自动刷新和测试 |
 | [Upstream References](docs/REFERENCES.md) | 官方依赖、许可和待确认事项 |
 | [ADR-0001](docs/adr/0001-platform-and-runtime.md) | GPUI + SwiftUI + herdr-core 的技术决策 |
