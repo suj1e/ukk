@@ -153,15 +153,23 @@ fn workspace_revision_tracks_all_metadata_writes_without_duplicate_retries() {
     let space = store.create_space("ukk", "/repo").unwrap();
     assert_eq!(store.workspace_revision().unwrap(), 1);
     let id = new_id();
-    let session = store.create_session_with_id(&space.id, "Demo", &id).unwrap();
+    let session = store
+        .create_session_with_id(&space.id, "Demo", &id)
+        .unwrap();
     // One INSERT into sessions and another into session_layouts.
     assert_eq!(store.workspace_revision().unwrap(), 3);
-    store.create_session_with_id(&space.id, "Demo", &id).unwrap();
+    store
+        .create_session_with_id(&space.id, "Demo", &id)
+        .unwrap();
     assert_eq!(store.workspace_revision().unwrap(), 3);
-    store.bind_agent(&session.id, "core-1", "t9", "codex", None).unwrap();
+    store
+        .bind_agent(&session.id, "core-1", "t9", "codex", None)
+        .unwrap();
     assert_eq!(store.workspace_revision().unwrap(), 4);
     let layout = store.get_layout(&session.id).unwrap();
-    store.set_layout(&session.id, layout.revision, layout.root).unwrap();
+    store
+        .set_layout(&session.id, layout.revision, layout.root)
+        .unwrap();
     assert_eq!(store.workspace_revision().unwrap(), 5);
     store.archive_session(&session.id).unwrap();
     assert_eq!(store.workspace_revision().unwrap(), 6);
@@ -195,14 +203,16 @@ fn schema_v1_upgrades_without_losing_sessions() {
     // Recreate the shape of a deployed v1 DB for the migration test.
     for table in ["spaces", "sessions", "agent_runs", "session_layouts"] {
         for suffix in ["insert", "update", "delete"] {
-            original.conn.execute_batch(&format!(
-                "DROP TRIGGER ukk_rev_{table}_{suffix};"
-            )).unwrap();
+            original
+                .conn
+                .execute_batch(&format!("DROP TRIGGER ukk_rev_{table}_{suffix};"))
+                .unwrap();
         }
     }
-    original.conn.execute_batch(
-        "DROP TABLE workspace_revision; PRAGMA user_version=1;"
-    ).unwrap();
+    original
+        .conn
+        .execute_batch("DROP TABLE workspace_revision; PRAGMA user_version=1;")
+        .unwrap();
     drop(original);
 
     let upgraded = Store::open(&path).unwrap();
