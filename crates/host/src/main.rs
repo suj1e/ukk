@@ -11,10 +11,10 @@ use broker::Broker;
 use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
-#[cfg(unix)]
 use std::io::{BufRead, BufReader, Read, Write};
-#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(windows)]
+use ukk_host_client::windows_pipe;
 
 use ukk_hc_client::HcClient;
 
@@ -66,9 +66,12 @@ fn execute() -> AppResult<()> {
         #[cfg(unix)]
         "serve" => serve(),
         #[cfg(windows)]
-        "serve" => Err("Windows Named Pipe Host transport is not implemented yet; see docs/PLATFORM_SUPPORT.md".into()),
+        "serve" => serve_windows(),
         #[cfg(windows)]
-        "request" => Err("Windows Named Pipe client transport is not implemented yet; see docs/PLATFORM_SUPPORT.md".into()),
+        "request" => {
+            let method = env::args().nth(2).unwrap_or_else(|| "host.ping".into());
+            request_windows(&method)
+        },
         #[cfg(unix)]
         "request" => {
             let method = env::args().nth(2).unwrap_or_else(|| "host.ping".into());
@@ -90,10 +93,10 @@ fn print_help() {
           list               Print hc terminal snapshot\n\
           schema             Print hc OpenRPC schema\n\
           watch              Watch hc events/heartbeat/missed notifications\n\
-          serve              Start a private, local Unix socket (macOS/Linux)\n\
-          request [method]   Query the local Host socket (default host.ping)\n\
-        Supported Host RPC methods: host.ping, terminal.list\n\
-        Environment: UKK_HC_BIN (hc executable), UKK_SOCKET (local socket path)"
+          serve              Start local IPC (Unix socket / Windows Named Pipe)\n\
+          request [method]   Query local Host RPC (default host.ping)\n\
+        Supported Host RPC methods: host.ping, terminal.list, host.snapshot, host.wait\n\
+        Environment: UKK_HC_BIN; UKK_SOCKET applies to macOS/Linux only"
     );
 }
 
@@ -144,18 +147,15 @@ fn serve() -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn serve_one(stream: UnixStream, broker: Arc<Broker>) -> AppResult<()> {
+// This handler is shared by UnixStream (macOS/Linux) and Win32 Named Pipe
+// File handles. Every client uses the same read-only JSON-RPC dispatcher.
+fn serve_one<S: Read + Write>(mut stream: S, broker: Arc<Broker>) -> AppResult<()> {
     const MAX_LINE: usize = 64 * 1024;
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut writer = stream;
     loop {
-        // Bounded line read: cap allocation before the newline arrives.
-        // BufReader makes the single-byte reads cheap in this bootstrap path.
         let mut bytes = Vec::new();
         loop {
             let mut byte = [0u8; 1];
-            if reader.read(&mut byte)? == 0 {
+            if stream.read(&mut byte)? == 0 {
                 if bytes.is_empty() {
                     return Ok(());
                 }
@@ -172,7 +172,7 @@ fn serve_one(stream: UnixStream, broker: Arc<Broker>) -> AppResult<()> {
         let input: Value = match serde_json::from_slice(&bytes) {
             Ok(value) => value,
             Err(_) => {
-                write_json(&mut writer, &json!({
+                write_json(&mut stream, &json!({
                     "jsonrpc":"2.0","id":null,
                     "error":{"code":-32700,"message":"invalid JSON"}
                 }))?;
@@ -180,11 +180,31 @@ fn serve_one(stream: UnixStream, broker: Arc<Broker>) -> AppResult<()> {
             }
         };
         let result = handle_request(&input, &broker);
-        write_json(&mut writer, &result)?;
+        write_json(&mut stream, &result)?;
     }
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+fn serve_windows() -> AppResult<()> {
+    let name = windows_pipe::pipe_name()?;
+    let broker = Broker::new();
+    broker.start();
+    println!("ukk Host listening on local Named Pipe {name}");
+    println!("Read-only methods: host.ping, terminal.list, host.snapshot, host.wait");
+    let mut first = true;
+    loop {
+        let pipe = windows_pipe::create_server_pipe(&name, first)?;
+        first = false;
+        windows_pipe::accept_client(&pipe)?;
+        let broker = Arc::clone(&broker);
+        std::thread::spawn(move || {
+            if let Err(error) = serve_one(pipe, broker) {
+                eprintln!("ukk Host named-pipe client error: {error}");
+            }
+        });
+    }
+}
+
 fn handle_request(req: &Value, broker: &Broker) -> Value {
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     if req.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
@@ -232,7 +252,6 @@ fn handle_request(req: &Value, broker: &Broker) -> Value {
     }
 }
 
-#[cfg(unix)]
 fn write_json<W: Write>(writer: &mut W, response: &Value) -> AppResult<()> {
     serde_json::to_writer(&mut *writer, response)?;
     writer.write_all(b"\n")?;
@@ -242,23 +261,43 @@ fn write_json<W: Write>(writer: &mut W, response: &Value) -> AppResult<()> {
 
 #[cfg(unix)]
 fn request(method: &str) -> AppResult<()> {
-    let mut stream = UnixStream::connect(socket_path()?)?;
+    let stream = UnixStream::connect(socket_path()?)?;
+    request_stream(stream, method)
+}
+
+#[cfg(windows)]
+fn request_windows(method: &str) -> AppResult<()> {
+    let pipe = windows_pipe::open_client()?;
+    request_stream(pipe, method)
+}
+
+fn request_stream<S: Read + Write>(mut stream: S, method: &str) -> AppResult<()> {
     write_json(
         &mut stream,
         &json!({"jsonrpc":"2.0","id":1,"method":method,"params":{}}),
     )?;
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
-        return Err("ukk Host socket closed before response".into());
+    // A bounded response protects the developer command from excessive data.
+    const MAX_BYTES: usize = 4 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        if stream.read(&mut byte)? == 0 {
+            return Err("ukk Host closed before response".into());
+        }
+        bytes.push(byte[0]);
+        if bytes.len() > MAX_BYTES {
+            return Err("Host response too large".into());
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
     }
-    let value: Value = serde_json::from_str(&line)?;
+    let value: Value = serde_json::from_slice(&bytes)?;
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
 
 #[cfg(test)]
-#[cfg(unix)]
 mod tests {
     use super::*;
 
