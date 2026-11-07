@@ -37,7 +37,9 @@ impl fmt::Display for StoreError {
             Self::Invalid(s) => write!(f, "invalid input: {s}"),
             Self::NotFound(s) => write!(f, "not found: {s}"),
             Self::Conflict => write!(f, "layout revision conflict; reload before retrying"),
-            Self::UnsupportedVersion(v) => write!(f, "database schema version {v} is newer than supported"),
+            Self::UnsupportedVersion(v) => {
+                write!(f, "database schema version {v} is newer than supported")
+            }
         }
     }
 }
@@ -45,16 +47,24 @@ impl fmt::Display for StoreError {
 impl Error for StoreError {}
 
 impl From<rusqlite::Error> for StoreError {
-    fn from(e: rusqlite::Error) -> Self { Self::Sql(e) }
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Sql(e)
+    }
 }
 impl From<serde_json::Error> for StoreError {
-    fn from(e: serde_json::Error) -> Self { Self::Json(e) }
+    fn from(e: serde_json::Error) -> Self {
+        Self::Json(e)
+    }
 }
 impl From<std::io::Error> for StoreError {
-    fn from(e: std::io::Error) -> Self { Self::Io(e) }
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
 }
 impl From<LayoutError> for StoreError {
-    fn from(e: LayoutError) -> Self { Self::Layout(e) }
+    fn from(e: LayoutError) -> Self {
+        Self::Layout(e)
+    }
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
