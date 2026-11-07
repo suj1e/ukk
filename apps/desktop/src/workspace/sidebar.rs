@@ -19,6 +19,7 @@ impl Workspace {
             .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
             .hover(|style| style.bg(rgb(SURFACE)))
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.cancel_split_drag(cx);
                 this.selected_space = Some(id.clone());
                 this.selected_session = this
                     .domain
@@ -49,6 +50,7 @@ impl Workspace {
             .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
             .hover(|style| style.bg(rgb(SURFACE)))
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.cancel_split_drag(cx);
                 this.selected_session = Some(id.clone());
                 this.selected = None;
                 cx.notify();
@@ -96,6 +98,7 @@ impl Workspace {
             .bg(rgb(if active { 0xe9ebf7 } else { WHITE }))
             .hover(|style| style.bg(rgb(if active { 0xe9ebf7 } else { SURFACE })))
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.cancel_split_drag(cx);
                 this.selected = Some(address.clone());
                 this.selected_session = None;
                 this.tab = DetailTab::Overview;
