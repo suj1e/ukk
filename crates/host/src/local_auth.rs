@@ -19,7 +19,9 @@ pub(crate) struct LocalAuth {
 impl LocalAuth {
     pub fn install() -> io::Result<Self> {
         let path = HostClient::from_env().mutation_token_path();
-        let parent = path.parent().ok_or_else(|| io::Error::other("invalid token file path"))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| io::Error::other("invalid token file path"))?;
         fs::create_dir_all(parent)?;
         let secret = format!("{}:{}", new_id(), new_id());
         let tmp = unique_temp(&path);
@@ -75,7 +77,9 @@ impl LocalAuth {
 
     #[cfg(test)]
     pub(crate) fn test() -> Self {
-        Self { secret: "test-capability-do-not-use-as-real-credential".to_owned() }
+        Self {
+            secret: "test-capability-do-not-use-as-real-credential".to_owned(),
+        }
     }
 
     #[cfg(test)]
