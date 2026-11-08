@@ -144,6 +144,7 @@ Host 已增加基于 SQLite v2 变更版本的 `workspace.state` / `workspace.wa
 | Document | Contents |
 |---|---|
 | [中文版总览](docs/overview.zh-CN.md) | 产品方向、中文架构图、对象关系 |
+| [v1 Completion Goal](docs/goals/v1-complete.md) | 最终范围、未签名安装包/IPA 与验收门槛 |
 | [Product Requirements](docs/requirements.md) | 完整功能矩阵、用户场景和体验原则 |
 | [Architecture](docs/tech-design.md) | 端到端架构、组件边界和部署 |
 | [Workspace Live Sync](docs/spikes/workspace-live-sync.md) | SQLite 跨进程版本和 GPUI 元数据自动同步 |

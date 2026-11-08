@@ -28,6 +28,7 @@ REQUIRED = [
     ".github/PULL_REQUEST_TEMPLATE.md",
     ".github/ISSUE_TEMPLATE/bug.yml",
     ".github/ISSUE_TEMPLATE/feature.yml",
+    "docs/goals/v1-complete.md",
     "docs/requirements.md",
     "docs/tech-design.md",
     "docs/coding-standard.md",
