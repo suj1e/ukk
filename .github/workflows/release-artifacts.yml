@@ -9,6 +9,8 @@ name: Unsigned release artifacts
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   pull_request:
@@ -130,3 +132,27 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 14
+
+      - name: Write package summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python=python3
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            python=python
+          fi
+          "${python}" - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import hashlib, os, pathlib
+          files = sorted(pathlib.Path("dist").iterdir())
+          print("### Unsigned desktop package")
+          print()
+          print(f"- version: `{os.environ['UKK_BUILD_VERSION']}`")
+          print(f"- commit: `{os.environ['UKK_BUILD_COMMIT']}`")
+          print(f"- target: `{os.environ['UKK_PACKAGE_TARGET']}`")
+          print()
+          print("| file | bytes | sha256 |")
+          print("| --- | ---: | --- |")
+          for path in files:
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              print(f"| `{path.name}` | {path.stat().st_size} | `{digest}` |")
+          PY

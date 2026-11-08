@@ -8,7 +8,9 @@
 The `Unsigned release artifacts` workflow
 (`.github/workflows/release-artifacts.yml`) builds `ukk-host` and `ukk-desktop`
 in release mode on macOS, Windows and Linux, packages one archive per OS and
-uploads it as a GitHub Actions artifact. It never creates a GitHub Release and
+uploads it as a GitHub Actions artifact. Every push to `main`, every `v*` tag
+and manual dispatch produces downloadable unsigned packages; pull requests run
+it only when packaging inputs change. It never creates a GitHub Release and
 never uploads to an external service.
 
 ## What is in an archive
@@ -61,7 +63,7 @@ Version resolution in CI:
 | Trigger | Version string |
 |---|---|
 | Tag `v1.2.3` | `1.2.3` |
-| `workflow_dispatch` or pull request | `<package version>-dev.<first 7 sha chars>` |
+| `main` push, `workflow_dispatch` or pull request | `<package version>-dev.<first 7 sha chars>` |
 
 The workflow reads the package version from `crates/host/Cargo.toml`, derives
 the Rust host triple with `rustc -vV`, and uses the runner's actual OS/arch.
