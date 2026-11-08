@@ -76,7 +76,7 @@ Desktop: left sidebar Spaces / Agents / Sessions / Git; center native conversati
 - No lost running agents when the Desktop UI closes or crashes. Closing a view detaches; only an explicit user action stops execution.
 - Idempotent commands, resubscribe/replay after disconnect, and correct visibility of offline/stale state.
 - Multi-client observation with explicit single-writer arbitration for sensitive control streams.
-- Terminal provenance is explicit: human input and automatic Agent input are source-tagged on the same write path, never inferred by sniffing bytes. Observers do not write or resize. Backpressure is bounded.
+- Terminal provenance is explicit in the contract: human input and automatic Agent input must be source-tagged on the same write path, never inferred by sniffing bytes. The current MyGo plugin exposes one write path and uses herdr-core's legacy DATA path for both; observers do not write or resize, and backpressure is bounded. Source tagging remains an implementation requirement.
 - Long Markdown must render incrementally and bounded; do not assume an unresolved upstream long-document issue is fixed.
 - Accessibility, Dynamic Type where applicable, keyboard shortcuts, dark mode and reduced motion support.
 - No outbound remote access, mic/audio capture or screen capture until the user enables and authorizes it.

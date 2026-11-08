@@ -66,7 +66,7 @@ flowchart TB
 | Information | Authoritative component | Notes |
 |---|---|---|
 | PTY, process tree, terminal identity, reported program status | herdr-core | Survives closing ukk windows. Status uses structured reporting (OSC 7501); never inferred from ANSI. |
-| Terminal surface, resize intent, input provenance | Desktop UI → bridge → herdr-core | The UI is an observer/controller client; it does not own the process. Human and automatic input share one `Conn.Write`, so provenance is source-tagged, never byte-sniffed. |
+| Terminal surface, resize intent, input provenance | Desktop UI → bridge → herdr-core | The UI is an observer/controller client; it does not own the process. MyGo's terminal plugin exposes one `Conn.Write`, so the Desktop currently sends both human keys and terminal-generated replies as DATA (herdr-core's legacy path); bytes are never sniffed. `hc-client` exposes `AutomaticWrite` for a future source-tagged hook. |
 | Workspaces, app sessions, agent-run metadata, layouts | Desktop `internal/workspace` | One atomic JSON document with revision CAS; the bridge serves a read-only mirror to remote clients. |
 | Device trust, grants, pairing state | `ukk-bridge` | Durable trust JSON plus live scope/TTL checks; the Desktop can grant or revoke explicitly. |
 | Provider turns, tool calls, approvals, capabilities | Provider adapter inside the bridge | Only explicit provider semantics; unsupported features degrade to terminal output, never fabricated. |
@@ -131,7 +131,7 @@ The Go tool is pinned to MyGo v0.8.3 (release SHA `5add3817c74bb7505d0b473bc5fb2
 1. **External runtime.** Talk to herdr-core through its documented JSON-RPC/OpenRPC surfaces and framed terminal streams, pinned to v0.1.18 for the first acceptance. Compatibility tests use a recorded schema and a real daemon; do not invent operations the upstream version does not expose.
 2. **Process ownership.** Closing a Desktop window, Pane, Tab or Session detaches and must not call stop/kill. Only explicit user intent with the agent-control capability may stop execution.
 3. **Terminal surface.** Render with MyGo's native UI terminal plugin (libghostty-vt through purego runtime libraries). The terminal plugin is a view over the herdr-core terminal, not a second process authority. An external connection supports detach without ending the process.
-4. **Input provenance.** Human input and automatic Agent input are combined on one `Conn.Write`; every write carries a source tag (`HUMAN_INPUT` or `AUTOMATIC_INPUT`) from the adapter layer. Never infer the source by inspecting bytes.
+4. **Input provenance.** Human input and automatic Agent input are combined by the MyGo terminal plugin on one `Conn.Write`. The current adapter uses herdr-core's legacy DATA path for both and never inspects bytes; `AutomaticWrite` (kind 6) is implemented in `hc-client` but not yet reachable through the plugin hook. Observers remain read-only.
 5. **Observer safety.** An observer connection never writes and never resizes. A controller lease is explicit, single-writer and expiring.
 6. **Sizing and backpressure.** Apply the core's RESIZE result before painting the terminal surface; do not paint a stale grid. Use bounded credit/flow control in both directions, drop or coalesce only under an explicit policy, and surface degraded state instead of blocking the UI thread.
 7. **No ANSI semantics.** Terminal text is presentation. Tool calls, plans and approvals come only from the active provider adapter.

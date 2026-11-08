@@ -263,8 +263,10 @@ manifest validation are defined in [plugins](plugins.md).
 **Contract; real herdr-core attach, provenance tagging and observer rejection
 are not yet verified.**
 
-- Human input and automatic Agent input share one `Conn.Write`; each write is
-  tagged `HUMAN_INPUT` or `AUTOMATIC_INPUT` by the adapter. Provenance is never
+- Human input and automatic Agent input share one `Conn.Write`. The shipped
+  Desktop uses the legacy DATA path for both and never infers provenance by
+  inspecting bytes; `AutomaticWrite` exists in the client but the terminal
+  plugin has no source hook yet. Observers are read-only. Provenance is never
   inferred by inspecting bytes.
 - An observer attachment never writes and never resizes. A controller lease is
   explicit, single-writer and expiring; takeover is visible.
