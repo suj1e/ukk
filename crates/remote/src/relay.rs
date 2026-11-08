@@ -8,7 +8,7 @@
 //! protocol and no interoperability is claimed: alma-relay multiplexes HTTP
 //! requests and bridged WebSockets (`register`/`registered`, `hreq`/`hres`,
 //! `wopen`/`wmsg`, …), while this envelope carries opaque per-session frames.
-//! See [docs/PAIRING.md](../../../docs/PAIRING.md) for the exact audit record
+//! See [docs/subsystems/pairing.md](../../../docs/subsystems/pairing.md) for the exact audit record
 //! and gaps (frame format, authentication, TURN).
 //!
 //! ## Outbound-only rule

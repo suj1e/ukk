@@ -1,65 +1,42 @@
-# Engineering instructions for coding agents working on ukk
+# ukk agent routing
 
-Read [docs/OVERVIEW.zh-CN.md](docs/OVERVIEW.zh-CN.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md), [docs/PLUGINS.md](docs/PLUGINS.md) and [docs/SECURITY.md](docs/SECURITY.md) before implementing features.
+Start here, then follow only the pages relevant to the task.
 
-## Non-negotiable product decisions
+1. [Requirements](docs/requirements.md) — product scope and decisions.
+2. [Technical design](docs/tech-design.md) — architecture and ownership.
+3. [Coding standard](docs/coding-standard.md) — quality gate and commands.
+4. [Status](docs/status.md) and [roadmap](docs/roadmap.md) — what is verified and what is claimable.
+5. [Subsystem contracts](docs/subsystems/) — Host, domain, protocol, security, Desktop, omp, plugins, iOS boundary.
+6. [Runbooks](docs/runbooks/) — Host lifecycle, Windows IPC, release, recovery.
+7. [Review](REVIEW.md), [contributing](CONTRIBUTING.md), [lessons](LESSONS.md) — process and evidence.
 
-1. This is **Route B**: build a new Rust/GPUI Desktop. Do not fork or copy herdr-app UI.
-2. Use herdr-core as the persistent Agent terminal/process runtime; do not rewrite that functionality.
-3. iOS is native SwiftUI; do not replace with embedded WebView or force GPUI onto iOS.
-4. Multi-agent is dynamic; never hard-code Planner/Coder/Reviewer/Tester as a workflow.
-5. Space / ukk Session / AgentRun / TerminalRef / Pane are distinct entities with distinct lifecycles.
-6. UI window closing must not terminate ongoing agents.
-7. Remote Screen is a **small, optional floating session plugin** that expands temporarily, not a top-level mode or standalone product.
-8. Pairing/authorization, Agent control and screen control are separate; no implicit access escalation.
-9. Relay carries control/signalling, not raw video frames; screen media uses independent low-latency transport.
-10. Prefer typed structured Agent events; never infer approvals/tool execution from arbitrary terminal output.
+## Non-negotiable
 
-## Agent process ownership (omp RPC)
+- Build a new Rust/GPUI Desktop; never fork or copy herdr-app UI.
+- herdr-core owns persistent terminals/Agents. ukk Host owns product metadata and authorization.
+- Closing a Pane/Tab/Session/window must never signal an Agent or terminal.
+- Space, Session, AgentRun, TerminalRef and Pane are distinct entities with distinct lifetimes.
+- Never infer approvals, turns or tool execution from terminal text; use typed events only.
+- Remote Screen is an opt-in floating Session plugin. Pairing, Agent control and screen control are separate grants.
+- Android, Web and TUI are deferred. iOS stays native SwiftUI.
+- Do not widen remote/local mutation surfaces, capture or input permissions without explicit user approval.
 
-- The **Host owns every omp RPC child**. The Desktop, iOS client and plugin helpers never spawn, signal, wait for or reparent an omp process.
-- Closing a Pane/Tab/window, switching Sessions or dropping a local client connection must never stop, kill or detach an omp child. Only an explicit `omp.abort` (cancels the active turn), a capability-gated `omp.stop` (wedged-turn recovery kill), or Host shutdown terminates work.
-- `omp.start`, `omp.prompt`, `omp.abort` and `omp.stop` require the separate, default-off **agent-control** capability with `request_id` and `intent: "user"`. `omp.snapshot` and `omp.wait` are read-only and require no capability. `omp.prompt` request ids are idempotent (bounded); the prompt turn gate is atomic.
-- Never synthesize omp messages, turns, tool calls or approvals, and never infer them from terminal text. Render only typed RPC frames; unsupported/malformed frames are reported truthfully.
-- Host restart does not reattach to a running omp session in the current slice. Do not fake resume; start a new session.
-- Keep the Host omp timeline bounded (400 entries, 8 KiB per entry, 512 KiB total) and report truncation instead of growing memory.
-- See [docs/OMP_RPC.md](docs/OMP_RPC.md) for the wire contract, error codes and NOT VERIFIED items.
+## Work loop
 
-## Active delivery scope
+1. Take one roadmap task or narrowly scoped issue; check open PRs first.
+2. Create a topic branch; keep `main` releasable.
+3. Read the relevant subsystem contract before editing.
+4. Add tests for behavior, boundaries, security and process lifetime.
+5. Run `just check` (or the equivalent commands in DEVELOPMENT.md); fix failures.
+6. Open a PR with exact CI evidence. Distinguish source, CI and real-device verification.
+7. Update status/roadmap/runbooks when behavior or a claim changes.
+8. Merge only after the gate in REVIEW.md passes; delete the branch.
 
-- Desktop: **macOS, Windows and Linux are all first-class GPUI targets**, with one shared UI codebase and OS-specific Host transports.
-- Mobile: **SwiftUI iOS / iPadOS** stays in active scope for QR pairing, session access, approvals and floating Remote Screen.
-- **Android, Web and TUI are deferred.** Do not scaffold their applications or schedule their implementation unless explicitly requested. Keep protocol and domain boundaries extensible.
+## Never
 
-## Workspace persistence rules
+- Never fabricate test output, CI status, screenshots or real-device acceptance.
+- Never add placeholder implementations that claim a feature works.
+- Never commit credentials, tokens, private keys or user source.
+- Never mask a failing or flaky check by retrying until green.
 
-- `ukk-domain` defines persisted Space / Session / AgentRun and Pane identity and tree validation. `ukk-store` owns SQLite schema and optimistic layout revision updates. Do not write SQLite directly from GPUI.
-- `AgentRun` is a product-level binding to `core_id + terminal_address`. Creating or archiving metadata never launches or terminates a herdr-core process.
-- **Do not auto-assign orphan terminals to arbitrary Sessions.** Bind only with verified core identity and user intent.
-- Closing a Pane, switching a Session, archiving a Session, or quitting GPUI must not send any terminal-stop/kill signal.
-- Current local Host RPC `workspace.snapshot` is **read-only**. Do not add new mutation methods before local permissions and peer validation are designed.
-- The local versioned protocol stream (`~/.ukk/run/agent-host.protocol`) is also **read-only** in the current slice. It carries handshake, snapshot/replay/live events and ACKs only. Do not expose `session_create` or any other mutation there without a protocol-level local capability; workspace mutations remain on the rotated-capability JSON-RPC path.
-- Run `cargo test --workspace` including SQLite reopen, CAS conflicts and cross-Session Agent reference tests. See [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md).
-
-## Code quality is part of feature completion
-
-- Read [Engineering Standards](docs/ENGINEERING.md). Use a topic branch and PR with actual CI evidence rather than committing unverified feature stubs directly to `main`.
-- Keep `main.rs` entrypoints small; put GPUI state, actions, panes, navigation and runtime inspector in focused modules. Keep SQLite migrations, records, layouts and snapshots separate.
-- Run Rustfmt, tests and Clippy in the root workspace; format and `cargo check` the independent GPUI workspace on macOS/Windows/Linux.
-- Review any module growing beyond ~300 lines for multiple responsibilities; refactor by ownership, not arbitrary file size. Preserve API contracts and process-lifetime guarantees.
-- Distinguish **source committed** from **CI passing** and **real device verified**. Never claim the latter without matching evidence.
-
-## Working practices
-
-- Verify upstream APIs, versions, licenses and schemas before adding dependencies.
-- Call out unknowns, implement testable contracts, keep docs and diagrams updated.
-- Avoid writing placeholder implementations that claim features already work.
-- Require explicit tests for security controls, device revocation, cursor gaps, and plugin permissions.
-- Protect user code and credentials: never commit local keys or tokens.
-- Match approved Design Direction v0.1: light native multi-pane desktop, mobile chat-first, floating screen tile.
-
-## Before declaring a feature complete
-
-Describe the user journey; provide reproducible build/run steps; show tests; identify platform constraints; verify offline/reconnect and permission-denial cases where relevant.
-
-See [docs/status.md](docs/status.md) for verified implementation status and [docs/roadmap.md](docs/roadmap.md) for claimable Agent task IDs and milestones. Initial code should build a small vertical slice rather than introducing every module as a stub.
+Product decisions live in [docs/requirements.md](docs/requirements.md); architecture in [docs/tech-design.md](docs/tech-design.md). If they conflict with this page, the product/architecture documents win.

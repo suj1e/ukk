@@ -22,4 +22,4 @@ Sources checked on 2026-11-07. Pin exact revisions before implementation. Upstre
 - WebRTC library, TURN deployment, codecs and video permissions on each OS.
 - License of ukk itself: **not yet chosen**. Do not assume that all upstream license terms transfer automatically.
 
-See [architecture](ARCHITECTURE.md) and [security](SECURITY.md).
+See [architecture](tech-design.md) and [security](subsystems/security.md).

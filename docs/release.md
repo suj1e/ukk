@@ -6,7 +6,7 @@
 > distribution or a Windows service.
 
 The `Unsigned release artifacts` workflow
-(`.github/workflows/release-artifacts.yml`) builds `ukk-host` and `ukk-desktop`
+(`.github/workflows/release.yml`) builds `ukk-host` and `ukk-desktop`
 in release mode on macOS, Windows and Linux, packages one archive per OS and
 uploads it as a GitHub Actions artifact. Every non-docs push to `main`, every
 `v*` tag and manual dispatch produces downloadable unsigned packages; docs-only
@@ -201,6 +201,17 @@ make `hc` available on `PATH` or via `UKK_HC_BIN`.
   runs nor verifies service registration. There is no LocalSystem service and
   no machine-wide install.
 
+## Release history
+
+| Date | Version / commit | Status |
+| --- | --- | --- |
+| 2026-11-08 | `0.1.0-dev.65d72db` | First continuous unsigned three-OS archives; macOS/Windows checksums verified, binaries report the commit. Development tooling only. |
+| 2026-11-08 | `0.1.0-dev.1b2d841` | First main-push unsigned packaging run; Linux/macOS/Windows jobs green. |
+| 2026-11-08 | `7461a39` | Initial unsigned release-artifact CI slice. |
+
+No signed, notarized or production release exists. Procedure and rollback:
+[release runbook](runbooks/release.md).
+
 ## What these artifacts do and do not guarantee
 
 Verified by this workflow when it is green:
@@ -250,5 +261,5 @@ The exact triple is taken from `rustc -vV` in each run and is recorded in
 `VERSION.txt`. Intel macOS and Windows arm64 are not built by this matrix; the
 same source is expected to compile there but those artifacts are NOT VERIFIED.
 
-Related: [Platform support](PLATFORM_SUPPORT.md), [Host lifecycle](HOST_LIFECYCLE.md),
-[Desktop spike](DESKTOP_SPIKE.md), [Engineering standards](ENGINEERING.md).
+Related: [Platform support](subsystems/platform-support.md), [Host lifecycle](runbooks/host-lifecycle.md),
+[Desktop spike](spikes/desktop-spike.md), [Engineering standards](coding-standard.md).

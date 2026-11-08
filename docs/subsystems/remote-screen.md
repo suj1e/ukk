@@ -321,7 +321,7 @@ external crate, network call, cryptography or platform API is added.
 **NOT VERIFIED:** real WebRTC/DTLS-SRTP negotiation, ICE gathering or
 connectivity checks, any contact with a STUN/TURN server, OS capture, encoder,
 iOS viewer, Host RPC/relay wiring, production TURN credential issuance, or a
-physical iPhone. The 3-OS workflow (`.github/workflows/rust-spike.yml`) covers
+physical iPhone. The 3-OS workflow (`.github/workflows/ci.yml`) covers
 `crates/**`; its result is authoritative only once the PR runs.
 
 ## macOS host implementation targets
@@ -383,4 +383,4 @@ The alma-relay candidate is for Host connection and signalling. It is **not** th
 
 High frame rate gaming, GPU passthrough, streaming multiple displays at once, hidden unattended surveillance, always-on capture. Full product can add audio and secure clipboard after security validation.
 
-See [plugin architecture](PLUGINS.md) and [pairing](PAIRING.md).
+See [plugin architecture](plugins.md) and [pairing](pairing.md).

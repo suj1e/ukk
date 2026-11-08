@@ -264,7 +264,7 @@ multiplexer would keep a per-session table, which is out of scope here.
 
 Source-inspected only at revision
 `06594179b7dc44a500e0c53e814314426bcb9241` (package version 1.3.0, MIT
-licensed); this is **not** a live compatibility test. Its `docs/PROTOCOL.md`
+licensed); this is **not** a live compatibility test. Its `docs/subsystems/protocol.md`
 describes:
 
 * Host/agent: outbound WSS `/agent?th=<tokenHash>`, first frame

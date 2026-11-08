@@ -347,7 +347,7 @@ Test coverage in `tests/fixtures.rs`:
 
 ## Related documents
 
-- [Architecture](ARCHITECTURE.md)
-- [Protocol](PROTOCOL.md)
-- [Security](SECURITY.md)
-- [Roadmap R2](roadmap.md)
+- [Architecture](../tech-design.md)
+- [Protocol](protocol.md)
+- [Security](security.md)
+- [Roadmap R2](../roadmap.md)

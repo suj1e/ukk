@@ -85,4 +85,4 @@ cargo run --manifest-path apps/desktop/Cargo.toml
 
 Then change metadata with `ukk-host space-create`, `session-create`, `pane-split` or `pane-close` from another shell. In an actual GUI session, verify changes appear without pressing Refresh.
 
-References: [Workspace Persistence](WORKSPACE_PERSISTENCE.md), [Architecture](ARCHITECTURE.md), [Engineering Standards](ENGINEERING.md).
+References: [Workspace Persistence](workspace-persistence.md), [Architecture](../tech-design.md), [Engineering Standards](../coding-standard.md).

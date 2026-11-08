@@ -1,0 +1,54 @@
+name: Bug
+description: Something is broken or a verified claim is false.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include tokens, private keys, user source or unredacted logs.
+        Security-sensitive reports: describe the impact without exploit details.
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What happened, with exact commands or UI steps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Minimal steps, environment and commit SHA.
+      placeholder: |
+        1. ...
+        2. ...
+        commit: ...
+        OS: ...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, screenshots, failing test or CI link. Redact secrets.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Desktop (GPUI)
+        - Host / IPC
+        - Agent runtime (herdr-core / omp)
+        - Domain / SQLite
+        - Protocol / pairing / relay
+        - Plugins / Remote Screen
+        - iOS
+        - Docs / CI / packaging
+    validations:
+      required: true

@@ -59,7 +59,7 @@ cargo run -p ukk-host -- serve
 cargo run --manifest-path apps/desktop/Cargo.toml
 ```
 
-**Windows status:** Windows Named Pipe Host/server and client **source is committed** and Windows CI passed `cargo test --workspace` + Clippy at code commit `9b28bce` (run `42392340865`); real herdr-core acceptance also passed (run `42392340910`). Pipe I/O is overlapped with a bounded deadline and `CancelIoEx`; the server and client verify each other's process token SID. Real-device validation, cross-user denial and real service installation remain NOT VERIFIED. See [Host lifecycle](HOST_LIFECYCLE.md#evidence).
+**Windows status:** Windows Named Pipe Host/server and client **source is committed** and Windows CI passed `cargo test --workspace` + Clippy at code commit `9b28bce` (run `42392340865`); real herdr-core acceptance also passed (run `42392340910`). Pipe I/O is overlapped with a bounded deadline and `CancelIoEx`; the server and client verify each other's process token SID. Real-device validation, cross-user denial and real service installation remain NOT VERIFIED. See [Host lifecycle](../runbooks/host-lifecycle.md#evidence).
 
 **macOS/Linux status:** the Unix socket enforces a 0700 directory, 0600 socket, same-user peer credentials and flock-guarded stale-socket recovery. The hardening tests pass in macOS and Linux CI (run `42392340865`), and real herdr-core acceptance passes on all three OS images (run `42392340910`). Cross-user denial and real service installation remain NOT VERIFIED.
 
@@ -69,7 +69,7 @@ cargo run --manifest-path apps/desktop/Cargo.toml
 - [x] GPUI source build workflow matrix includes Ubuntu, macOS and Windows (with native Linux build dependencies).
 - [ ] Verify CI passes on each OS and fix platform-specific compiler/toolchain issues.
 - [x] Windows Named Pipe Host server/client and explicit current-user DACL (source committed; not yet verified).\n- [ ] Windows CI/test green, different-user ACL denial test, pipe hijack test, timeout/cancellation and peer verification as appropriate.
-- [ ] macOS/Linux/Windows real `install`/`uninstall`/`restart` evidence and cross-user denial (source + local macOS tests committed; see [Host lifecycle](HOST_LIFECYCLE.md)).
+- [ ] macOS/Linux/Windows real `install`/`uninstall`/`restart` evidence and cross-user denial (source + local macOS tests committed; see [Host lifecycle](../runbooks/host-lifecycle.md)).
 - [ ] End-to-end real hc snapshot/events from Windows Host and Linux Host, including reconnect and child Agent tree.
 - [ ] Window close/reopen persistence, permissions, keyboard shortcuts and accessibility tested on all platforms.
 - [ ] OS-specific Remote Screen privilege prompts, view/control separation and media compatibility.
@@ -78,6 +78,6 @@ cargo run --manifest-path apps/desktop/Cargo.toml
 
 **All three desktops are first-class targets.** Build verification starts on all three immediately. Feature implementation can be staged to reduce uncertainty: OS-independent Host/data protocol, cross-platform local IPC, then validated UI/runtime integration on each OS. The exact shipping schedule is tied to the platform acceptance checks, not to a Mac-only MVP assumption.
 
-Related documents: [Architecture](ARCHITECTURE.md), [Product](PRODUCT.md), [Runtime Spike](RUNTIME_SPIKE.md), [Desktop Spike](DESKTOP_SPIKE.md), [Remote Screen](REMOTE_SCREEN.md).
+Related documents: [Architecture](../tech-design.md), [Product](../requirements.md), [Runtime Spike](../spikes/runtime-spike.md), [Desktop Spike](../spikes/desktop-spike.md), [Remote Screen](remote-screen.md).
 
-Windows transport implementation and caveats: [Windows Named Pipe runbook](WINDOWS_IPC.md).
+Windows transport implementation and caveats: [Windows Named Pipe runbook](../runbooks/windows-ipc.md).

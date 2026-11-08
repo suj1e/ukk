@@ -6,7 +6,7 @@
 //! integration supplies transport lines and applies the emitted events with
 //! [`merge::MergeEngine`].
 //!
-//! See `docs/AGENT_ADAPTERS.md` for the provider/version matrix and the list of
+//! See `docs/subsystems/agent-adapters.md` for the provider/version matrix and the list of
 //! semantics that are intentionally Unsupported or NOT VERIFIED.
 
 pub mod adapter;

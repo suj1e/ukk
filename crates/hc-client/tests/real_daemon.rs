@@ -31,7 +31,7 @@ fn unique_name() -> String {
 }
 
 #[test]
-#[ignore = "requires a real herdr-core; see docs/RUNTIME_INTEGRATION.md"]
+#[ignore = "requires a real herdr-core; see docs/subsystems/host-runtime.md"]
 fn real_core_launch_attach_reconnect_interrupt_stop_remove() {
     let client = HcClient::new(binary());
     let name = unique_name();
@@ -121,7 +121,7 @@ fn real_core_launch_attach_reconnect_interrupt_stop_remove() {
 }
 
 #[test]
-#[ignore = "requires a real herdr-core; see docs/RUNTIME_INTEGRATION.md"]
+#[ignore = "requires a real herdr-core; see docs/subsystems/host-runtime.md"]
 fn real_core_reports_the_expected_schema_identity() {
     let client = HcClient::new(binary());
     let connection = client.framed().expect("real hc framed handshake");

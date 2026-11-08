@@ -60,7 +60,7 @@ There is **no TCP listener and no TCP fallback**.
 - **Different-user denial is NOT VERIFIED in CI.** The DACL/mode and peer-uid
   paths are implemented and tested within one user; cross-account tests require
   a second OS account and a documented runbook
-  ([HOST_LIFECYCLE.md](HOST_LIFECYCLE.md#different-user-denial-not-verified--runbook)).
+  ([HOST_LIFECYCLE.md](../runbooks/host-lifecycle.md#different-user-denial-not-verified--runbook)).
 - Windows runtime tests (including overlapped deadline cancellation and
   second-Host refusal) are committed but must be confirmed by Windows CI and a
   real machine before Windows evidence is claimed.
@@ -131,7 +131,7 @@ device's retry record or learn its result.
 
 `crates/remote` implements the pairing core and the outbound signalling
 boundary; a real WSS relay adapter, OS key storage and iOS UI are separate
-follow-ups. See [PAIRING.md](PAIRING.md) for the exact wire fields, prologue
+follow-ups. See [PAIRING.md](pairing.md) for the exact wire fields, prologue
 encoding, signalling envelope and dependency record.
 
 | Control | Implementation |
@@ -152,7 +152,7 @@ encoding, signalling envelope and dependency record.
 `transport::RelayConnection` is the only outbound seam, and
 `relay::RelayDriver` is the protocol state machine. The envelope is
 **ukk-internal** and is not claimed to be alma-relay-compatible; see the gap
-record in [PAIRING.md](PAIRING.md).
+record in [PAIRING.md](pairing.md).
 
 | Control | Implementation |
 | --- | --- |
@@ -272,7 +272,7 @@ boundary has the following consequences:
   writing a frame.
 - Dropping the attachment/connection only closes this view's stream and reaps
   the local `hc connect` helper. Terminal and Agent lifetime remain owned by
-  herdr-core. See [GPUI_TERMINAL.md](GPUI_TERMINAL.md).
+  herdr-core. See [GPUI_TERMINAL.md](desktop-terminal.md).
 - The Desktop is another same-user client of the herdr-core socket. It does
   not sandbox herdr-core and does not add authentication or per-client
   permissions; a process that can already reach the socket has account shell
@@ -490,4 +490,4 @@ working:
 
 Until a dedicated security address and policy are set, do **not** post vulnerabilities with secrets or exploit details into public issues. Repository owner should add a private disclosure channel before any public release.
 
-See [pairing](PAIRING.md), [remote screen](REMOTE_SCREEN.md), and [plugin architecture](PLUGINS.md).
+See [pairing](pairing.md), [remote screen](remote-screen.md), and [plugin architecture](plugins.md).

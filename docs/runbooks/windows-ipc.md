@@ -22,7 +22,7 @@ flowchart LR
 The Host service is a **user-scoped lifecycle** (launchd agent, systemd
 `--user`, Windows logon task), independent of Desktop windows. It is not the
 Agent runtime: stopping/restarting/uninstalling it never signals herdr-core.
-See [Host lifecycle](HOST_LIFECYCLE.md).
+See [Host lifecycle](host-lifecycle.md).
 
 The screen/keyboard control plugin and Relay mobile transport are **not** using
 this local IPC endpoint. No TCP fallback exists.
@@ -47,7 +47,7 @@ this local IPC endpoint. No TCP fallback exists.
   `windows_pipe.rs`.
 - `crates/host/tests/ipc_hardening.rs`: Unix framing, size, auth, quota,
   connection-cap, path-permission and stale/live-socket tests.
-- `.github/workflows/rust-spike.yml`: Windows, macOS and Ubuntu matrix.
+- `.github/workflows/ci.yml`: Windows, macOS and Ubuntu matrix.
 
 ## Security invariants
 
@@ -101,7 +101,7 @@ this local IPC endpoint. No TCP fallback exists.
 - **Different-user denial has not been executed in CI.** Windows DACL + SID
   code and Unix mode + peer-uid code are source-committed and unit/integration
   tested within one user; cross-account denial remains NOT VERIFIED. Runbook:
-  [HOST_LIFECYCLE.md#different-user-denial-not-verified--runbook](HOST_LIFECYCLE.md#different-user-denial-not-verified--runbook).
+  [HOST_LIFECYCLE.md#different-user-denial-not-verified--runbook](host-lifecycle.md#different-user-denial-not-verified--runbook).
 - A malicious process running as the **same user** shares the token identity;
   there is no Windows executable-signature identity or cross-integrity-level
   policy yet. Same-user code is inside the current trust domain.
@@ -127,7 +127,7 @@ ukk-host cleanup      # Unix stale-socket recovery, only after no live Host
 ```
 
 Artifact locations and restart semantics are documented in
-[HOST_LIFECYCLE.md](HOST_LIFECYCLE.md). `serve` never writes a plist/unit/task.
+[HOST_LIFECYCLE.md](host-lifecycle.md). `serve` never writes a plist/unit/task.
 
 ## Build and run on Windows
 
@@ -189,5 +189,5 @@ runtime, not evidence of live Agent integration.
 - [ ] Real herdr-core on Windows: child hierarchy, `serve` broker
       `connected: true`, and Host service restart leaving Agents alive.
 
-See [Host lifecycle](HOST_LIFECYCLE.md), [platform support](PLATFORM_SUPPORT.md),
-[live event stream](LIVE_EVENTS.md), and [security](SECURITY.md).
+See [Host lifecycle](host-lifecycle.md), [platform support](../subsystems/platform-support.md),
+[live event stream](../spikes/live-events.md), and [security](../subsystems/security.md).

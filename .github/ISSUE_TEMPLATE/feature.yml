@@ -1,0 +1,49 @@
+name: Feature
+description: Propose a scoped product or engineering change.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / user journey
+      description: What can a user not do today? Link the roadmap task if one exists.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Proposed scope
+      description: Smallest end-to-end behavior, contracts and explicit non-goals.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: Observable tests, CI/real-device evidence and permission-denial cases.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Desktop (GPUI)
+        - Host / IPC
+        - Agent runtime (herdr-core / omp)
+        - Domain / SQLite
+        - Protocol / pairing / relay
+        - Plugins / Remote Screen
+        - iOS
+        - Docs / CI / packaging
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Boundaries
+      options:
+        - label: Does not widen remote/local mutation, capture or input permissions without explicit approval.
+          required: true
+        - label: Closing a view must not stop an Agent or terminal.
+          required: true

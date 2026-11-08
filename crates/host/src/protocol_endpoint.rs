@@ -21,7 +21,7 @@
 //!
 //! Windows Named Pipe streaming for this endpoint is **NOT VERIFIED** and not
 //! implemented in this slice; the existing JSON-RPC Named Pipe in
-//! `transport.rs` is unaffected. See `docs/PROTOCOL.md`.
+//! `transport.rs` is unaffected. See `docs/subsystems/protocol.md`.
 
 use crate::broker::Broker;
 use crate::protocol_service::{

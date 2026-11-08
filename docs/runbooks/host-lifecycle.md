@@ -230,6 +230,6 @@ mode is the primary barrier.
 
 ## Related
 
-- [Windows Named Pipe transport](WINDOWS_IPC.md)
-- [Security architecture](SECURITY.md)
-- [Platform support](PLATFORM_SUPPORT.md)
+- [Windows Named Pipe transport](windows-ipc.md)
+- [Security architecture](../subsystems/security.md)
+- [Platform support](../subsystems/platform-support.md)

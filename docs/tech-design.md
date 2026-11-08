@@ -1,6 +1,6 @@
 # System architecture
 
-> Status: proposed design · 2026-11-07 · This document describes **ukk**, not an already implemented system.
+> Status: accepted design · 2026-11-08 · Implementation exists on `main`; see [status](status.md) for verified scope and [roadmap](roadmap.md) for remaining acceptance.
 
 ## Product boundary
 
