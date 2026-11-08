@@ -298,13 +298,15 @@ fn startup_timeout_kills_and_reaps_the_child() {
         OmpError::StartupTimeout { stderr_tail, .. } => stderr_tail,
         other => panic!("unexpected error: {other:?}"),
     };
-    let pid_line = stderr_tail
-        .iter()
-        .find(|line| line.starts_with("MOCK-PID "))
-        .expect("mock reports its pid on stderr");
-    let pid = pid_line.trim_start_matches("MOCK-PID ").trim().to_owned();
+    #[cfg(not(unix))]
+    let _ = stderr_tail;
     #[cfg(unix)]
     {
+        let pid_line = stderr_tail
+            .iter()
+            .find(|line| line.starts_with("MOCK-PID "))
+            .expect("mock reports its pid on stderr");
+        let pid = pid_line.trim_start_matches("MOCK-PID ").trim().to_owned();
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let alive = std::process::Command::new("/bin/kill")
@@ -337,14 +339,14 @@ fn reader_failure_kills_and_reaps_the_child() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(matches!(client.state(), OmpState::Exited { .. }));
-    let pid_line = client
-        .stderr_tail()
-        .into_iter()
-        .find(|line| line.starts_with("MOCK-PID "))
-        .expect("mock reports its pid");
-    let pid = pid_line.trim_start_matches("MOCK-PID ").trim().to_owned();
     #[cfg(unix)]
     {
+        let pid_line = client
+            .stderr_tail()
+            .into_iter()
+            .find(|line| line.starts_with("MOCK-PID "))
+            .expect("mock reports its pid");
+        let pid = pid_line.trim_start_matches("MOCK-PID ").trim().to_owned();
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let alive = std::process::Command::new("/bin/kill")
