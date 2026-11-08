@@ -66,6 +66,16 @@ jobs:
           go vet ./...
           go test ./...
 
+      - name: Build the macOS input helper
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          mkdir -p apps/desktop/resources/darwin
+          swiftc -O -target arm64-apple-macos13 -o "$RUNNER_TEMP/ukk-input-arm64" apps/desktop/tools/ukk-input/main.swift
+          swiftc -O -target x86_64-apple-macos13 -o "$RUNNER_TEMP/ukk-input-x86_64" apps/desktop/tools/ukk-input/main.swift
+          lipo -create "$RUNNER_TEMP/ukk-input-arm64" "$RUNNER_TEMP/ukk-input-x86_64" -output apps/desktop/resources/darwin/ukk-input
+          chmod +x apps/desktop/resources/darwin/ukk-input
+
       - name: Package
         working-directory: apps/desktop
         shell: bash

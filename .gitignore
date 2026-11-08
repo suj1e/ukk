@@ -21,3 +21,6 @@ build/
 apps/desktop/ukk
 apps/desktop/ukk-bridge
 apps/desktop/ukk-relay
+
+# Generated macOS input helper (built in CI or locally)
+apps/desktop/resources/*/ukk-input
