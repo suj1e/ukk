@@ -223,18 +223,27 @@ history or a relay payload through this contract.
 
 | Authority | Rule |
 |---|---|
-| `ViewGrant` | per device, Session and media session; absolute expiry ≤ 1 hour; authorizes receiving media only |
+| `ViewGrant` | per bound device, Session and media session; absolute expiry ≤ 1 hour and capped by the media session expiry; authorizes receiving media only |
 | `ControlGrant` | minted only from a live view grant with the same device/Session/media session; expiry ≤ 10 minutes and capped by the view grant |
 | `ControllerLease` | one per media session; absolute expiry ≤ 10 minutes and capped by its control grant; single-controller binding |
-| Input admission | requires `connected` media state **and** live view + control + lease for the same device/Session/media session **and** an unlocked screen |
+| Input admission | requires `connected` media state **and** live view + control + lease for the same bound device/Session/media session **and** an unlocked screen |
+
+`HostSession` is bound to one authenticated `ViewerBinding` `(device_id,
+session_id)` at construction. It must hold a live view grant before `start`, and
+every inbound answer/ICE is checked against that binding plus a live view grant;
+a different paired device, a device without `screen.view`, or a revoked grant
+is rejected with `WrongPeer`/`ViewDenied`. The sender identity is supplied by
+the transport from the authenticated handshake, never by the signalling
+envelope.
 
 `HostSession::authorize_input` is the only admission point on the capture side.
-A view-only device is refused with `MissingControlGrant`; a viewer has no
-equivalent method at all. `release_controller`, `revoke_view`, `revoke_control`,
-`revoke_device`, `lock` and `stop` are explicit operations. Revoking a view
-cascades to its control grants and lease; device revocation removes every grant
-and lease it held; stop marks the media session id terminal so no grant can be
-revived.
+A view-only device is refused with `MissingControlGrant`; an unbound device is
+refused with `WrongPeer`, and a viewer has no equivalent method at all.
+`release_controller`, `revoke_view`, `revoke_control`, `revoke_device`, `lock`
+and `stop` are explicit operations. Revoking a view cascades to its control
+grants and lease; device revocation removes every grant and lease it held; stop
+records the media session id in the Host's shared `StoppedSessions` tombstone
+set, so a grant cannot be revived and a new `HostSession` cannot reuse the id.
 
 ### Pause, lock, reconnect and stop
 
@@ -251,19 +260,30 @@ Both:   Connected/Paused --pause--> Paused(reason) --resume--> Connected
   lease**. Resume never restores it; the controller must claim a new lease.
   Therefore no pointer/keyboard batch from before the gap can be replayed.
 * `lock` pauses media and blocks `resume` until an explicit `unlock`; unlock
-  alone does not resume media.
+  alone does not resume media. `lock`, `unlock` and `resume` on a
+  `stopped`/`failed` session return `Terminal` instead of overwriting terminal
+  state.
 * `suspend_for_reconnect` emits `pause(reconnecting)`; `resume_after_reconnect`
   reconnects media only after the transport has a fresh generation.
 * Stop/failure is terminal for that media session id; a new session needs a new
   id. Expiry observed by any transition is converted into `failed(expired)` and
-  revokes grants.
+  revokes grants. Terminal ids are kept in the Host's shared `StoppedSessions`
+  set.
+
+The `sdp` field is opaque to this crate: it is bounded and redacted, but the
+typed capability descriptor is the negotiation authority checked on both
+answer and offer. A WebRTC adapter must configure profiles/transport/DTLS from
+the validated typed capabilities (or re-validate the answer SDP itself); it
+must not treat SDP text as having passed the typed subset check.
 
 ### Adapter boundary
 
-A future capture adapter creates a `HostSession` with a real `Sdp` and
-`MediaCapabilities`, calls `start`, sends `SignallingMessage::encode()` bytes
-over the authenticated control channel, feeds decoded messages to `handle`, and
-calls `authorize_input` immediately before injecting one input batch. The
+A future capture adapter creates a `HostSession` with a real `Sdp`,
+`MediaCapabilities`, and the authenticated `ViewerBinding`, issues a view grant
+for that binding, then calls `start`. It sends
+`SignallingMessage::encode()` bytes over the authenticated control channel,
+calls `handle(sender, message, now)` with the transport-authenticated sender,
+and calls `authorize_input` immediately before injecting one input batch. The
 WebRTC/ICE adapter consumes `Sdp`, `IceCandidate`, `IceUrl`/`Credential` and
 enforces DTLS-SRTP; **this crate never touches a frame, a socket or TURN**.
 The viewer mirror uses `MediaSession::viewer` and returns the answer produced by
@@ -275,20 +295,24 @@ separate, metadata/single-frame boundary.
 
 ### Test evidence
 
-`cargo test -p ukk-media` (21 tests) covers:
+`cargo test -p ukk-media` (27 tests) covers:
 
 * offer → answer → ICE candidate/complete ordering, and wrong order/session/role;
-* answer expiry mismatch and codec/transport widening;
+* answer/ICE sender binding: only the live-granted `ViewerBinding` is accepted;
+* answer expiry mismatch, stale offer and codec/transport widening;
 * malformed, unknown-field, array-form, unsupported-version and oversized
   messages, including rejection of a `frame`/`media_frame` field or type;
 * bounded SDP/candidate fields and `stun:`/`turn:`/`turns:` URL validation;
 * TURN username/credential redaction in `Debug`/`Display`;
-* separate view/control grants, control-without-view denial, view-only device
+* separate view/control grants, control-without-view denial, unbound/view-only
   input refusal, lease expiry, control expiry and view expiry;
-* single-controller binding, explicit release, view/control/device revocation;
+* media-session-capped view TTL and `authorize_view` expiry/closed checks;
+* single-controller binding, explicit release, wrong-device renew,
+  view/control/device revocation removing a live lease;
 * pause, screen lock/unlock/resume, reconnect/resume, and proof that an old
   lease is refused after each withdrawal;
-* terminal stop and expiry.
+* terminal stop/expiry, `lock`/`unlock`/`resume` refusing to overwrite terminal
+  state, and process-level stopped-id tombstones preventing resurrection.
 
 Dependency record: only the in-repo `ukk-protocol` path crate plus `serde` and
 `serde_json`, which the workspace already uses (MIT OR Apache-2.0). No new

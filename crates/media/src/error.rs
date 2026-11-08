@@ -22,6 +22,10 @@ pub enum SignallingError {
     WrongRole(&'static str),
     /// The message is valid but not valid in the current state.
     UnexpectedMessage(&'static str),
+    /// The message is valid but was not sent by the bound viewer.
+    WrongPeer,
+    /// The bound viewer has no live view grant for this media session.
+    ViewDenied(GrantError),
     /// The media session has already stopped or failed.
     Terminal,
     /// Offer/answer names another media session.
@@ -63,6 +67,10 @@ impl fmt::Display for SignallingError {
             Self::UnexpectedMessage(state) => {
                 write!(formatter, "unexpected signalling message in state {state}")
             }
+            Self::WrongPeer => {
+                formatter.write_str("signalling sender does not match the bound viewer")
+            }
+            Self::ViewDenied(error) => write!(formatter, "viewer is not authorized: {error}"),
             Self::Terminal => formatter.write_str("media session is already stopped or failed"),
             Self::WrongSession => {
                 formatter.write_str("signalling message names another media session")
@@ -100,6 +108,7 @@ pub enum GrantError {
     LeaseMismatch,
     ControllerAlreadyBound,
     SessionClosed,
+    SessionExpired,
     Locked,
     DeviceMismatch,
     MediaSessionMismatch,
@@ -131,6 +140,7 @@ impl fmt::Display for GrantError {
                 formatter.write_str("another controller is already bound to this media session")
             }
             Self::SessionClosed => formatter.write_str("media session is stopped"),
+            Self::SessionExpired => formatter.write_str("media session has expired"),
             Self::Locked => formatter.write_str("screen is locked"),
             Self::DeviceMismatch => formatter.write_str("device does not own this grant"),
             Self::MediaSessionMismatch => formatter.write_str("grant names another media session"),
@@ -147,6 +157,7 @@ impl Error for GrantError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputDenial {
     WrongRole,
+    WrongPeer,
     SessionNotConnected,
     SessionPaused,
     SessionStopped,
@@ -167,6 +178,7 @@ impl fmt::Display for InputDenial {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let text = match self {
             Self::WrongRole => "only the capture-side peer may admit remote input",
+            Self::WrongPeer => "input does not belong to the bound media viewer",
             Self::SessionNotConnected => "media session is not connected",
             Self::SessionPaused => "media session is paused",
             Self::SessionStopped => "media session is stopped",
@@ -206,10 +218,17 @@ impl From<GrantError> for InputDenial {
             | GrantError::ViewGrantMismatch => Self::ControllerLeaseMismatch,
             GrantError::Locked => Self::Locked,
             GrantError::SessionClosed => Self::SessionStopped,
+            GrantError::SessionExpired => Self::SessionExpired,
             GrantError::InvalidTtl
             | GrantError::Capacity
             | GrantError::AlreadyGranted
             | GrantError::ControllerAlreadyBound => Self::Denied,
         }
+    }
+}
+
+impl From<GrantError> for SignallingError {
+    fn from(error: GrantError) -> Self {
+        Self::ViewDenied(error)
     }
 }

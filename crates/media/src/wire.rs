@@ -15,6 +15,12 @@
 //!
 //! Decoding rejects oversized input before parsing, accepts only the single
 //! JSON-object form, rejects unknown fields, and re-validates every typed field.
+//!
+//! The `sdp` bodies are opaque to this crate. The typed capability descriptor
+//! is the negotiation authority checked on both offer and answer; a WebRTC
+//! adapter must configure media from those validated typed capabilities (or
+//! independently re-validate the SDP profiles/transport/DTLS) and must not
+//! treat answer SDP text as having passed the typed subset check.
 
 use crate::capability::{validate_expiry, IceCandidate};
 use crate::capability::{MediaCapabilities, MediaSessionId, Sdp};

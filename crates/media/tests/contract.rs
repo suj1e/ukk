@@ -7,8 +7,8 @@
 use ukk_media::{
     CodecDescriptor, Credential, FailureReason, GrantAuthority, GrantError, IceCandidate,
     IceServer, IceTransport, IceUrl, InputDenial, MediaCapabilities, MediaSession, MediaSessionId,
-    MediaState, PauseReason, Sdp, SignallingError, SignallingMessage, StopReason,
-    TransportCapability, MAX_SIGNALLING_MESSAGE_BYTES,
+    MediaState, PauseReason, Sdp, SignallingError, SignallingMessage, StopReason, StoppedSessions,
+    TransportCapability, ViewerBinding, MAX_SIGNALLING_MESSAGE_BYTES,
 };
 use ukk_protocol::{DeviceId, DomainId};
 
@@ -83,23 +83,51 @@ fn candidate() -> IceCandidate {
     IceCandidate::new("candidate:1 1 udp 1 192.0.2.10 5000 typ host").unwrap()
 }
 
-fn connected_host() -> ukk_media::HostSession {
-    let mut host =
-        ukk_media::HostSession::new(media_id(), NOW + SESSION_TTL, offer_capabilities(), sdp())
-            .unwrap();
+fn binding(name: &str) -> ViewerBinding {
+    ViewerBinding::new(device(name), session_id())
+}
+
+fn connected_host_with(stopped: StoppedSessions) -> ukk_media::HostSession {
+    let viewer_binding = binding("a");
+    let mut host = ukk_media::HostSession::new(
+        media_id(),
+        viewer_binding.clone(),
+        NOW + SESSION_TTL,
+        offer_capabilities(),
+        sdp(),
+        stopped,
+    )
+    .unwrap();
+    host.grant_view(NOW, 30_000).unwrap();
     let mut viewer = MediaSession::viewer(media_id(), viewer_capabilities(), sdp()).unwrap();
     let offer = host.start(NOW).unwrap();
     let answer = viewer.handle(&offer, NOW).unwrap().expect("answer");
-    host.handle(&answer, NOW).unwrap();
+    host.handle(&viewer_binding, &answer, NOW).unwrap();
     assert_eq!(host.state(), &MediaState::Connected);
     host
 }
 
+fn connected_host() -> ukk_media::HostSession {
+    connected_host_with(StoppedSessions::new())
+}
+
+fn current_view(host: &ukk_media::HostSession) -> ukk_media::ViewGrant {
+    host.authorize_view(NOW).unwrap().clone()
+}
+
 #[test]
 fn offer_answer_and_trickle_ice_follow_the_defined_order() {
-    let mut host =
-        ukk_media::HostSession::new(media_id(), NOW + SESSION_TTL, offer_capabilities(), sdp())
-            .unwrap();
+    let viewer_binding = binding("a");
+    let mut host = ukk_media::HostSession::new(
+        media_id(),
+        viewer_binding.clone(),
+        NOW + SESSION_TTL,
+        offer_capabilities(),
+        sdp(),
+        StoppedSessions::new(),
+    )
+    .unwrap();
+    host.grant_view(NOW, 30_000).unwrap();
     let mut viewer = MediaSession::viewer(media_id(), viewer_capabilities(), sdp()).unwrap();
 
     assert_eq!(host.state(), &MediaState::Idle);
@@ -125,27 +153,36 @@ fn offer_answer_and_trickle_ice_follow_the_defined_order() {
     let answer = SignallingMessage::decode(&answer_bytes).unwrap();
 
     viewer.handle(&early, NOW).unwrap();
-    host.handle(&answer, NOW).unwrap();
+    host.handle(&viewer_binding, &answer, NOW).unwrap();
     assert_eq!(host.state(), &MediaState::Connected);
     assert!(host.media().negotiated().is_some());
 
     let host_candidate = host.add_ice_candidate(NOW, candidate()).unwrap();
     viewer.handle(&host_candidate, NOW).unwrap();
     let viewer_candidate = viewer.add_ice_candidate(NOW, candidate()).unwrap();
-    host.handle(&viewer_candidate, NOW).unwrap();
+    host.handle(&viewer_binding, &viewer_candidate, NOW)
+        .unwrap();
 
     let host_done = host.ice_complete(NOW).unwrap();
     viewer.handle(&host_done, NOW).unwrap();
     let viewer_done = viewer.ice_complete(NOW).unwrap();
-    host.handle(&viewer_done, NOW).unwrap();
+    host.handle(&viewer_binding, &viewer_done, NOW).unwrap();
     assert_eq!(viewer.state(), &MediaState::Connected);
 }
 
 #[test]
 fn wrong_order_session_and_role_are_rejected() {
-    let host_session =
-        ukk_media::HostSession::new(media_id(), NOW + SESSION_TTL, offer_capabilities(), sdp())
-            .unwrap();
+    let viewer_binding = binding("a");
+    let mut host = ukk_media::HostSession::new(
+        media_id(),
+        viewer_binding.clone(),
+        NOW + SESSION_TTL,
+        offer_capabilities(),
+        sdp(),
+        StoppedSessions::new(),
+    )
+    .unwrap();
+    host.grant_view(NOW, 30_000).unwrap();
 
     // A viewer has no offer of its own.
     let mut viewer = MediaSession::viewer(media_id(), viewer_capabilities(), sdp()).unwrap();
@@ -169,7 +206,6 @@ fn wrong_order_session_and_role_are_rejected() {
     );
 
     // A Host does not accept an offer.
-    let mut host = host_session;
     let offer_from_viewer = SignallingMessage::Offer {
         v: 1,
         media_session_id: media_id(),
@@ -178,7 +214,7 @@ fn wrong_order_session_and_role_are_rejected() {
         sdp: sdp(),
     };
     assert_eq!(
-        host.handle(&offer_from_viewer, NOW),
+        host.handle(&viewer_binding, &offer_from_viewer, NOW),
         Err(SignallingError::WrongRole(
             "a Host does not accept an offer from a viewer"
         ))
@@ -193,9 +229,16 @@ fn wrong_order_session_and_role_are_rejected() {
     );
 
     // Answer expiry must equal the offer expiry.
-    let mut host =
-        ukk_media::HostSession::new(media_id(), NOW + SESSION_TTL, offer_capabilities(), sdp())
-            .unwrap();
+    let mut host = ukk_media::HostSession::new(
+        media_id(),
+        viewer_binding.clone(),
+        NOW + SESSION_TTL,
+        offer_capabilities(),
+        sdp(),
+        StoppedSessions::new(),
+    )
+    .unwrap();
+    host.grant_view(NOW, 30_000).unwrap();
     let mut viewer = MediaSession::viewer(media_id(), viewer_capabilities(), sdp()).unwrap();
     let offer = host.start(NOW).unwrap();
     let answer = viewer.handle(&offer, NOW).unwrap().unwrap();
@@ -207,7 +250,7 @@ fn wrong_order_session_and_role_are_rejected() {
         sdp: sdp(),
     };
     assert_eq!(
-        host.handle(&wrong_expiry, NOW),
+        host.handle(&viewer_binding, &wrong_expiry, NOW),
         Err(SignallingError::ExpiryMismatch)
     );
 
@@ -222,12 +265,12 @@ fn wrong_order_session_and_role_are_rejected() {
         sdp: sdp(),
     };
     assert_eq!(
-        host.handle(&widened, NOW),
+        host.handle(&viewer_binding, &widened, NOW),
         Err(SignallingError::InvalidAnswer(
             "answer codecs/transports are not a subset of the offer"
         ))
     );
-    host.handle(&answer, NOW).unwrap();
+    host.handle(&viewer_binding, &answer, NOW).unwrap();
 
     // Viewer-side pause is not a Host command.
     assert_eq!(
@@ -332,9 +375,17 @@ fn turn_urls_and_credentials_are_typed_and_redacted() {
     assert!(!server_debug.contains("turn-user"));
     assert!(!server_debug.contains("turn-secret-value"));
 
-    let mut host =
-        ukk_media::HostSession::new(media_id(), NOW + SESSION_TTL, offer_capabilities(), sdp())
-            .unwrap();
+    let viewer_binding = binding("a");
+    let mut host = ukk_media::HostSession::new(
+        media_id(),
+        viewer_binding,
+        NOW + SESSION_TTL,
+        offer_capabilities(),
+        sdp(),
+        StoppedSessions::new(),
+    )
+    .unwrap();
+    host.grant_view(NOW, 30_000).unwrap();
     let offer = host.start(NOW).unwrap();
     let offer_debug = format!("{offer:?}");
     let offer_display = format!("{offer}");
@@ -437,28 +488,23 @@ fn view_and_control_grants_are_separate_and_control_requires_view() {
 fn input_requires_view_control_and_a_live_lease() {
     let mut host = connected_host();
     let device_a = device("a");
-    let view = host
-        .grant_view(device_a.clone(), session_id(), NOW, 30_000)
-        .unwrap();
+    let view = current_view(&host);
     let control = host.grant_control(&view.id, NOW, 5_000).unwrap();
     let lease = host.claim_controller(&control.id, NOW, 2_000).unwrap();
 
     host.authorize_input(&device_a, &session_id(), &lease.id, NOW)
         .unwrap();
 
-    // View-only device: no control grant.
+    // A different device/Session is not the bound viewer even if a grant
+    // existed; the binding check runs before any grant lookup.
     let view_only = device("view-only");
-    host.grant_view(view_only.clone(), session_id(), NOW, 30_000)
-        .unwrap();
     assert_eq!(
         host.authorize_input(&view_only, &session_id(), &lease.id, NOW),
-        Err(InputDenial::MissingControlGrant)
+        Err(InputDenial::WrongPeer)
     );
-
-    // A different Session has no view grant for this media session.
     assert_eq!(
         host.authorize_input(&device_a, &other_session_id(), &lease.id, NOW),
-        Err(InputDenial::MissingViewGrant)
+        Err(InputDenial::WrongPeer)
     );
 
     // Expiry is absolute.
@@ -470,46 +516,83 @@ fn input_requires_view_control_and_a_live_lease() {
 
 #[test]
 fn single_controller_binding_release_and_revoke_are_explicit() {
-    let mut host = connected_host();
+    let mut authority = GrantAuthority::new();
     let device_a = device("a");
     let device_b = device("b");
-    let view_a = host
-        .grant_view(device_a.clone(), session_id(), NOW, 30_000)
+    let view_a = authority
+        .grant_view(device_a.clone(), session_id(), media_id(), NOW, 30_000)
         .unwrap();
-    let control_a = host.grant_control(&view_a.id, NOW, 5_000).unwrap();
-    let lease_a = host.claim_controller(&control_a.id, NOW, 2_000).unwrap();
+    let control_a = authority.grant_control(&view_a.id, NOW, 5_000).unwrap();
+    let lease_a = authority
+        .claim_controller(&control_a.id, NOW, 2_000)
+        .unwrap();
 
-    let view_b = host
-        .grant_view(device_b.clone(), session_id(), NOW, 30_000)
+    let view_b = authority
+        .grant_view(device_b.clone(), session_id(), media_id(), NOW, 30_000)
         .unwrap();
-    let control_b = host.grant_control(&view_b.id, NOW, 5_000).unwrap();
+    let control_b = authority.grant_control(&view_b.id, NOW, 5_000).unwrap();
     assert_eq!(
-        host.claim_controller(&control_b.id, NOW, 2_000),
+        authority.claim_controller(&control_b.id, NOW, 2_000),
         Err(GrantError::ControllerAlreadyBound)
     );
 
-    host.release_controller(&lease_a.id, &device_a).unwrap();
+    authority
+        .release_controller(&lease_a.id, &device_a)
+        .unwrap();
     assert_eq!(
-        host.authorize_input(&device_a, &session_id(), &lease_a.id, NOW),
-        Err(InputDenial::ControllerLeaseMissing)
+        authority.authorize_control(&device_a, &session_id(), &media_id(), NOW),
+        Err(GrantError::LeaseMissing)
     );
-    let lease_b = host.claim_controller(&control_b.id, NOW, 2_000).unwrap();
-    host.authorize_input(&device_b, &session_id(), &lease_b.id, NOW)
+    let lease_b = authority
+        .claim_controller(&control_b.id, NOW, 2_000)
+        .unwrap();
+    authority
+        .authorize_control(&device_b, &session_id(), &media_id(), NOW)
+        .map(|lease| assert_eq!(lease.id, lease_b.id))
         .unwrap();
 
     // Revoking the view cascades to its control grant and lease.
-    assert!(host.revoke_view(&view_b.id));
+    assert!(authority.revoke_view(&view_b.id));
     assert_eq!(
-        host.authorize_input(&device_b, &session_id(), &lease_b.id, NOW),
-        Err(InputDenial::MissingViewGrant)
+        authority.authorize_control(&device_b, &session_id(), &media_id(), NOW),
+        Err(GrantError::ViewGrantMissing)
     );
 
     // Device revocation clears everything for that device.
-    let removed = host.revoke_device(&device_a);
+    let removed = authority.revoke_device(&device_a);
     assert!(removed >= 1);
     assert_eq!(
-        host.authorize_view(&device_a, &session_id(), NOW),
+        authority.authorize_view(&device_a, &session_id(), &media_id(), NOW),
         Err(GrantError::ViewGrantMissing)
+    );
+}
+
+#[test]
+fn revoke_control_and_device_withdraw_a_live_lease() {
+    let mut host = connected_host();
+    let viewer = host.viewer().clone();
+    let view = current_view(&host);
+    let control = host.grant_control(&view.id, NOW, 5_000).unwrap();
+    let lease = host.claim_controller(&control.id, NOW, 2_000).unwrap();
+    assert!(host.grants().controller_lease(&media_id()).is_some());
+
+    assert!(host.revoke_control(&control.id));
+    assert!(host.grants().controller_lease(&media_id()).is_none());
+    assert_eq!(
+        host.authorize_input(&viewer.device_id, &viewer.session_id, &lease.id, NOW),
+        Err(InputDenial::MissingControlGrant)
+    );
+
+    let view = current_view(&host);
+    let control = host.grant_control(&view.id, NOW, 5_000).unwrap();
+    let lease = host.claim_controller(&control.id, NOW, 2_000).unwrap();
+    assert!(host.grants().controller_lease(&media_id()).is_some());
+
+    assert!(host.revoke_device(&viewer.device_id) >= 1);
+    assert!(host.grants().controller_lease(&media_id()).is_none());
+    assert_eq!(
+        host.authorize_input(&viewer.device_id, &viewer.session_id, &lease.id, NOW),
+        Err(InputDenial::MissingViewGrant)
     );
 }
 
@@ -518,9 +601,7 @@ fn lease_expiry_and_control_expiry_are_distinct_denials() {
     let mut host = connected_host();
     let device_a = device("a");
 
-    let view = host
-        .grant_view(device_a.clone(), session_id(), NOW, 30_000)
-        .unwrap();
+    let view = current_view(&host);
     let control = host.grant_control(&view.id, NOW, 10_000).unwrap();
     let lease = host.claim_controller(&control.id, NOW, 1_000).unwrap();
     assert_eq!(
@@ -529,9 +610,7 @@ fn lease_expiry_and_control_expiry_are_distinct_denials() {
     );
 
     let mut host = connected_host();
-    let view = host
-        .grant_view(device_a.clone(), session_id(), NOW, 30_000)
-        .unwrap();
+    let view = current_view(&host);
     let control = host.grant_control(&view.id, NOW, 1_000).unwrap();
     let lease = host.claim_controller(&control.id, NOW, 1_000).unwrap();
     assert_eq!(
@@ -542,18 +621,24 @@ fn lease_expiry_and_control_expiry_are_distinct_denials() {
 
 #[test]
 fn pause_lock_and_reconnect_withdraw_the_lease_without_replay() {
-    let mut host =
-        ukk_media::HostSession::new(media_id(), NOW + SESSION_TTL, offer_capabilities(), sdp())
-            .unwrap();
+    let viewer_binding = binding("a");
+    let mut host = ukk_media::HostSession::new(
+        media_id(),
+        viewer_binding.clone(),
+        NOW + SESSION_TTL,
+        offer_capabilities(),
+        sdp(),
+        StoppedSessions::new(),
+    )
+    .unwrap();
+    host.grant_view(NOW, 30_000).unwrap();
     let mut viewer = MediaSession::viewer(media_id(), viewer_capabilities(), sdp()).unwrap();
     let offer = host.start(NOW).unwrap();
     let answer = viewer.handle(&offer, NOW).unwrap().unwrap();
-    host.handle(&answer, NOW).unwrap();
+    host.handle(&viewer_binding, &answer, NOW).unwrap();
 
     let device_a = device("a");
-    let view = host
-        .grant_view(device_a.clone(), session_id(), NOW, 30_000)
-        .unwrap();
+    let view = current_view(&host);
     let control = host.grant_control(&view.id, NOW, 5_000).unwrap();
     let lease = host.claim_controller(&control.id, NOW, 2_000).unwrap();
 
@@ -607,6 +692,153 @@ fn pause_lock_and_reconnect_withdraw_the_lease_without_replay() {
         host.authorize_input(&device_a, &session_id(), &lease.id, NOW),
         Err(InputDenial::ControllerLeaseMissing)
     );
+}
+
+#[test]
+fn answer_and_ice_require_the_bound_authorized_viewer() {
+    let viewer_binding = binding("a");
+    let mut host = ukk_media::HostSession::new(
+        media_id(),
+        viewer_binding.clone(),
+        NOW + SESSION_TTL,
+        offer_capabilities(),
+        sdp(),
+        StoppedSessions::new(),
+    )
+    .unwrap();
+
+    // No view grant means no offer.
+    assert_eq!(
+        host.start(NOW),
+        Err(SignallingError::ViewDenied(GrantError::ViewGrantMissing))
+    );
+    host.grant_view(NOW, 30_000).unwrap();
+    let offer = host.start(NOW).unwrap();
+    let mut viewer = MediaSession::viewer(media_id(), viewer_capabilities(), sdp()).unwrap();
+    let answer = viewer.handle(&offer, NOW).unwrap().unwrap();
+    let ice = SignallingMessage::IceCandidate {
+        v: 1,
+        media_session_id: media_id(),
+        candidate: candidate(),
+    };
+
+    // A different authenticated device cannot answer or inject ICE.
+    let other_binding = binding("b");
+    assert_eq!(
+        host.handle(&other_binding, &answer, NOW),
+        Err(SignallingError::WrongPeer)
+    );
+    assert_eq!(
+        host.handle(&other_binding, &ice, NOW),
+        Err(SignallingError::WrongPeer)
+    );
+
+    // The bound viewer is accepted, then revocation stops answer/ICE authority.
+    host.handle(&viewer_binding, &answer, NOW).unwrap();
+    assert_eq!(host.state(), &MediaState::Connected);
+    let view = current_view(&host);
+    assert!(host.revoke_view(&view.id));
+    assert_eq!(
+        host.handle(&viewer_binding, &ice, NOW),
+        Err(SignallingError::ViewDenied(GrantError::ViewGrantMissing))
+    );
+}
+
+#[test]
+fn lock_never_overwrites_terminal_state() {
+    let mut host = connected_host();
+    host.stop(StopReason::UserClosed).unwrap();
+    assert_eq!(host.lock(NOW), Err(SignallingError::Terminal));
+    assert_eq!(host.unlock(), Err(SignallingError::Terminal));
+    assert_eq!(host.resume(NOW), Err(SignallingError::Terminal));
+    assert!(matches!(
+        host.state(),
+        MediaState::Stopped(StopReason::UserClosed)
+    ));
+
+    let mut host = connected_host();
+    let viewer_binding = host.viewer().clone();
+    let failed = SignallingMessage::Failed {
+        v: 1,
+        media_session_id: media_id(),
+        reason: FailureReason::TransportFailed,
+    };
+    host.handle(&viewer_binding, &failed, NOW).unwrap();
+    assert_eq!(host.lock(NOW), Err(SignallingError::Terminal));
+    assert!(matches!(
+        host.state(),
+        MediaState::Failed(FailureReason::TransportFailed)
+    ));
+}
+
+#[test]
+fn stale_offer_and_wrong_device_renew_are_rejected() {
+    let mut viewer = MediaSession::viewer(media_id(), viewer_capabilities(), sdp()).unwrap();
+    let stale = SignallingMessage::Offer {
+        v: 1,
+        media_session_id: media_id(),
+        expires_at_ms: NOW - 1,
+        capabilities: offer_capabilities(),
+        sdp: sdp(),
+    };
+    assert_eq!(viewer.handle(&stale, NOW), Err(SignallingError::Expired));
+
+    let mut host = connected_host();
+    let viewer_binding = host.viewer().clone();
+    let view = current_view(&host);
+    let control = host.grant_control(&view.id, NOW, 5_000).unwrap();
+    let lease = host.claim_controller(&control.id, NOW, 2_000).unwrap();
+    assert_eq!(
+        host.renew_controller(&lease.id, &device("b"), NOW, 1_000),
+        Err(GrantError::LeaseMismatch)
+    );
+    host.renew_controller(&lease.id, &viewer_binding.device_id, NOW, 1_000)
+        .unwrap();
+}
+
+#[test]
+fn stopped_media_id_cannot_be_resurrected() {
+    let stopped = StoppedSessions::new();
+    let mut host = connected_host_with(stopped.clone());
+    host.stop(StopReason::UserClosed).unwrap();
+    assert!(stopped.is_stopped(&media_id()));
+
+    let resurrected = ukk_media::HostSession::new(
+        media_id(),
+        binding("a"),
+        NOW + SESSION_TTL,
+        offer_capabilities(),
+        sdp(),
+        stopped,
+    );
+    assert!(matches!(resurrected, Err(SignallingError::Terminal)));
+}
+
+#[test]
+fn authorize_view_respects_media_expiry_and_terminal_state() {
+    let viewer_binding = binding("a");
+    let mut host = ukk_media::HostSession::new(
+        media_id(),
+        viewer_binding,
+        NOW + 500,
+        offer_capabilities(),
+        sdp(),
+        StoppedSessions::new(),
+    )
+    .unwrap();
+    let view = host.grant_view(NOW, 30_000).unwrap();
+    assert_eq!(view.expires_at_ms, NOW + 500);
+    assert_eq!(
+        host.authorize_view(NOW + 500),
+        Err(GrantError::SessionExpired)
+    );
+    assert_eq!(
+        host.grant_view(NOW + 500, 30_000),
+        Err(GrantError::SessionExpired)
+    );
+
+    host.stop(StopReason::UserClosed).unwrap();
+    assert_eq!(host.authorize_view(NOW), Err(GrantError::SessionClosed));
 }
 
 #[test]
@@ -683,9 +915,7 @@ fn expired_view_cannot_mint_control_or_lease_and_lock_blocks_claims() {
 fn stop_is_terminal_and_denies_revived_grants() {
     let mut host = connected_host();
     let device_a = device("a");
-    let view = host
-        .grant_view(device_a.clone(), session_id(), NOW, 30_000)
-        .unwrap();
+    let view = current_view(&host);
     let control = host.grant_control(&view.id, NOW, 5_000).unwrap();
     let lease = host.claim_controller(&control.id, NOW, 2_000).unwrap();
 
@@ -699,29 +929,35 @@ fn stop_is_terminal_and_denies_revived_grants() {
         host.authorize_input(&device_a, &session_id(), &lease.id, NOW),
         Err(InputDenial::SessionStopped)
     );
-    assert_eq!(
-        host.grant_view(device_a.clone(), session_id(), NOW, 30_000),
-        Err(GrantError::SessionClosed)
-    );
+    assert_eq!(host.grant_view(NOW, 30_000), Err(GrantError::SessionClosed));
     assert_eq!(
         host.stop(StopReason::UserClosed),
         Err(SignallingError::Terminal)
     );
+    assert_eq!(host.lock(NOW), Err(SignallingError::Terminal));
 }
 
 #[test]
 fn expiry_closes_the_session_and_revokes_input() {
-    let mut host =
-        ukk_media::HostSession::new(media_id(), NOW + 500, offer_capabilities(), sdp()).unwrap();
+    let viewer_binding = binding("a");
+    let mut host = ukk_media::HostSession::new(
+        media_id(),
+        viewer_binding.clone(),
+        NOW + 500,
+        offer_capabilities(),
+        sdp(),
+        StoppedSessions::new(),
+    )
+    .unwrap();
+    host.grant_view(NOW, 30_000).unwrap();
     let mut viewer = MediaSession::viewer(media_id(), viewer_capabilities(), sdp()).unwrap();
     let offer = host.start(NOW).unwrap();
     let answer = viewer.handle(&offer, NOW).unwrap().unwrap();
-    host.handle(&answer, NOW).unwrap();
+    host.handle(&viewer_binding, &answer, NOW).unwrap();
 
     let device_a = device("a");
-    let view = host
-        .grant_view(device_a.clone(), session_id(), NOW, 30_000)
-        .unwrap();
+    let view = current_view(&host);
+    assert_eq!(view.expires_at_ms, NOW + 500);
     let control = host.grant_control(&view.id, NOW, 5_000).unwrap();
     let lease = host.claim_controller(&control.id, NOW, 2_000).unwrap();
     assert_eq!(

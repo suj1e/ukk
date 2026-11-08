@@ -19,16 +19,22 @@
 //!
 //! ## Adapter boundary
 //!
-//! A real capture adapter supplies an SDP [`Sdp`] and
-//! [`MediaCapabilities`] to [`HostSession::new`], calls [`HostSession::start`],
-//! and transports the returned [`SignallingMessage::encode`] bytes over an
-//! authenticated control channel. A real WebRTC/ICE library is behind the
+//! A real capture adapter supplies an SDP [`Sdp`], [`MediaCapabilities`] and
+//! the authenticated [`ViewerBinding`] to [`HostSession::new`], issues a view
+//! grant for that binding, calls [`HostSession::start`], and transports the
+//! returned [`SignallingMessage::encode`] bytes over an authenticated control
+//! channel. A real WebRTC/ICE library is behind the
 //! `Sdp`/`IceCandidate` values: this crate never parses a media frame, opens a
-//! socket or contacts TURN. The iOS/desktop viewer does the mirror image with
-//! [`MediaSession::viewer`] and hands [`MediaSession::handle`] output back to
-//! its transport. Input adapters must call [`HostSession::authorize_input`]
-//! before injecting one batch; they must not queue or replay a batch across a
-//! pause, lock or reconnect.
+//! socket or contacts TURN. SDP is bounded and redacted but opaque; the typed
+//! capability descriptor is the negotiation authority, and the adapter must
+//! configure media from it or independently re-validate the SDP. The
+//! iOS/desktop viewer does the mirror image with [`MediaSession::viewer`] and
+//! hands [`MediaSession::handle`] output back to its transport. The
+//! [`HostSession`] is bound to the authenticated [`ViewerBinding`]; callers pass
+//! that sender into [`HostSession::handle`] and must not trust identity from
+//! the signalling envelope. Input adapters must call
+//! [`HostSession::authorize_input`] before injecting one batch; they must not
+//! queue or replay a batch across a pause, lock or reconnect.
 //!
 //! ## What is NOT VERIFIED
 //!
@@ -59,5 +65,5 @@ pub use limits::{
     MAX_ICE_URLS_PER_SERVER, MAX_ICE_URL_BYTES, MAX_MEDIA_SESSION_MS, MAX_SDP_BYTES,
     MAX_SIGNALLING_MESSAGE_BYTES, MAX_VIEW_GRANT_MS, SIGNALLING_VERSION,
 };
-pub use session::{HostSession, MediaSession, MediaState, Role};
+pub use session::{HostSession, MediaSession, MediaState, Role, StoppedSessions, ViewerBinding};
 pub use wire::{FailureReason, PauseReason, SignallingMessage, StopReason};

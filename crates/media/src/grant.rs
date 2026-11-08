@@ -131,6 +131,9 @@ impl GrantAuthority {
         now_ms: i64,
         ttl_ms: i64,
     ) -> Result<ViewGrant, GrantError> {
+        // This lower-level store has no media clock. `HostSession::grant_view`
+        // is the adapter-facing API and caps the lifetime by the media
+        // session's absolute expiry before calling here.
         Self::validate_ttl(ttl_ms, MAX_VIEW_GRANT_MS)?;
         if self.stopped.contains(&media_session_id) {
             return Err(GrantError::SessionClosed);

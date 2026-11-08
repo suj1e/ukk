@@ -15,8 +15,63 @@ use crate::error::{GrantError, InputDenial, SignallingError};
 use crate::grant::{ControlGrant, ControllerLease, GrantAuthority, GrantId, ViewGrant};
 use crate::limits::{MAX_MEDIA_SESSION_MS, SIGNALLING_VERSION};
 use crate::wire::{FailureReason, PauseReason, SignallingMessage, StopReason};
+use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::{Arc, Mutex, MutexGuard};
 use ukk_protocol::{DeviceId, DomainId, LeaseId};
+
+/// Authenticated remote viewer identity bound to one [`HostSession`].
+///
+/// The transport must pass the same pair it derived from the authenticated
+/// device handshake; a signalling envelope itself never carries identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerBinding {
+    pub device_id: DeviceId,
+    pub session_id: DomainId,
+}
+
+impl ViewerBinding {
+    #[must_use]
+    pub fn new(device_id: DeviceId, session_id: DomainId) -> Self {
+        Self {
+            device_id,
+            session_id,
+        }
+    }
+}
+
+/// Process-wide tombstone set for media session ids.
+///
+/// A Host owns one instance and passes clones to every [`HostSession`]; a
+/// stopped id can then never be resurrected by constructing a new wrapper.
+/// No global mutable state is used.
+#[derive(Debug, Clone, Default)]
+pub struct StoppedSessions {
+    stopped: Arc<Mutex<BTreeSet<MediaSessionId>>>,
+}
+
+impl StoppedSessions {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn is_stopped(&self, media_session_id: &MediaSessionId) -> bool {
+        self.guard().contains(media_session_id)
+    }
+
+    /// Marks an id terminal. Returns `true` only for the first stop.
+    pub fn mark_stopped(&self, media_session_id: &MediaSessionId) -> bool {
+        self.guard().insert(media_session_id.clone())
+    }
+
+    fn guard(&self) -> MutexGuard<'_, BTreeSet<MediaSessionId>> {
+        self.stopped
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
 
 /// Which side of the media session this endpoint represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -398,6 +453,9 @@ impl MediaSession {
                 "only the capture-side Host resumes media",
             ));
         }
+        if self.state.is_terminal() {
+            return Err(SignallingError::Terminal);
+        }
         if self.locked {
             return Err(SignallingError::Locked);
         }
@@ -421,6 +479,9 @@ impl MediaSession {
                 "only the capture-side Host observes a screen lock",
             ));
         }
+        if self.state.is_terminal() {
+            return Err(SignallingError::Terminal);
+        }
         if matches!(self.state, MediaState::Idle | MediaState::OfferSent) {
             return Err(SignallingError::NotConnected);
         }
@@ -443,6 +504,9 @@ impl MediaSession {
             return Err(SignallingError::WrongRole(
                 "only the capture-side Host clears a screen lock",
             ));
+        }
+        if self.state.is_terminal() {
+            return Err(SignallingError::Terminal);
         }
         self.locked = false;
         Ok(())
@@ -540,24 +604,33 @@ impl fmt::Display for MediaSession {
     }
 }
 
-/// Capture-side wrapper that binds the state machine to grant/lease authority.
+/// Capture-side wrapper that binds the state machine to one authenticated
+/// viewer and the grant/lease authority.
 ///
 /// It is the only place that admits remote input. The viewer side has no such
 /// method, and a viewer device that holds only a [`ViewGrant`] is refused by
-/// the authority.
+/// the authority. A live view grant for the bound device and Session is
+/// required before `start` and before accepting an answer or ICE.
 #[derive(Debug)]
 pub struct HostSession {
     media: MediaSession,
     grants: GrantAuthority,
+    viewer: ViewerBinding,
+    stopped: StoppedSessions,
 }
 
 impl HostSession {
     pub fn new(
         media_session_id: MediaSessionId,
+        viewer: ViewerBinding,
         expires_at_ms: i64,
         local_capabilities: MediaCapabilities,
         local_sdp: Sdp,
+        stopped: StoppedSessions,
     ) -> Result<Self, SignallingError> {
+        if stopped.is_stopped(&media_session_id) {
+            return Err(SignallingError::Terminal);
+        }
         Ok(Self {
             media: MediaSession::host(
                 media_session_id,
@@ -566,6 +639,8 @@ impl HostSession {
                 local_sdp,
             )?,
             grants: GrantAuthority::new(),
+            viewer,
+            stopped,
         })
     }
 
@@ -580,6 +655,11 @@ impl HostSession {
     }
 
     #[must_use]
+    pub fn viewer(&self) -> &ViewerBinding {
+        &self.viewer
+    }
+
+    #[must_use]
     pub fn media_session_id(&self) -> &MediaSessionId {
         self.media.media_session_id()
     }
@@ -589,23 +669,40 @@ impl HostSession {
         self.media.state()
     }
 
+    /// Starts the offer only when the bound viewer already holds a live view
+    /// grant for this media session.
     pub fn start(&mut self, now_ms: i64) -> Result<SignallingMessage, SignallingError> {
+        self.authorize_view_for_action(now_ms)?;
         let result = self.media.start(now_ms);
         self.revoke_if_expired(result)
     }
 
+    /// Handles one inbound message from the authenticated sender.
+    ///
+    /// The sender must be the bound viewer. Answer/ICE (and every other
+    /// non-terminal message) additionally require a live view grant for that
+    /// exact device/Session; a revoked or unauthenticated peer cannot become
+    /// the receiver or inject candidates.
     pub fn handle(
         &mut self,
+        sender: &ViewerBinding,
         message: &SignallingMessage,
         now_ms: i64,
     ) -> Result<Option<SignallingMessage>, SignallingError> {
+        if sender != &self.viewer {
+            return Err(SignallingError::WrongPeer);
+        }
         let ends_session = matches!(
             message,
             SignallingMessage::Stop { .. } | SignallingMessage::Failed { .. }
         );
+        if !ends_session {
+            self.authorize_view_for_action(now_ms)?;
+        }
         let result = self.media.handle(message, now_ms);
         let stopped = ends_session && result.is_ok();
         if stopped || matches!(&result, Err(SignallingError::Expired)) {
+            self.mark_stopped();
             self.grants.stop_media(self.media.media_session_id());
         }
         result
@@ -616,11 +713,13 @@ impl HostSession {
         now_ms: i64,
         candidate: IceCandidate,
     ) -> Result<SignallingMessage, SignallingError> {
+        self.authorize_view_for_action(now_ms)?;
         let result = self.media.add_ice_candidate(now_ms, candidate);
         self.revoke_if_expired(result)
     }
 
     pub fn ice_complete(&mut self, now_ms: i64) -> Result<SignallingMessage, SignallingError> {
+        self.authorize_view_for_action(now_ms)?;
         let result = self.media.ice_complete(now_ms);
         self.revoke_if_expired(result)
     }
@@ -682,8 +781,40 @@ impl HostSession {
 
     pub fn stop(&mut self, reason: StopReason) -> Result<SignallingMessage, SignallingError> {
         let message = self.media.stop(reason)?;
+        self.mark_stopped();
         self.grants.stop_media(self.media.media_session_id());
         Ok(message)
+    }
+
+    fn mark_stopped(&self) {
+        self.stopped.mark_stopped(self.media.media_session_id());
+    }
+
+    /// Authorization for actions that send or accept signalling. Media expiry
+    /// is terminal and revokes all authority; other view failures are typed.
+    fn authorize_view_for_action(&mut self, now_ms: i64) -> Result<(), SignallingError> {
+        match self.authorize_view(now_ms) {
+            Ok(_) => Ok(()),
+            Err(GrantError::SessionExpired) => {
+                self.media.fail(FailureReason::Expired);
+                self.mark_stopped();
+                self.grants.stop_media(self.media.media_session_id());
+                Err(SignallingError::Expired)
+            }
+            Err(error) => Err(SignallingError::ViewDenied(error)),
+        }
+    }
+
+    fn ensure_media_grants_allowed(&self, now_ms: i64) -> Result<(), GrantError> {
+        if self.stopped.is_stopped(self.media.media_session_id())
+            || self.media.state().is_terminal()
+        {
+            return Err(GrantError::SessionClosed);
+        }
+        if self.media.is_expired_at(now_ms) {
+            return Err(GrantError::SessionExpired);
+        }
+        Ok(())
     }
 
     fn revoke_if_expired(
@@ -691,24 +822,30 @@ impl HostSession {
         result: Result<SignallingMessage, SignallingError>,
     ) -> Result<SignallingMessage, SignallingError> {
         if matches!(&result, Err(SignallingError::Expired)) {
+            self.mark_stopped();
             self.grants.stop_media(self.media.media_session_id());
         }
         result
     }
 
-    pub fn grant_view(
-        &mut self,
-        device_id: DeviceId,
-        session_id: DomainId,
-        now_ms: i64,
-        ttl_ms: i64,
-    ) -> Result<ViewGrant, GrantError> {
+    /// Issues a view grant for the bound viewer. The grant expiry is capped by
+    /// the media session's absolute expiry.
+    pub fn grant_view(&mut self, now_ms: i64, ttl_ms: i64) -> Result<ViewGrant, GrantError> {
+        self.ensure_media_grants_allowed(now_ms)?;
+        let media_expiry = self
+            .media
+            .expires_at_ms()
+            .ok_or(GrantError::SessionClosed)?;
+        let remaining = media_expiry.saturating_sub(now_ms);
+        if remaining <= 0 {
+            return Err(GrantError::SessionExpired);
+        }
         self.grants.grant_view(
-            device_id,
-            session_id,
+            self.viewer.device_id.clone(),
+            self.viewer.session_id.clone(),
             self.media.media_session_id().clone(),
             now_ms,
-            ttl_ms,
+            ttl_ms.min(remaining),
         )
     }
 
@@ -718,6 +855,7 @@ impl HostSession {
         now_ms: i64,
         ttl_ms: i64,
     ) -> Result<ControlGrant, GrantError> {
+        self.ensure_media_grants_allowed(now_ms)?;
         self.grants.grant_control(view_grant_id, now_ms, ttl_ms)
     }
 
@@ -727,6 +865,7 @@ impl HostSession {
         now_ms: i64,
         ttl_ms: i64,
     ) -> Result<ControllerLease, GrantError> {
+        self.ensure_media_grants_allowed(now_ms)?;
         self.grants
             .claim_controller(control_grant_id, now_ms, ttl_ms)
     }
@@ -738,6 +877,7 @@ impl HostSession {
         now_ms: i64,
         ttl_ms: i64,
     ) -> Result<ControllerLease, GrantError> {
+        self.ensure_media_grants_allowed(now_ms)?;
         self.grants
             .renew_controller(lease_id, device_id, now_ms, ttl_ms)
     }
@@ -762,14 +902,16 @@ impl HostSession {
         self.grants.revoke_device(device_id)
     }
 
-    pub fn authorize_view(
-        &self,
-        device_id: &DeviceId,
-        session_id: &DomainId,
-        now_ms: i64,
-    ) -> Result<&ViewGrant, GrantError> {
-        self.grants
-            .authorize_view(device_id, session_id, self.media.media_session_id(), now_ms)
+    /// Checks the bound viewer's live view grant, but only while the media
+    /// session itself is neither expired nor terminal.
+    pub fn authorize_view(&self, now_ms: i64) -> Result<&ViewGrant, GrantError> {
+        self.ensure_media_grants_allowed(now_ms)?;
+        self.grants.authorize_view(
+            &self.viewer.device_id,
+            &self.viewer.session_id,
+            self.media.media_session_id(),
+            now_ms,
+        )
     }
 
     /// The single remote-input admission point.
@@ -780,6 +922,12 @@ impl HostSession {
         lease_id: &LeaseId,
         now_ms: i64,
     ) -> Result<(), InputDenial> {
+        if device_id != &self.viewer.device_id || session_id != &self.viewer.session_id {
+            return Err(InputDenial::WrongPeer);
+        }
+        if self.stopped.is_stopped(self.media.media_session_id()) {
+            return Err(InputDenial::SessionStopped);
+        }
         if self.grants.is_locked(self.media.media_session_id()) {
             return Err(InputDenial::Locked);
         }
