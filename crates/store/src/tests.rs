@@ -314,3 +314,101 @@ fn tab_agent_binding_checks_every_hidden_tab() {
         Err(StoreError::Invalid(_))
     ));
 }
+
+#[test]
+fn explicit_bind_is_idempotent_and_rejects_input_drift() {
+    let mut store = Store::open_memory().unwrap();
+    let space = store.create_space("ukk", "/work").unwrap();
+    let session = store.create_session(&space.id, "bound").unwrap();
+    let other = store.create_session(&space.id, "other").unwrap();
+    let request_id = new_id();
+    let first = store
+        .bind_agent_with_id(&request_id, &session.id, "core-1", "t7", "codex", None)
+        .unwrap();
+    assert_eq!(first.id, request_id);
+    let repeat = store
+        .bind_agent_with_id(&request_id, &session.id, "core-1", "t7", "codex", None)
+        .unwrap();
+    assert_eq!(first, repeat);
+    assert_eq!(store.snapshot().unwrap().agent_runs.len(), 1);
+
+    for (session_id, core, terminal, adapter, parent) in [
+        (other.id.as_str(), "core-1", "t7", "codex", None),
+        (session.id.as_str(), "core-2", "t7", "codex", None),
+        (session.id.as_str(), "core-1", "t8", "codex", None),
+        (session.id.as_str(), "core-1", "t7", "claude", None),
+    ] {
+        assert!(matches!(
+            store.bind_agent_with_id(&request_id, session_id, core, terminal, adapter, parent),
+            Err(StoreError::Conflict)
+        ));
+    }
+    assert_eq!(store.snapshot().unwrap().agent_runs.len(), 1);
+    assert!(matches!(
+        store.bind_agent_with_id("not-a-uuid", &session.id, "core-1", "t8", "codex", None),
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+#[test]
+fn explicit_bind_requires_known_session_parent_and_unbound_terminal() {
+    let mut store = Store::open_memory().unwrap();
+    let space = store.create_space("ukk", "/work").unwrap();
+    let one = store.create_session(&space.id, "one").unwrap();
+    let two = store.create_session(&space.id, "two").unwrap();
+    assert!(matches!(
+        store.bind_agent_with_id(&new_id(), &new_id(), "core", "t1", "codex", None),
+        Err(StoreError::NotFound(_))
+    ));
+    assert!(matches!(
+        store.bind_agent_with_id(&new_id(), &one.id, "core", "t1", "codex", Some("missing")),
+        Err(StoreError::NotFound(_))
+    ));
+    let parent = store
+        .bind_agent_with_id(&new_id(), &one.id, "core", "t1", "codex", None)
+        .unwrap();
+    assert!(matches!(
+        store.bind_agent_with_id(&new_id(), &two.id, "core", "t2", "claude", Some(&parent.id)),
+        Err(StoreError::Invalid(_))
+    ));
+    // The same terminal on the same core cannot silently gain a second run.
+    assert!(matches!(
+        store.bind_agent_with_id(&new_id(), &two.id, "core", "t1", "claude", None),
+        Err(StoreError::AlreadyBound(_))
+    ));
+    // A different core with the same terminal address remains a distinct
+    // runtime identity and is allowed.
+    store
+        .bind_agent_with_id(&new_id(), &two.id, "core-b", "t1", "claude", None)
+        .unwrap();
+}
+
+#[test]
+fn explicit_bind_persists_across_reopen() {
+    let dir = env::temp_dir().join(format!("ukk-store-bind-{}", new_id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("workspace.db");
+    let request_id = new_id();
+    let (session_id, run_id) = {
+        let mut store = Store::open(&path).unwrap();
+        let space = store.create_space("ukk", "/work").unwrap();
+        let session = store.create_session(&space.id, "persisted").unwrap();
+        let run = store
+            .bind_agent_with_id(&request_id, &session.id, "core-1", "t7", "codex", None)
+            .unwrap();
+        (session.id, run.id)
+    };
+    {
+        let mut store = Store::open(&path).unwrap();
+        let runs = store.snapshot().unwrap().agent_runs;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, run_id);
+        assert_eq!(runs[0].session_id, session_id);
+        let repeat = store
+            .bind_agent_with_id(&request_id, &session_id, "core-1", "t7", "codex", None)
+            .unwrap();
+        assert_eq!(repeat.id, run_id);
+        assert_eq!(store.agent_run_by_id(&run_id).unwrap().unwrap().id, run_id);
+    }
+    fs::remove_dir_all(dir).unwrap();
+}

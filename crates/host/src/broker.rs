@@ -10,9 +10,8 @@ use ukk_hc_client::{HcClient, HcError};
 #[derive(Clone, Debug)]
 struct State {
     revision: u64,
-    // Written from the subscription snapshot on every platform; read only by
-    // the Unix protocol bridge. Keep the write path shared without a warning.
-    #[cfg_attr(not(unix), allow(dead_code))]
+    // Written from the subscription snapshot on every platform; read by the
+    // Unix protocol bridge and by verified AgentRun binding.
     core_id: Option<String>,
     hc_seq: Option<u64>,
     connected: bool,
@@ -117,7 +116,7 @@ impl Broker {
     /// herdr-core identity reported by the subscription snapshot, when the
     /// core provides one. The protocol bridge uses it to bind a terminal to
     /// the exact `(core_id, terminal_address)` AgentRun instead of guessing
-    /// across cores. It is not exposed on the JSON-RPC snapshot.
+    /// across cores. The JSON-RPC snapshot exposes the same value read-only.
     #[cfg(unix)]
     pub(crate) fn core_id(&self) -> Option<String> {
         let guard = self
@@ -152,6 +151,7 @@ impl Broker {
             "hc_seq": state.hc_seq,
             "connected": state.connected,
             "message": state.error,
+            "core_id": state.core_id,
             "terminals": state.terminals,
             // events.subscribe does not provide terminal.list's machines or
             // hidden_finished fields. Never fabricate their values.

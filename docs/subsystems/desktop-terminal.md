@@ -75,6 +75,45 @@ structured Agent event and is never parsed to synthesize messages, tool calls,
 progress, approvals or Agent status. The Agent conversation pane remains an
 explicit unsupported state until R2 supplies structured events.
 
+## Explicit Session binding (metadata only)
+
+The Agent detail terminal card offers **Bind terminal to this Session…** only
+for an online, selected, unbound, live terminal whose live `core_id` is known
+and when at least one active Session exists. Opening the confirmation is the
+only way to start this flow; selecting a terminal, refreshing the workspace,
+attaching an observer or switching Tabs never opens or submits it.
+
+The confirmation shows the exact live `core_id` and terminal address from the
+Host snapshot plus an editable adapter name (prefilled from the terminal's
+reported app when valid). The user must select a Session explicitly and press
+**Confirm bind**. Cancel clears the request. On confirm the Desktop sends
+`workspace.agent.bind` with a `request_id` minted when the form opened and
+reused by an unchanged-draft retry, then applies the returned workspace
+snapshot so the AgentRun is visible.
+
+States are reported truthfully and never substituted with a fabricate-able
+success:
+
+| State | UI |
+|---|---|
+| Host offline | Action absent; explains that binding needs a live snapshot |
+| Core identity unknown | Action absent until the Host reports `core_id` |
+| Terminal finished | Action absent; only live terminals can be bound |
+| Already bound | Shows Session, AgentRun id, core, address and adapter; no action |
+| No active Session | Explains that a Session must exist first |
+| Conflict / core mismatch / unknown / ambiguous / unverifiable | Keeps the confirmation open with the Host message |
+| Success but workspace refresh failed | Says so; the change is never re-sent |
+
+This surface performs no process action: it never starts, attaches, sends,
+interrupts or stops the terminal. The binding is read-only metadata for the
+existing observer and future Agent panes.
+
+Tests in `apps/desktop/src/workspace/agent_bind.rs` cover availability states,
+exact payload keys, stable request id across an unchanged retry, new id after
+a Session change or reopen, confirm/cancel, adapter validation and Host error
+mapping. A real GUI confirmation against a real herdr-core terminal is
+**NOT VERIFIED**; no user terminal was mutated.
+
 ## Direct hc-client read boundary
 
 The Desktop depends on `ukk-hc-client` directly and runs

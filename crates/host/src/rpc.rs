@@ -31,6 +31,7 @@ pub(super) fn handle_request_with_plugins(
         method @ ("workspace.space.create"
         | "workspace.space.rename"
         | "workspace.session.create"
+        | "workspace.agent.bind"
         | "workspace.pane.split"
         | "workspace.pane.close"
         | "workspace.pane.resize"
@@ -43,7 +44,7 @@ pub(super) fn handle_request_with_plugins(
                 json!({"jsonrpc":"2.0","id":id,
                     "error":{"code":-32030,"message":"local workspace mutation is not authorized"}})
             } else {
-                match workspace_rpc::dispatch(method, params) {
+                match workspace_rpc::dispatch(broker, method, params) {
                     Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
                     Err(error) => json!({"jsonrpc":"2.0","id":id,
                         "error":{"code":error.code,"message":error.message}}),
@@ -416,6 +417,49 @@ mod tests {
         );
         assert!(response.get("result").is_none(), "{response}");
         assert!(response["error"]["code"].as_i64().unwrap() < 0);
+    }
+
+    #[test]
+    fn agent_bind_requires_workspace_capability_and_never_exposes_agent_lifecycle() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        let params = json!({
+            "request_id":"00000000-0000-4000-8000-000000000000",
+            "session_id":"session-1",
+            "core_id":"core-1",
+            "terminal_address":"t7",
+            "adapter":"codex"
+        });
+        let request = json!({
+            "jsonrpc":"2.0","id":70,"method":"workspace.agent.bind","params":params.clone()
+        });
+        assert_eq!(
+            handle_request(&request, &broker, &auth)["error"]["code"],
+            -32030
+        );
+        let mut with_control = request.clone();
+        with_control["params"]["control"] = json!("agent-control-token");
+        with_control["params"]["intent"] = json!("user");
+        assert_eq!(
+            handle_request(&with_control, &broker, &auth)["error"]["code"],
+            -32030
+        );
+        for method in [
+            "workspace.agent.start",
+            "workspace.agent.send",
+            "workspace.agent.stop",
+            "workspace.agent.kill",
+        ] {
+            let response = handle_request(
+                &json!({
+                    "jsonrpc":"2.0","id":71,"method":method,
+                    "params":{"auth":auth.test_token()}
+                }),
+                &broker,
+                &auth,
+            );
+            assert_eq!(response["error"]["code"], -32601, "{method}");
+        }
     }
 
     #[test]

@@ -380,6 +380,9 @@ pub struct LiveHostState {
     pub host_epoch: String,
     pub revision: u64,
     pub core_connected: bool,
+    /// Live herdr-core identity from the Host snapshot. Unknown while the
+    /// core has not reported one; never inferred from terminal names.
+    pub core_id: Option<String>,
     pub message: Option<String>,
     pub snapshot: HostSnapshot,
 }
@@ -400,6 +403,10 @@ impl LiveHostState {
                 .get("connected")
                 .and_then(Value::as_bool)
                 .ok_or_else(|| HostError::Protocol("missing connected flag".into()))?,
+            core_id: value
+                .get("core_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             message: value
                 .get("message")
                 .and_then(Value::as_str)
@@ -1239,6 +1246,7 @@ fn is_allowed_local_workspace_mutation(method: &str) -> bool {
         "workspace.space.create"
             | "workspace.space.rename"
             | "workspace.session.create"
+            | "workspace.agent.bind"
             | "workspace.pane.split"
             | "workspace.pane.close"
             | "workspace.pane.resize"
@@ -1375,6 +1383,7 @@ mod tests {
             "workspace.space.create",
             "workspace.space.rename",
             "workspace.session.create",
+            "workspace.agent.bind",
             "workspace.pane.split",
             "workspace.pane.close",
             "workspace.pane.resize",

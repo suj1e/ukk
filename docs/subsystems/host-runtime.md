@@ -60,6 +60,39 @@ The release archive used for CI acceptance is pinned by
 The typed API refuses any method absent from `hello.methods` with
 `HcError::Unsupported { method, reason }`; there is no speculative fallback.
 
+## Verified explicit AgentRun binding
+
+`workspace.agent.bind` is the only Host path that creates an AgentRun. It is a
+workspace metadata mutation, so it needs the rotated workspace capability, not
+the separate agent-control capability. It never calls `terminal.run`,
+`terminal.attach`, `terminal.send`, `terminal.interrupt` or `terminal.kill`.
+
+Request: `{request_id, session_id, core_id, terminal_address, adapter,
+parent_run_id?}`. `request_id` is the AgentRun id and makes a retry
+idempotent; a repeated id with different inputs is a conflict.
+
+Before any write the Host verifies the binding against its live
+`events.subscribe` snapshot (the same broker that feeds `host.snapshot`):
+
+| Condition | Result |
+|---|---|
+| Snapshot unavailable / core offline | `-32040`; nothing written |
+| `core_id` differs from the live core | `-32045`; nothing written |
+| Terminal address absent from the snapshot | `-32034`; nothing written |
+| Address present more than once | `-32061`; nothing written |
+| A missing terminal address | `-32602`; the Host never picks a terminal |
+| Address lives, core matches, exactly once | Store binding is written |
+
+`host.snapshot` reports the live `core_id` (read-only) so the Desktop can show
+the exact identity it is about to bind; an absent value disables binding
+instead of guessing. The verification source is injectable, so Host tests use
+a fixed snapshot and CI needs no daemon.
+
+After the live check, `Store::bind_agent_with_id` enforces Session/parent
+integrity and one AgentRun per `(core_id, terminal_address)`. An idempotent
+retry is answered from the committed row even if the live snapshot is gone;
+that retry performs no second write.
+
 ## Framed protocol
 
 Every frame is:
