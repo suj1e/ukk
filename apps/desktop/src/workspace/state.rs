@@ -21,6 +21,7 @@ impl Workspace {
         self.host_epoch = live.host_epoch;
         self.host_revision = live.revision;
         self.online = live.core_connected;
+        self.core_id = live.core_id;
         self.message = live.message;
         if !self.selected.as_ref().is_some_and(|address| {
             live.snapshot

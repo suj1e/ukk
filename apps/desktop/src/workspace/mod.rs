@@ -11,6 +11,7 @@ use ukk_domain::{
 use ukk_host_client::{HostClient, HostSnapshot, LiveHostState, Terminal, WorkspaceUpdate};
 
 mod actions;
+mod agent_bind;
 mod agent_detail;
 mod focus_store;
 mod keymap;
@@ -81,6 +82,7 @@ enum MutationIntent {
     CreatedSession,
     CreatedSpace,
     RenamedSpace,
+    BoundAgentRun,
 }
 
 #[derive(Clone)]
@@ -154,6 +156,9 @@ pub(crate) struct Workspace {
     workspace_snapshot_loaded: bool,
     conflict: Option<ConflictNotice>,
     online: bool,
+    /// Live herdr-core identity from the Host snapshot. Unknown is not a
+    /// reason to guess; binding stays disabled until it is reported.
+    core_id: Option<String>,
     message: Option<String>,
     host_epoch: String,
     host_revision: u64,
@@ -187,6 +192,11 @@ pub(crate) struct Workspace {
     space_editor: spaces::SpaceEditor,
     space_title_focus: gpui::FocusHandle,
     space_root_focus: gpui::FocusHandle,
+    /// Explicit AgentRun binding confirmation. Closed by default; never
+    /// opened by terminal selection or a workspace refresh.
+    agent_bind: agent_bind::AgentBindEditor,
+    agent_bind_adapter_focus: gpui::FocusHandle,
+    agent_bind_notice: Option<String>,
 }
 
 impl Workspace {
@@ -222,6 +232,7 @@ impl Workspace {
             workspace_snapshot_loaded: false,
             conflict: None,
             online: false,
+            core_id: None,
             message: None,
             host_epoch: String::new(),
             host_revision: 0,
@@ -244,6 +255,9 @@ impl Workspace {
             space_editor: spaces::SpaceEditor::default(),
             space_title_focus: cx.focus_handle(),
             space_root_focus: cx.focus_handle(),
+            agent_bind: agent_bind::AgentBindEditor::default(),
+            agent_bind_adapter_focus: cx.focus_handle(),
+            agent_bind_notice: None,
         };
         view.watch_updates(cx);
         view.watch_workspace(cx);

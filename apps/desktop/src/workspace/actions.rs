@@ -95,10 +95,24 @@ impl Workspace {
                                 // new title.
                                 view.space_editor.close();
                             }
+                            MutationIntent::BoundAgentRun => {
+                                let run_id = value
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown");
+                                view.agent_bind.close();
+                                view.agent_bind_notice =
+                                    Some(format!("Bound AgentRun {run_id}."));
+                            }
                             MutationIntent::None => {}
                         }
                         if let Some(Ok(update)) = fresh {
                             view.apply_workspace_update(update, cx);
+                        } else if intent == MutationIntent::BoundAgentRun {
+                            view.agent_bind_notice = Some(
+                                "Binding was accepted, but workspace refresh failed; use Refresh."
+                                    .into(),
+                            );
                         } else {
                             view.mutation_error = Some(
                                 "Change was accepted, but workspace refresh failed; use Refresh."
@@ -119,6 +133,14 @@ impl Workspace {
                             view.in_flight_action = None;
                             view.in_flight_session = None;
                             view.space_editor.error = Some(spaces::space_error_text(&error));
+                        } else if intent == MutationIntent::BoundAgentRun {
+                            // Binding has no layout revision. Keep the
+                            // confirmation open and show the Host reason;
+                            // never route it into the pane retry path.
+                            view.in_flight_action = None;
+                            view.in_flight_session = None;
+                            view.agent_bind.error =
+                                Some(super::agent_bind::bind_error_text(&error));
                         } else if revision_conflict(&error) {
                             let action = view.in_flight_action.take();
                             let session_id = view.in_flight_session.take();

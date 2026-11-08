@@ -21,6 +21,26 @@ fn nonempty(value: &str, field: &str) -> Result<String> {
     Ok(value.to_owned())
 }
 
+fn agent_run_row(conn: &Connection, id: &str) -> Result<Option<AgentRun>> {
+    Ok(conn
+        .query_row(
+            "SELECT id,session_id,core_id,terminal_address,parent_run_id,adapter,created_ms FROM agent_runs WHERE id=?1",
+            params![id],
+            |row| {
+                Ok(AgentRun {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    core_id: row.get(2)?,
+                    terminal_address: row.get(3)?,
+                    parent_run_id: row.get(4)?,
+                    adapter: row.get(5)?,
+                    created_ms: row.get(6)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 impl Store {
     pub fn create_space(&mut self, title: &str, project_root: &str) -> Result<Space> {
         self.create_space_with_id(&new_id(), title, project_root)
@@ -189,8 +209,59 @@ impl Store {
     /// An explicit mapping to an *existing* runtime terminal. This operation
     /// never launches the agent or alters the PTY lifetime. Do not infer a
     /// product Session from a terminal without a user-defined association.
+    ///
+    /// This is the legacy convenience path used by the CLI: it mints a fresh
+    /// AgentRun id and therefore cannot deduplicate a retried request. Callers
+    /// that need idempotency use [`Self::bind_agent_with_id`].
     pub fn bind_agent(
         &mut self,
+        session_id: &str,
+        core_id: &str,
+        terminal_address: &str,
+        adapter: &str,
+        parent_run_id: Option<&str>,
+    ) -> Result<AgentRun> {
+        self.bind_agent_inner(
+            None,
+            session_id,
+            core_id,
+            terminal_address,
+            adapter,
+            parent_run_id,
+        )
+    }
+
+    /// Idempotent explicit binding. `request_id` becomes the AgentRun id, so a
+    /// retried request with identical inputs returns the existing row instead
+    /// of creating a second AgentRun. Reusing the id with different inputs is
+    /// a conflict. The same `(core_id, terminal_address)` may not be bound to
+    /// two AgentRuns. This operation never starts, signals or attaches to the
+    /// terminal process.
+    pub fn bind_agent_with_id(
+        &mut self,
+        request_id: &str,
+        session_id: &str,
+        core_id: &str,
+        terminal_address: &str,
+        adapter: &str,
+        parent_run_id: Option<&str>,
+    ) -> Result<AgentRun> {
+        let request_id = uuid::Uuid::parse_str(request_id.trim())
+            .map_err(|_| StoreError::Invalid("request_id must be a UUID".into()))?
+            .to_string();
+        self.bind_agent_inner(
+            Some(&request_id),
+            session_id,
+            core_id,
+            terminal_address,
+            adapter,
+            parent_run_id,
+        )
+    }
+
+    fn bind_agent_inner(
+        &mut self,
+        request_id: Option<&str>,
         session_id: &str,
         core_id: &str,
         terminal_address: &str,
@@ -201,8 +272,27 @@ impl Store {
         let core_id = nonempty(core_id, "herdr-core ID")?;
         let terminal_address = nonempty(terminal_address, "terminal address")?;
         let adapter = nonempty(adapter, "adapter")?;
-        let session: Option<String> = self
+        let parent_run_id = parent_run_id.map(str::to_owned);
+        let request_id = request_id.map(str::to_owned);
+        let tx = self
             .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        if let Some(id) = request_id.as_deref() {
+            if let Some(existing) = agent_run_row(&tx, id)? {
+                if existing.session_id == session_id
+                    && existing.core_id == core_id
+                    && existing.terminal_address == terminal_address
+                    && existing.parent_run_id == parent_run_id
+                    && existing.adapter == adapter
+                {
+                    return Ok(existing);
+                }
+                return Err(StoreError::Conflict);
+            }
+        }
+
+        let session: Option<String> = tx
             .query_row(
                 "SELECT id FROM sessions WHERE id=?1",
                 params![session_id],
@@ -212,35 +302,61 @@ impl Store {
         if session.is_none() {
             return Err(StoreError::NotFound(format!("session {session_id}")));
         }
-        if let Some(parent) = parent_run_id {
-            let parent_session: Option<String> = self
-                .conn
+        if let Some(parent) = parent_run_id.as_deref() {
+            let parent_session: Option<String> = tx
                 .query_row(
                     "SELECT session_id FROM agent_runs WHERE id=?1",
                     params![parent],
                     |row| row.get(0),
                 )
                 .optional()?;
-            if parent_session.as_deref() != Some(&session_id) {
-                return Err(StoreError::Invalid(
-                    "parent AgentRun must belong to the same Session".into(),
-                ));
+            match parent_session {
+                None => {
+                    return Err(StoreError::NotFound(format!("parent AgentRun {parent}")));
+                }
+                Some(parent_session) if parent_session != session_id => {
+                    return Err(StoreError::Invalid(
+                        "parent AgentRun must belong to the same Session".into(),
+                    ));
+                }
+                Some(_) => {}
             }
         }
+        let already_bound: Option<String> = tx
+            .query_row(
+                "SELECT id FROM agent_runs WHERE core_id=?1 AND terminal_address=?2 LIMIT 1",
+                params![core_id, terminal_address],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing) = already_bound {
+            return Err(StoreError::AlreadyBound(format!(
+                "terminal {terminal_address} on core {core_id} is already AgentRun {existing}"
+            )));
+        }
+
         let run = AgentRun {
-            id: new_id(),
+            id: request_id.unwrap_or_else(new_id),
             session_id,
             core_id,
             terminal_address,
-            parent_run_id: parent_run_id.map(str::to_owned),
+            parent_run_id,
             adapter,
             created_ms: now_ms(),
         };
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO agent_runs(id,session_id,core_id,terminal_address,parent_run_id,adapter,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             params![run.id, run.session_id, run.core_id, run.terminal_address, run.parent_run_id, run.adapter, run.created_ms],
         )?;
+        tx.commit()?;
         Ok(run)
+    }
+
+    /// Durable AgentRun lookup by its id. Used for idempotent bind retries;
+    /// it is not an authorization check and never inspects herdr-core.
+    pub fn agent_run_by_id(&self, id: &str) -> Result<Option<AgentRun>> {
+        let id = nonempty(id, "AgentRun ID")?;
+        agent_run_row(&self.conn, &id)
     }
 
     /// Looks up the AgentRun bound to a herdr-core `(core_id, terminal)`.

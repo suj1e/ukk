@@ -132,6 +132,43 @@ Test evidence lives in `crates/store/src/records.rs`,
 `apps/desktop/src/workspace/spaces.rs`. Real-window keyboard/screen-reader
 acceptance of the Space form is **NOT VERIFIED**.
 
+## Explicit AgentRun binding
+
+An AgentRun is created only by an explicit, user-initiated binding of an
+already-running herdr-core terminal to a Session. It is never inferred from a
+terminal appearing, from a selected Pane, or from an "orphan" terminal count.
+
+```text
+Desktop confirmation (core_id, terminal, adapter, Session)
+    → HostClient.local_workspace_mutation
+    → workspace.agent.bind {request_id, session_id, core_id,
+                            terminal_address, adapter, parent_run_id?}
+    → live Host/herdr-core snapshot verification
+    → Store::bind_agent_with_id
+    → SQLite agent_runs row (no terminal/PTY call)
+```
+
+- `Store::bind_agent_with_id(request_id, ...)` is idempotent: `request_id`
+  becomes the AgentRun id. Repeating it with identical inputs returns the
+  existing row; repeating it with any different input is `Conflict`. The id
+  must be a UUID.
+- `Store::bind_agent` remains the CLI convenience path with a freshly minted
+  id; it shares the same validation and cannot deduplicate a retried request.
+- Both paths require an existing Session. An unknown Session is `NotFound`;
+  an unknown parent AgentRun is `NotFound`; a parent from a different Session
+  is `Invalid`.
+- A `(core_id, terminal_address)` pair may be bound to one AgentRun only.
+  Binding it again is `AlreadyBound`; a different core may reuse the same
+  terminal address because the address is not globally unique.
+- The binding is durable metadata across Store reopen. Its existence is not
+  proof that the terminal is online.
+- No path starts, attaches to, interrupts, signals or stops the terminal.
+
+Test evidence lives in `crates/store/src/tests.rs`,
+`crates/host/src/workspace_rpc.rs`, `crates/host/src/rpc.rs`,
+`crates/host-client/src/lib.rs` and
+`apps/desktop/src/workspace/agent_bind.rs`.
+
 ## Event envelope (proposed)
 
 ```json

@@ -31,6 +31,7 @@ pub(super) fn handle_request_with_plugins(
         method @ ("workspace.space.create"
         | "workspace.space.rename"
         | "workspace.session.create"
+        | "workspace.agent.bind"
         | "workspace.pane.split"
         | "workspace.pane.close"
         | "workspace.pane.resize"
@@ -43,7 +44,7 @@ pub(super) fn handle_request_with_plugins(
                 json!({"jsonrpc":"2.0","id":id,
                     "error":{"code":-32030,"message":"local workspace mutation is not authorized"}})
             } else {
-                match workspace_rpc::dispatch(method, params) {
+                match workspace_rpc::dispatch(broker, method, params) {
                     Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
                     Err(error) => json!({"jsonrpc":"2.0","id":id,
                         "error":{"code":error.code,"message":error.message}}),
@@ -416,6 +417,159 @@ mod tests {
         );
         assert!(response.get("result").is_none(), "{response}");
         assert!(response["error"]["code"].as_i64().unwrap() < 0);
+    }
+
+    #[test]
+    fn agent_bind_requires_workspace_capability_and_never_exposes_agent_lifecycle() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        let params = json!({
+            "request_id":"00000000-0000-4000-8000-000000000000",
+            "session_id":"session-1",
+            "core_id":"core-1",
+            "terminal_address":"t7",
+            "adapter":"codex"
+        });
+        let request = json!({
+            "jsonrpc":"2.0","id":70,"method":"workspace.agent.bind","params":params.clone()
+        });
+        assert_eq!(
+            handle_request(&request, &broker, &auth)["error"]["code"],
+            -32030
+        );
+        let mut with_control = request.clone();
+        with_control["params"]["control"] = json!("agent-control-token");
+        with_control["params"]["intent"] = json!("user");
+        assert_eq!(
+            handle_request(&with_control, &broker, &auth)["error"]["code"],
+            -32030
+        );
+        for method in [
+            "workspace.agent.start",
+            "workspace.agent.send",
+            "workspace.agent.stop",
+            "workspace.agent.kill",
+        ] {
+            let response = handle_request(
+                &json!({
+                    "jsonrpc":"2.0","id":71,"method":method,
+                    "params":{"auth":auth.test_token()}
+                }),
+                &broker,
+                &auth,
+            );
+            assert_eq!(response["error"]["code"], -32601, "{method}");
+        }
+    }
+
+    #[test]
+    fn authorized_agent_bind_persists_verified_metadata_through_handle_request() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "ukk-bind-rpc-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let previous = std::env::var_os("UKK_DB_PATH");
+        std::env::set_var("UKK_DB_PATH", dir.join("workspace.sqlite3"));
+        struct Restore(Option<std::ffi::OsString>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("UKK_DB_PATH", value),
+                    None => std::env::remove_var("UKK_DB_PATH"),
+                }
+            }
+        }
+        let _restore = Restore(previous);
+
+        let broker = Broker::new();
+        broker
+            .apply(&json!({"kind":"snapshot","data":{
+                "seq":1,
+                "core":{"id":"core-1","name":"hc"},
+                "terminals":[
+                    {"address":"t7","state":"live","cwd":"/repo","argv":["codex"]},
+                    {"address":"t8","state":"finished","cwd":"/repo","argv":["codex"]}
+                ]
+            }}))
+            .unwrap();
+        let auth = LocalAuth::test();
+        let space_id = "00000000-0000-4000-8000-000000000001";
+        let space = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":80,"method":"workspace.space.create",
+                "params":{"auth":auth.test_token(),"request_id":space_id,
+                          "title":"ukk","project_root":"/work"}
+            }),
+            &broker,
+            &auth,
+        );
+        assert_eq!(space["result"]["id"], space_id, "{space}");
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let session = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":81,"method":"workspace.session.create",
+                "params":{"auth":auth.test_token(),"request_id":session_id,
+                          "space_id":space_id,"title":"bound"}
+            }),
+            &broker,
+            &auth,
+        );
+        assert_eq!(session["result"]["id"], session_id, "{session}");
+        let request_id = "00000000-0000-4000-8000-000000000003";
+        let bind = |id: u64| {
+            handle_request(
+                &json!({
+                    "jsonrpc":"2.0","id":id,"method":"workspace.agent.bind",
+                    "params":{"auth":auth.test_token(),"request_id":request_id,
+                              "session_id":session_id,"core_id":"core-1",
+                              "terminal_address":"t7","adapter":"codex"}
+                }),
+                &broker,
+                &auth,
+            )
+        };
+        let first = bind(82);
+        assert_eq!(first["result"]["id"], request_id, "{first}");
+        assert_eq!(first["result"]["terminal_address"], "t7");
+        let repeated = bind(83);
+        assert_eq!(repeated["result"], first["result"]);
+
+        let snapshot = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":84,"method":"workspace.snapshot",
+                "params":{}
+            }),
+            &broker,
+            &auth,
+        );
+        assert_eq!(
+            snapshot["result"]["agent_runs"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(snapshot["result"]["agent_runs"][0]["id"], request_id);
+
+        // A finished terminal is not bindable through the same RPC path.
+        let finished = "00000000-0000-4000-8000-000000000004";
+        let error = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":85,"method":"workspace.agent.bind",
+                "params":{"auth":auth.test_token(),"request_id":finished,
+                          "session_id":session_id,"core_id":"core-1",
+                          "terminal_address":"t8","adapter":"codex"}
+            }),
+            &broker,
+            &auth,
+        );
+        assert_eq!(error["error"]["code"], -32062, "{error}");
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

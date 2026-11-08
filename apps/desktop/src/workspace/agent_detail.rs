@@ -205,6 +205,7 @@ impl Workspace {
                     .child(Self::meta_row("Parent terminal", parent))
                     .child(Self::meta_row("Reported Agent", app)),
             )
+            .child(self.agent_bind_card(term, cx))
             .child(self.terminal_detail_attachment(term, cx))
             .child(
                 div()

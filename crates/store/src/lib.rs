@@ -40,6 +40,7 @@ pub enum StoreError {
     Invalid(String),
     NotFound(String),
     Conflict,
+    AlreadyBound(String),
     CasConflict,
     DuplicateEvent(String),
     UnsupportedVersion(i64),
@@ -65,6 +66,7 @@ impl fmt::Display for StoreError {
             Self::Invalid(s) => write!(f, "invalid input: {s}"),
             Self::NotFound(s) => write!(f, "not found: {s}"),
             Self::Conflict => write!(f, "layout revision conflict; reload before retrying"),
+            Self::AlreadyBound(detail) => write!(f, "already bound: {detail}"),
             Self::CasConflict => {
                 write!(f, "generation conflict; reload before retrying")
             }

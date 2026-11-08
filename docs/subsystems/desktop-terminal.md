@@ -27,8 +27,9 @@ stream; it does not signal herdr-core or the terminal program.
 ### 2. Explicit one-line input (opt-in, capability-gated)
 
 Only a Session Terminal pane with an `AgentRun { core_id, terminal_address }`
-binding and a live observe stream offers a composer. The terminal detail card
-for an unbound Host terminal stays read-only.
+binding and a live observe stream offers a composer. An unbound Host terminal
+has no input or lifecycle action; its detail card offers only the explicit
+durable metadata binding described below.
 
 ```text
 explicit Send click or Enter in the composer
@@ -74,6 +75,45 @@ Raw terminal text is displayed as raw terminal text. It is **not** a
 structured Agent event and is never parsed to synthesize messages, tool calls,
 progress, approvals or Agent status. The Agent conversation pane remains an
 explicit unsupported state until R2 supplies structured events.
+
+## Explicit Session binding (metadata only)
+
+The Agent detail terminal card offers **Bind terminal to this Session…** only
+for an online, selected, unbound, live terminal whose live `core_id` is known
+and when at least one active Session exists. Opening the confirmation is the
+only way to start this flow; selecting a terminal, refreshing the workspace,
+attaching an observer or switching Tabs never opens or submits it.
+
+The confirmation shows the exact live `core_id` and terminal address from the
+Host snapshot plus an editable adapter name (prefilled from the terminal's
+reported app when valid). The user must select a Session explicitly and press
+**Confirm bind**. Cancel clears the request. On confirm the Desktop sends
+`workspace.agent.bind` with a `request_id` minted when the form opened and
+reused by an unchanged-draft retry, then applies the returned workspace
+snapshot so the AgentRun is visible.
+
+States are reported truthfully and never substituted with a fabricate-able
+success:
+
+| State | UI |
+|---|---|
+| Host offline | Action absent; explains that binding needs a live snapshot |
+| Core identity unknown | Action absent until the Host reports `core_id` |
+| Terminal not live (finished/lost) | Action absent; only a live snapshot record can be bound |
+| Already bound | Shows Session, AgentRun id, core, address and adapter; no action |
+| No active Session | Explains that a Session must exist first |
+| Conflict / core mismatch / unknown Session or parent / unknown or ambiguous terminal / not live / unverifiable | Keeps the confirmation open with the Host message |
+| Success but workspace refresh failed | Says so; the change is never re-sent |
+
+This surface performs no process action: it never starts, attaches, sends,
+interrupts or stops the terminal. The binding is read-only metadata for the
+existing observer and future Agent panes.
+
+Tests in `apps/desktop/src/workspace/agent_bind.rs` cover availability states,
+exact payload keys, stable request id across an unchanged retry, new id after
+a Session change or reopen, confirm/cancel, adapter validation and Host error
+mapping. A real GUI confirmation against a real herdr-core terminal is
+**NOT VERIFIED**; no user terminal was mutated.
 
 ## Direct hc-client read boundary
 
@@ -213,4 +253,5 @@ requires a test-owned terminal and explicit evidence in a follow-up run.
 - No terminal lifecycle control from the Desktop.
 - No automatic input or retry that hides a failure.
 - No Agent conversation, approval or tool-call inference from terminal bytes.
-- No Host RPC changes in this slice.
+- No Agent start/send/stop/kill or attach RPC. The only new Host method is the
+  metadata-only `workspace.agent.bind` described above.
