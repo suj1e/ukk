@@ -612,9 +612,15 @@ func (s *Supervisor) Invoke(ctx context.Context, request InvokeRequest) (InvokeR
 		code := CodeOf(callErr)
 		if code == "" {
 			code = CodeHelperFailed
+			if errors.Is(callErr, context.DeadlineExceeded) {
+				code = CodeHelperTimeout
+			}
 		}
 		s.record(request.Plugin, ActionInvoke, capabilitySummary, scope, OutcomeError,
 			fmt.Sprintf("dispatch failed code=%s detail=%s", code, Redact(callErr.Error())))
+		if code == CodeHelperTimeout {
+			return result, errf(CodeHelperTimeout, "helper did not answer within %s", s.callTimeout)
+		}
 		return result, callErr
 	}
 	if response.ID != requestID {
