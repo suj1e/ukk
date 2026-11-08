@@ -81,6 +81,7 @@
 		088BAC136771EBA13D0AB02E /* ApprovalCapabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalCapabilityTests.swift; sourceTree = "<group>"; };
 		101AC3DA86CCB01A01F7ADCA /* CameraAvailability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraAvailability.swift; sourceTree = "<group>"; };
 		16F1B93D9BD18DCED1F2140B /* ConnectionStateMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStateMachineTests.swift; sourceTree = "<group>"; };
+		1A97B1CB02AB0AA9D5722332 /* LiveKitWebRTC */ = {isa = PBXFileReference; lastKnownFileType = folder; name = LiveKitWebRTC; path = ThirdParty/LiveKitWebRTC; sourceTree = SOURCE_ROOT; };
 		20EC360004B64A26472C330E /* PairingCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingCoordinator.swift; sourceTree = "<group>"; };
 		261EBB4A699B2CB8874BB355 /* CameraAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraAvailabilityTests.swift; sourceTree = "<group>"; };
 		2925042CA7AB1D5BD0818A24 /* Identifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Identifiers.swift; sourceTree = "<group>"; };
@@ -155,6 +156,7 @@
 		1E6C60C14E477FEC7606A0C2 = {
 			isa = PBXGroup;
 			children = (
+				FF9FAF9BE426ACDDDE5A709E /* Packages */,
 				AC8FC8E38F8CFA2A0BD418FD /* UkkCompanion */,
 				C485FA5CFFF19BA0F33CBF24 /* UkkCompanionTests */,
 				BDB3A0CBDF2BEAC23B35936F /* UkkCompanionUITests */,
@@ -291,6 +293,14 @@
 			path = Components;
 			sourceTree = "<group>";
 		};
+		FF9FAF9BE426ACDDDE5A709E /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				1A97B1CB02AB0AA9D5722332 /* LiveKitWebRTC */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -382,7 +392,7 @@
 			mainGroup = 1E6C60C14E477FEC7606A0C2;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				37C45EEE2FB3B8E905502726 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */,
+				B4882BED068B2C7EAC3C7397 /* XCLocalSwiftPackageReference "ThirdParty/LiveKitWebRTC" */,
 			);
 			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
@@ -788,21 +798,16 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		37C45EEE2FB3B8E905502726 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/livekit/webrtc-xcframework";
-			requirement = {
-				kind = exactVersion;
-				version = 150.7871.05;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		B4882BED068B2C7EAC3C7397 /* XCLocalSwiftPackageReference "ThirdParty/LiveKitWebRTC" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ThirdParty/LiveKitWebRTC;
 		};
-/* End XCRemoteSwiftPackageReference section */
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		9C01FB0CBCF319F05F1ECF4A /* LiveKitWebRTC */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 37C45EEE2FB3B8E905502726 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */;
 			productName = LiveKitWebRTC;
 		};
 /* End XCSwiftPackageProductDependency section */

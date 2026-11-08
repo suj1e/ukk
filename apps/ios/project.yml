@@ -7,8 +7,7 @@ options:
   groupSortPosition: top
 packages:
   LiveKitWebRTC:
-    url: https://github.com/livekit/webrtc-xcframework
-    exactVersion: "150.7871.05"
+    path: ThirdParty/LiveKitWebRTC
 settings:
   base:
     SWIFT_VERSION: "5.0"

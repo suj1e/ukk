@@ -31,6 +31,13 @@ jobs:
           xcodebuild -version
           xcrun simctl list runtimes
 
+      - name: Fetch WebRTC binary
+        working-directory: apps/ios
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/fetch-webrtc.sh
+
       - name: Resolve Swift packages
         working-directory: apps/ios
         shell: bash
@@ -62,6 +69,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Fetch WebRTC binary
+        working-directory: apps/ios
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/fetch-webrtc.sh
 
       - name: Show Xcode and available simulators
         run: |
