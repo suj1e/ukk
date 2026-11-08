@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/MoeForge/moejs"
 )
 
 // Plugin runtime states.
@@ -116,6 +118,8 @@ type pluginState struct {
 	args       []string
 	env        map[string]string
 	builtin    InProcess
+	module     *moejs.Module
+	jsHook     moejs.Hook
 
 	// opMu serialises all lifecycle and dispatch work for one plugin.
 	opMu   sync.Mutex
@@ -191,6 +195,12 @@ func (s *Supervisor) InstallDir(dir string, opts InstallOptions) (*ValidatedMani
 		return nil, err
 	}
 	opts.Dir = absDir
+	if isJavaScript(manifest) {
+		if err := s.installJavaScript(manifest, absDir); err != nil {
+			return nil, err
+		}
+		return manifest, nil
+	}
 	if err := s.Install(manifest, "", opts); err != nil {
 		return nil, err
 	}
@@ -204,6 +214,9 @@ func (s *Supervisor) InstallDir(dir string, opts InstallOptions) (*ValidatedMani
 func (s *Supervisor) Install(manifest *ValidatedManifest, helperPath string, opts InstallOptions) error {
 	if manifest == nil {
 		return errf(CodeInvalidManifest, "manifest is required")
+	}
+	if isJavaScript(manifest) {
+		return errf(CodeInvalidHelper, "JavaScript plugins are installed from a directory")
 	}
 	id := manifest.ID
 
@@ -290,6 +303,99 @@ func (s *Supervisor) Install(manifest *ValidatedManifest, helperPath string, opt
 	return nil
 }
 
+// isJavaScript reports whether the manifest entrypoint is a moejs module.
+func isJavaScript(manifest *ValidatedManifest) bool {
+	return strings.HasSuffix(manifest.Entrypoint, ".js")
+}
+
+const jsMemoryLimit = 32 << 20
+
+// installJavaScript compiles a first-party moejs plugin. No host globals are
+// installed, so the module reaches only the standard library; every import
+// fails because no importer is provided.
+func (s *Supervisor) installJavaScript(manifest *ValidatedManifest, dir string) error {
+	if manifest.Trust != TrustFirstParty {
+		return errf(CodeInvalidEntrypoint, "JavaScript plugins must use first-party trust")
+	}
+	path := filepath.Join(dir, manifest.Entrypoint)
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return errf(CodeInvalidHelper, "JavaScript entrypoint %s is not a regular file", manifest.Entrypoint)
+	}
+	source, err := os.ReadFile(path)
+	if err != nil || int64(len(source)) > MaxFrameBytes {
+		return errf(CodeInvalidHelper, "JavaScript entrypoint is unreadable or exceeds the frame limit")
+	}
+	module, err := moejs.Compile(manifest.Entrypoint, string(source))
+	if err != nil {
+		return errf(CodeInvalidHelper, "compile JavaScript entrypoint: %s", Redact(err.Error()))
+	}
+	state := &pluginState{manifest: manifest, dir: dir, module: module, status: StateDisabled, env: map[string]string{}}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.plugins[manifest.ID]; exists {
+		s.record(manifest.ID, ActionInstall, "", "", OutcomeDenied, "already installed")
+		return errf(CodeAlreadyInstalled, "plugin %q is already installed", manifest.ID)
+	}
+	s.plugins[manifest.ID] = state
+	s.record(manifest.ID, ActionInstall, "", "", OutcomeSuccess, "trust=first-party runtime=moejs")
+	return nil
+}
+
+// invokeJavaScript runs invoke(request) in a fresh runtime with a memory limit
+// and a deadline. The runtime has no host globals and no importer.
+func (s *Supervisor) invokeJavaScript(ctx context.Context, state *pluginState, request InvokeRequest, result InvokeResult, capabilitySummary string) (InvokeResult, error) {
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return result, errf(CodeInvalidArgs, "encode JavaScript arguments")
+	}
+	rt := moejs.NewRuntime(moejs.Options{MemoryLimit: jsMemoryLimit, DisableDynamicCode: true})
+	callCtx, cancel := context.WithTimeout(ctx, s.callTimeout)
+	defer cancel()
+	if err := rt.Load(state.module); err != nil {
+		s.record(request.Plugin, ActionInvoke, capabilitySummary, request.Scope, OutcomeError, "load failed")
+		return result, errf(CodeHelperFailed, "load JavaScript plugin: %s", Redact(err.Error()))
+	}
+	arg, err := rt.ParseJSON(payload)
+	if err != nil {
+		return result, errf(CodeInvalidArgs, "parse JavaScript arguments: %s", Redact(err.Error()))
+	}
+	interrupted := make(chan struct{})
+	stop := context.AfterFunc(callCtx, func() {
+		rt.Interrupt(context.Cause(callCtx))
+		close(interrupted)
+	})
+	value, callErr := rt.Call(state.jsHook, arg)
+	if !stop() {
+		<-interrupted
+	}
+	rt.ReleaseCallData()
+	if callErr != nil {
+		code := CodeHelperFailed
+		message := Redact(callErr.Error())
+		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+			code = CodeHelperTimeout
+			message = "JavaScript plugin did not answer within the deadline"
+		} else if errors.Is(callErr, moejs.ErrMemoryLimit) {
+			message = "JavaScript plugin exceeded its memory limit"
+		}
+		s.record(request.Plugin, ActionInvoke, capabilitySummary, request.Scope, OutcomeError, message)
+		return result, errf(code, "%s", message)
+	}
+	var raw json.RawMessage
+	if err := rt.Unmarshal(value, &raw); err != nil {
+		s.record(request.Plugin, ActionInvoke, capabilitySummary, request.Scope, OutcomeError, "result is not JSON")
+		return result, errf(CodeHelperFailed, "JavaScript result is not JSON")
+	}
+	if len(raw) == 0 {
+		raw = json.RawMessage("null")
+	}
+	result.Value = raw
+	s.record(request.Plugin, ActionInvoke, capabilitySummary, request.Scope, OutcomeSuccess,
+		fmt.Sprintf("command=%s scope=%s runtime=moejs", request.Command, request.Scope))
+	return result, nil
+}
+
 func normalizeEnv(in map[string]string) (map[string]string, error) {
 	out := make(map[string]string, len(in))
 	for name, value := range in {
@@ -341,6 +447,18 @@ func (s *Supervisor) Enable(ctx context.Context, pluginID string) error {
 	if state.builtin != nil {
 		state.status = StateReady
 		s.record(pluginID, ActionEnable, "", "", OutcomeSuccess, "trust=builtin")
+		return nil
+	}
+	if state.module != nil {
+		hook, err := state.module.Hook("invoke")
+		if err != nil {
+			state.status = StateFailed
+			s.record(pluginID, ActionEnable, "", "", OutcomeError, "missing invoke export")
+			return errf(CodeProtocolViolation, "JavaScript plugin must export invoke(request)")
+		}
+		state.jsHook = hook
+		state.status = StateReady
+		s.record(pluginID, ActionEnable, "", "", OutcomeSuccess, "runtime=moejs")
 		return nil
 	}
 	if err := s.startHelper(state); err != nil {
@@ -572,6 +690,10 @@ func (s *Supervisor) Invoke(ctx context.Context, request InvokeRequest) (InvokeR
 	dispatch.Scope = scope
 	dispatch.SessionID = sessionID
 	capabilitySummary := strings.Join(command.Requires, ",")
+
+	if state.module != nil {
+		return s.invokeJavaScript(ctx, state, dispatch, result, capabilitySummary)
+	}
 
 	if state.builtin != nil {
 		callCtx, cancel := context.WithTimeout(ctx, s.callTimeout)

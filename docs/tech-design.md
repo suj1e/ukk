@@ -176,7 +176,7 @@ Native SwiftUI, sharing the wire protocol only.
 ## Plugin safety
 
 - Third-party plugins are untrusted by default: versioned manifest, declared commands/events/UI slots, durable per-device grants, audit, crash containment and OS sandboxing where available.
-- Plugin code never runs in the bridge's privileged process by default.
+- Plugin code never runs in the bridge's privileged process by default. First-party JavaScript plugins may run in the capability-limited moejs runtime (no globals, imports, filesystem or network); third-party code stays in a helper process.
 - Remote Screen is first-party privileged capability, but still uses grants and leases like any other sensitive surface.
 - The immediate product scope is the safety boundary needed by ukk's own features; a general-purpose plugin marketplace/SDK is not a current deliverable.
 

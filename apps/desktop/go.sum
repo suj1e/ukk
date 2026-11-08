@@ -1,3 +1,5 @@
+github.com/MoeForge/moejs v0.1.0-alpha.11 h1:VVDuqn14Dzlhcs17gDp3X43uvKkxi7OK7SZvkd0moEc=
+github.com/MoeForge/moejs v0.1.0-alpha.11/go.mod h1:YG2Y3bZuThN7hkSBext9MHPUPSrAIdpiE+6v+QO+LX0=
 github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
 github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/ebitengine/purego v0.11.1 h1:2zpWRSQNVKN4eKsKO9eM1ILDgWfYMY9GwqRmK6XeQ/0=

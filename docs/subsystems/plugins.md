@@ -28,6 +28,29 @@ environment, bounded framing, deadlines, crash containment and kill-on-disable.
 Sandboxing where an OS provides it is separate work; no sandbox is claimed
 here. A Wasm runtime is not shipped and such a manifest is rejected.
 
+## JavaScript plugins (moejs)
+
+A first-party plugin may ship a JavaScript module instead of a helper process:
+`entrypoint` ends in `.js`, `trust` is `first-party`. The bridge compiles it with
+[moejs](https://github.com/MoeForge/moejs), a pure-Go JavaScript runtime, and
+runs `invoke(request)` in a fresh runtime per call with:
+
+- a 32 MiB JavaScript memory limit;
+- the supervisor's call deadline, with `Runtime.Interrupt` on expiry;
+- no host globals, no importer, and `eval`/`Function` disabled;
+- no filesystem, network, process or UI access — only the standard library.
+
+`third-party` JavaScript is rejected at manifest validation and must use the
+helper-process path, because moejs is a capability-limited interpreter, not an
+OS sandbox. The JavaScript contract is:
+
+```js
+export function invoke(request) {
+  // request: {plugin, command, session_id?, scope, args?}
+  return { ok: true }; // any JSON-serializable value
+}
+```
+
 ## Manifest schema v1 (JSON)
 
 The manifest is JSON, not TOML. One file, one object, decoded strictly.

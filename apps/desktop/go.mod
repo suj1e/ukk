@@ -3,6 +3,7 @@ module github.com/suj1e/ukk/apps/desktop
 go 1.27.3
 
 require (
+	github.com/MoeForge/moejs v0.1.0-alpha.11
 	github.com/coder/websocket v1.8.15
 	github.com/egoist/mygo v0.8.3
 	github.com/pion/rtp v1.10.6

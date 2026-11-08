@@ -487,6 +487,9 @@ func validateEntrypoint(trust, entrypoint string) error {
 	if entrypoint == "." || strings.Contains(entrypoint, "..") || strings.ContainsAny(entrypoint, `/\`) {
 		return errf(CodeInvalidEntrypoint, "entrypoint %q must be a bare file name", entrypoint)
 	}
+	if strings.HasSuffix(entrypoint, ".js") && trust != TrustFirstParty {
+		return errf(CodeInvalidEntrypoint, "JavaScript plugins must use trust \"first-party\" and run in the capability-limited runtime")
+	}
 	for _, r := range entrypoint {
 		if unicode.IsControl(r) || r == ':' {
 			return errf(CodeInvalidEntrypoint, "entrypoint %q is not a bare file name", entrypoint)
