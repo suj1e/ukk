@@ -1,0 +1,17 @@
+{
+  "manifest_version": 1,
+  "id": "dev.ukk.example.hello-js",
+  "name": "Hello moejs",
+  "version": "0.1.0",
+  "api": ">=0.1,<0.2",
+  "trust": "first-party",
+  "entrypoint": "plugin.js",
+  "capabilities": { "required": [], "optional": [] },
+  "contributions": {
+    "commands": [
+      { "id": "hello.echo", "title": "Echo the request", "scope": "global", "requires": [] }
+    ],
+    "views": [],
+    "events": []
+  }
+}

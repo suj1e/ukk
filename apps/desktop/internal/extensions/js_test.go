@@ -115,3 +115,24 @@ func TestJavaScriptPluginCannotImportOrEscapeDeadline(t *testing.T) {
 		t.Fatalf("timeout took %s", elapsed)
 	}
 }
+
+func TestHelloJSExample(t *testing.T) {
+	dir := filepath.Join("..", "..", "examples", "plugins", "hello-js")
+	supervisor := NewSupervisor(Config{Root: testDir(t)})
+	defer supervisor.Shutdown()
+	if _, err := supervisor.InstallDir(dir, InstallOptions{}); err != nil {
+		t.Fatalf("install example: %v", err)
+	}
+	if err := supervisor.Enable(context.Background(), "dev.ukk.example.hello-js"); err != nil {
+		t.Fatalf("enable example: %v", err)
+	}
+	result, err := supervisor.Invoke(context.Background(), InvokeRequest{
+		Plugin: "dev.ukk.example.hello-js", Command: "hello.echo",
+	})
+	if err != nil {
+		t.Fatalf("invoke example: %v", err)
+	}
+	if !strings.Contains(string(result.Value), "hello from moejs") {
+		t.Fatalf("example result = %s", result.Value)
+	}
+}
