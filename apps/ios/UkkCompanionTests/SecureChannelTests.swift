@@ -180,7 +180,6 @@ final class SecureChannelTests: XCTestCase {
         let clientEd = try XCTUnwrap(Base64URL.decode(c1["ed"] as? String ?? ""))
         let clientX = try XCTUnwrap(Base64URL.decode(c1["x"] as? String ?? ""))
         let clientEph = try XCTUnwrap(Base64URL.decode(c1["eph"] as? String ?? ""))
-        let nc = try XCTUnwrap(Base64URL.decode(c1["nc"] as? String ?? ""))
         let signature = try XCTUnwrap(Base64URL.decode(c1["sig"] as? String ?? ""))
         XCTAssertEqual(clientEd, device.edPublic)
 
