@@ -40,7 +40,7 @@ flowchart TB
   subgraph Local["设备端：ukk-bridge 后台服务（Go）"]
     AUTH["连接授权<br/>本地 / 远程 / 适配器 / 屏幕租约"]
     MODEL["工作区与事件服务<br/>Space / Session / AgentRun / 游标 / 授权"]
-    DB[("SQLite 元数据<br/>设备信任 / 授权 / 审计 / 幂等")]
+    DB[("JSON 工作区存储<br/>设备信任 / 授权 / 审计")]
     PROV["Provider 监督<br/>中立 Agent 契约 · 首个真实 omp"]
     HC["herdr-core 客户端<br/>文档化 API · 流式 attach"]
     SCR["Remote Screen 授权<br/>view/control 租约 · 采集/输入适配"]

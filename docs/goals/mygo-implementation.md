@@ -40,7 +40,7 @@ No calendar deadlines are promised. A stage is complete only when its **evidence
 **Work:**
 
 1. Local authenticated IPC: Unix socket on macOS/Linux, Windows named pipe, same-user peer checks, deadlines, quotas and per-connection bounds.
-2. Domain + SQLite: Space, Session, AgentRun, layouts, event cursors, revision compare-and-swap, idempotency and audit. Greenfield schema only.
+2. Domain persistence: Space, Session, AgentRun, layouts, revision compare-and-swap and a Desktop-owned atomic JSON store; the bridge serves a read-only mirror for remote clients.
 3. `internal/hc`: herdr-core v0.1.18 client, framed attach, terminal list/observe/attach, explicit controller path, detach without stop.
 4. MyGo terminal surface using the native terminal plugin (libghostty-vt through purego): observer and controller views, paste/IME/named keys, resize.
 5. Provenance: one write path with source tags (`HUMAN_INPUT` / `AUTOMATIC_INPUT`); observers cannot write or resize.

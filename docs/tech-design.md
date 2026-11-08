@@ -8,7 +8,7 @@
 ukk is a native multi-agent coding workspace with a remote mobile companion.
 
 - **Desktop** is a native Go application built with MyGo (`apps/desktop`, package `ui`). It is not a webview page, not a GPUI/Rust app and not a fork of herdr-app.
-- **`ukk-bridge`** is the background service that authorizes remote, agent-adapter and screen connections, owns durable ukk metadata and supervises provider adapters. It runs independently of any window.
+- **`ukk-bridge`** is the background service that authorizes remote, agent-adapter and screen connections, owns Agent children and supervises provider adapters. It runs independently of any window. The Desktop owns durable workspace metadata and publishes a read-only mirror to the bridge for remote clients.
 - **herdr-core** (pinned v0.1.18) is the external authority for persistent terminals, processes and reported program status. ukk integrates through its documented API; it never copies or rewrites the runtime.
 - **`ukk-relay`** is a self-hostable control-plane relay: WSS/TLS with operator authentication, opaque end-to-end encrypted frames, and no raw video.
 - **iOS/iPadOS** is a native SwiftUI companion sharing the protocol, never the desktop UI code.
@@ -27,7 +27,7 @@ flowchart TB
   subgraph Local["Device · ukk-bridge (Go background service)"]
     AUTH["Connection authorization<br/>local peer · remote device · adapter · screen lease"]
     MODEL["Workspace & event service<br/>Space · Session · AgentRun · cursors · grants"]
-    STORE[("SQLite metadata<br/>trust · grants · audit · idempotency")]
+    STORE[("JSON workspace store +<br/>trust · grants · audit")]
     PROV["Provider supervisor<br/>neutral Agent contract · omp first"]
     HC["herdr-core client<br/>documented API · framed attach"]
     SCR["Remote Screen authority<br/>view/control leases · capture/input adapters"]
@@ -67,7 +67,8 @@ flowchart TB
 |---|---|---|
 | PTY, process tree, terminal identity, reported program status | herdr-core | Survives closing ukk windows. Status uses structured reporting (OSC 7501); never inferred from ANSI. |
 | Terminal surface, resize intent, input provenance | Desktop UI → bridge → herdr-core | The UI is an observer/controller client; it does not own the process. Human and automatic input share one `Conn.Write`, so provenance is source-tagged, never byte-sniffed. |
-| Workspaces, app sessions, agent-run metadata, layouts, grants, device trust | `ukk-bridge` | Durable SQLite; the Desktop renders snapshots and sends idempotent commands. |
+| Workspaces, app sessions, agent-run metadata, layouts | Desktop `internal/workspace` | One atomic JSON document with revision CAS; the bridge serves a read-only mirror to remote clients. |
+| Device trust, grants, pairing state | `ukk-bridge` | Durable trust JSON plus live scope/TTL checks; the Desktop can grant or revoke explicitly. |
 | Provider turns, tool calls, approvals, capabilities | Provider adapter inside the bridge | Only explicit provider semantics; unsupported features degrade to terminal output, never fabricated. |
 | Relay routes and connection liveness | `ukk-relay` | Content is opaque ciphertext; the relay is not a source of product state. |
 | Screen media and input events | Endpoint media path | Independent of the relay and of Agent event history; leased and revocable. |
@@ -97,7 +98,7 @@ apps/
       relay/            WSS/TLS server, operator auth, opaque routing
       agents/           provider-neutral contract and omp adapter
       hc/               herdr-core client, framed attach, resize, provenance, credit
-      workspace/        domain identities, layouts, events, commands, SQLite
+      workspace/        domain identities, layouts, atomic JSON persistence
       remote/           pairing, device identity, E2E, relay client, revocation
       remotescreen/     capture/input adapters, media negotiation, leases
     testdata/           provider/hc fixtures and contract vectors
@@ -187,7 +188,7 @@ Native SwiftUI, sharing the wire protocol only.
 
 ## Platform integration
 
-macOS: MyGo native UI on Metal, launchd user service for the bridge, ScreenCaptureKit capture, user-consented Accessibility input, VideoToolbox encoding. Windows: MyGo native UI on Direct3D 11, user process/Task Scheduler service, Windows Graphics Capture and its permission model. Linux: MyGo native UI on OpenGL/GTK 3, systemd user service, PipeWire/portal capture. MyGo needs no cgo; runtime libraries are loaded through purego where applicable. iOS: SwiftUI, AVFoundation/VisionKit QR, Keychain, APNs, VideoToolbox.
+macOS: MyGo native UI on Metal, launchd user service for the bridge, ffmpeg/avfoundation capture, user-consented Accessibility input, VideoToolbox encoding inside ffmpeg. Windows: MyGo native UI on Direct3D 11, user process/Task Scheduler service, ffmpeg/gdigrab capture and SendInput injection. Linux: MyGo native UI on OpenGL/GTK 3, systemd user service, ffmpeg/x11grab capture and xdotool injection (typed unavailable when absent). MyGo needs no cgo; runtime libraries are loaded through purego where applicable. iOS: SwiftUI, AVFoundation/VisionKit QR, Keychain, APNs, VideoToolbox.
 
 Every platform permission and capture adapter is verified separately; a CI compile is not permission evidence.
 

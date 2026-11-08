@@ -34,14 +34,14 @@ A feature is **not complete** when its source merely exists. It must have a test
 | `cmd/ukk` | MyGo app lifecycle, window creation, binding services | Domain rules, SQL, herdr-core parsing, remote credentials |
 | `cmd/ukk-bridge` | Background service lifecycle and wiring | UI rendering, direct widget state |
 | `cmd/ukk-relay` | Relay server startup, TLS/operator configuration | Product domain state, plaintext control content, screen media |
-| `internal/ui/app` | Shell, navigation, menus, keybindings, settings presentation | Authorization, process lifetime, SQLite |
+| `internal/ui/app` | Shell, navigation, menus, keybindings, settings presentation | Authorization, process lifetime, persistence |
 | `internal/ui/workspace` | Space/Session/tab/pane composition and refresh | Agent control decisions, database writes |
 | `internal/ui/conversation` | Provider-neutral turns, tools, approvals, Markdown surfaces | Provider RPC parsing, approval authorization |
 | `internal/ui/terminal` | libghostty-vt view, resize intent, focus | Process ownership, observer/controller authorization |
 | `internal/ui/repository` | Read-only files, Git status/diff/activity surfaces | Git write actions without a capability |
 | `internal/ui/remotescreen` | Floating tile, permission prompts, local presentation | Capture/input authority, media transport |
 | `internal/bridge` | Local API acceptance, authorization, audit, lifecycle | Rendering, embedded provider parsing |
-| `internal/workspace` | Domain identities, layouts, commands, event log, SQLite schema | herdr-core process control, UI widgets |
+| `internal/workspace` | Domain identities, layout validation, atomic JSON store, revision CAS | herdr-core process control, UI widgets |
 | `internal/agents` | Provider-neutral contract, omp adapter, capability detection | Terminal process ownership, approval replay |
 | `internal/hc` | herdr-core client, framed attach, provenance tags, resize, credit | Product UI, durable metadata |
 | `internal/remote` | Pairing, device identity, E2E, relay client, revocation | Screen media, generic RPC route policy |
@@ -82,12 +82,12 @@ Keep packages **cohesive rather than arbitrarily small**. An entrypoint should s
 ## Test pyramid
 
 - **Pure unit:** pane split/close/resize, domain IDs, layouts, revision conflicts, source-tag selection, Markdown bounds.
-- **Persistence:** SQLite reopen, migrations for the current greenfield schema, cursor retention, trust/grant revocation, idempotency.
+- **Persistence:** atomic store reopen, corrupt-document refusal, revision conflicts, pane-tree bounds, trust/grant revocation.
 - **Protocol/transport:** Unix socket and Windows named pipe framing, same-user acceptance, deadlines, quotas, malformed frames.
 - **Provider contracts:** omp fixture transcripts plus a real gated run; Codex/Claude contract fixtures only, with no live claim until verified.
 - **herdr-core:** recorded schema and mock transport tests; a pinned real-daemon acceptance job for process survival, attach/detach, resize, provenance and credit.
 - **Relay/media:** TLS/operator-auth rejection, opaque frame bounds, E2E possession, revocation, TURN negotiation and no-media-on-relay checks.
-- **UI integration:** Session creation → bridge → SQLite → refreshed MyGo view; closing a window does not kill an Agent; offline and error states.
+- **UI integration:** Session creation → workspace store → refreshed MyGo view; provider start/prompt → bridge → refreshed conversation; closing a window does not kill an Agent; offline and error states.
 - **Real OS acceptance:** native window, keyboard/a11y, permissions, service install/uninstall and bridge survival on each desktop OS.
 - **iOS:** simulator unit/UI tests; physical-device pairing, camera, approvals and media only when signing/device prerequisites exist.
 

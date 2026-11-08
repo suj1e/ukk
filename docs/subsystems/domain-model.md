@@ -1,15 +1,13 @@
 # Domain model and ownership
 
 > Contract for ukk's durable product metadata in the Go implementation. The
-> implemented store is `apps/desktop/internal/workspace`; it persists one JSON
-> document per user and is owned by the Desktop process. The bridge keeps a
-> read-only mirror of that document for remote clients. Two upstream statements
-> are stale: [tech-design](../tech-design.md) and
-> [mygo-implementation](../goals/mygo-implementation.md) still name SQLite, and
-> tech-design assigns durable metadata ownership to the bridge. **SQLite is not
-> current**, and the ownership split described here is what the code does until
-> those pages are reconciled. What is verified, and on which commit, is recorded
-> in [status](../status.md).
+> implemented store is `apps/desktop/internal/workspace`: one JSON document per
+> user, owned by the Desktop process, with atomic replacement and revision CAS.
+> The bridge keeps a read-only mirror of that document for remote clients.
+> [tech-design](../tech-design.md) and
+> [mygo-implementation](../goals/mygo-implementation.md) describe the same split.
+> What is verified, and on which commit, is recorded in
+> [status](../status.md).
 
 ## Entities
 
