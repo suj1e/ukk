@@ -1,13 +1,15 @@
-# Desktop read-only terminal observation (D3)
+# Desktop terminal observation and explicit one-line input (D3)
 
-> Status: implemented in source and unit-tested; macOS real-attach smoke is
-> recorded below. Windows and Linux real attach, terminal input/full
-> emulation, and Agent conversation are **NOT VERIFIED**.
+> Status: read-only observation and the explicit one-line input surface are
+> implemented in source and unit-tested; macOS real observe attach is recorded
+> below. Real GUI line send, Windows/Linux real attach/input, full terminal
+> emulation, resize and keystroke streaming are **NOT VERIFIED**.
 
 ## Product contract
 
-The Desktop Terminal pane is a read-only observer of the terminal herdr-core
-already owns:
+The Desktop Terminal pane has two deliberately separate paths.
+
+### 1. Observe (default, read-only)
 
 ```text
 explicit pane/detail action
@@ -22,6 +24,41 @@ interrupt, stop, kill or archive. Dropping or detaching the attachment sends
 only `CLOSE` for that stream. Closing a Pane, Tab, Session or window drops the
 stream; it does not signal herdr-core or the terminal program.
 
+### 2. Explicit one-line input (opt-in, capability-gated)
+
+Only a Session Terminal pane with an `AgentRun { core_id, terminal_address }`
+binding and a live observe stream offers a composer. The terminal detail card
+for an unbound Host terminal stays read-only.
+
+```text
+explicit Send click or Enter in the composer
+  → HostClient::runtime_send (reads the separate agent-control token at call time)
+  → Host runtime.send
+      preflight: request_id, intent:"user", separate control capability
+      exact core_id + terminal_address check against the connected core
+      durable audit entry, in-process idempotency by request_id
+  → hc terminal.send (paste this line, then Enter after the quiet period)
+```
+
+The composer is not terminal emulation:
+
+- one line, at most 8 KiB, printable text only; newline, tab, other control
+  characters and bidi overrides are rejected before any connection is opened;
+- typing is local. Nothing is sent on application load, Session selection, Tab
+  switch, attach, reattach or on each keystroke;
+- no resize, interrupt, stop, kill, detach, named keys or paste channel is
+  reachable from this surface;
+- the binding and the attached stream address are re-resolved at send time; a
+  stale render is refused instead of targeting another terminal;
+- the field is cleared only after a verified Host success. A failure keeps the
+  draft, shows the Host/client error verbatim and is never retried
+  automatically. A Host-reported `replayed` outcome is labelled as such.
+
+When the capability is unavailable the composer field is absent and the pane
+states why: disabled with the Host's typed problem, still checking, or Host
+offline. The Desktop never substitutes the workspace metadata token and never
+fabricates a success state.
+
 Raw terminal text is displayed as raw terminal text. It is **not** a
 structured Agent event and is never parsed to synthesize messages, tool calls,
 progress, approvals or Agent status. The Agent conversation pane remains an
@@ -35,9 +72,11 @@ This is deliberate:
 
 - The Host line RPC (`runtime.attach`) cannot carry a backpressured byte
   stream; `crates/host/src/runtime_api.rs` already refuses it for that reason.
-- The Host remains the control/lifecycle owner. The Desktop receives no
+- The Host remains the control/lifecycle owner. The observe path receives no
   terminal control capability and has no code path to `terminal.kill`,
   `terminal.rm`, `terminal.interrupt`, `terminal.send` or `terminal.keys`.
+  The input path exists only through `HostClient::runtime_send`, which needs
+  the separate agent-control capability.
 - The observer does not own Agent lifetime. The AgentRun binding is read-only
   metadata; the terminal process survives Desktop detach, Pane close, Session
   switch, window close and application quit.
@@ -81,10 +120,13 @@ offers **Reattach read-only**; the old stream is only dropped.
 | State | Meaning | Actions |
 |---|---|---|
 | Connecting | `hc connect` / framed hello / attach is in flight | Detach only removes the local worker |
-| Attached | `terminal.attach {observe:true}` succeeded | Detach, Copy diagnostics |
+| Attached | `terminal.attach {observe:true}` succeeded | Detach, Copy diagnostics; one-line composer when capability is enabled |
 | Attached · N bytes received | Visible progress counter; raw bytes, not Agent progress | Detach, Copy diagnostics |
-| Closed | The core ended the stream, usually program exit with reason/exit code/signal | Retry read-only, Detach, Copy diagnostics |
+| Closed | The core ended the stream, usually program exit with reason/exit code/signal | Retry read-only, Detach, Copy diagnostics; no composer |
 | Attach failed | Local spawn, framing, capability or core-identity failure | Retry read-only, Detach, Copy diagnostics |
+| Capability unknown | `runtime.status` has not answered yet | Recheck capability |
+| Capability disabled | The separate agent-control token is absent or insecure | Recheck capability; no input field |
+| Host offline | The local Host is unreachable or answered invalidly | Recheck capability; no input field |
 
 `Closed` and `Attach failed` never imply that the Desktop stopped the program.
 Only herdr-core and its owner can end the terminal.
@@ -103,6 +145,9 @@ for data it has consumed, so a stalled UI applies backpressure instead of
 growing memory. The GPUI thread only checks a generation counter and repaints;
 it never performs terminal I/O.
 
+One submitted line is capped at 8 KiB by both the Desktop composer and
+`ukk-host-client` before the capability file is read or a socket is opened.
+
 ## Verification
 
 Automated unit tests cover:
@@ -113,16 +158,36 @@ Automated unit tests cover:
 - the observe request has no input or resize flags;
 - a mocked event source proves sanitization, progress and close handling;
 - an ignored real-daemon test launches a test-owned terminal, observes text,
-  receives a normal close, and cleans up that terminal only.
+  receives a normal close, and cleans up that terminal only;
+- one-line validation, keyboard typing/Backspace/Escape, Enter-only send,
+  capability gating (unknown/disabled/offline), draft retention on failure,
+  clear-only-after-verified-success, and that attaching alone cannot produce
+  input or a send request.
 
-Manual macOS evidence for this change is recorded in the pull request body:
-real `hc 0.1.18` framed observe attach against a test terminal. Windows and
-Linux real attach were not exercised; only the shared code path and their
+Host-client contract tests cover:
+
+- the request carries the separate agent-control token, never the workspace
+  token, plus `request_id`, `intent:"user"` and the exact binding;
+- each explicit line gets a fresh `request_id`;
+- Host denial, idempotent replay and missing/insecure capability errors are
+  returned without retry or a fabricated success;
+- malformed lines and bindings are rejected before any IPC;
+- `runtime.status` is read-only and needs no capability file.
+
+Manual macOS evidence for the observe path is recorded in the pull request
+body: real `hc 0.1.18` framed observe attach against a test terminal. Windows
+and Linux real attach were not exercised; only the shared code path and their
 compile/test CI jobs apply.
+
+**NOT VERIFIED:** a real GUI line send against a real hc terminal was not run
+for this change; no user terminal was mutated. Real line-send acceptance
+requires a test-owned terminal and explicit evidence in a follow-up run.
 
 ## Non-goals
 
-- No terminal input, copy-on-select, shell integration or full VT emulation.
+- No full VT emulation, keystroke streaming, resize, named-key input, paste
+  channel, copy-on-select or shell integration.
 - No terminal lifecycle control from the Desktop.
+- No automatic input or retry that hides a failure.
 - No Agent conversation, approval or tool-call inference from terminal bytes.
-- No Host RPC changes.
+- No Host RPC changes in this slice.

@@ -171,6 +171,12 @@ pub(crate) struct Workspace {
     plugin_notice: Option<plugins::PluginNotice>,
     /// Explicit read-only terminal observers, keyed by pane or detail view.
     terminal_feeds: terminal::TerminalFeeds,
+    /// Explicit one-line terminal input. Local UI state only; never a
+    /// keystroke stream and never cleared without a verified Host reply.
+    terminal_input: terminal::TerminalInputState,
+    terminal_input_focus: gpui::FocusHandle,
+    /// One read-only `runtime.status` request at a time.
+    terminal_capability_in_flight: bool,
     /// Selected `session.tab` view id. Selection is local and never invokes.
     plugin_active_tab: Option<String>,
     /// Host-owned omp RPC conversation. Local UI state only; no layout or
@@ -229,6 +235,9 @@ impl Workspace {
             plugin_busy: false,
             plugin_notice: None,
             terminal_feeds: terminal::TerminalFeeds::default(),
+            terminal_input: terminal::TerminalInputState::default(),
+            terminal_input_focus: cx.focus_handle(),
+            terminal_capability_in_flight: false,
             plugin_active_tab: None,
             omp: omp::OmpPanel::default(),
             omp_input_focus: cx.focus_handle(),

@@ -54,7 +54,15 @@ impl Workspace {
                         revision = live.revision;
                         if this
                             .update(cx, |view, cx| {
+                                let was_online = view.online;
                                 view.apply_host_state(live);
+                                // The Host may have been unreachable when the
+                                // last capability read failed. Re-read the
+                                // read-only status once connectivity returns;
+                                // this never retries a send.
+                                if !was_online && view.online {
+                                    view.refresh_terminal_capability(cx);
+                                }
                                 cx.notify();
                             })
                             .is_err()
@@ -321,12 +329,13 @@ impl Workspace {
                         client.host_snapshot(),
                         client.workspace_state(),
                         client.plugin_snapshot(),
+                        client.runtime_status(),
                     )
                 })
                 .await;
             this.update(cx, |view, cx| {
                 view.loading = false;
-                let (host, domain, plugins) = result;
+                let (host, domain, plugins, capability) = result;
                 match host {
                     Ok(live) => view.apply_host_state(live),
                     Err(error) => {
@@ -355,6 +364,7 @@ impl Workspace {
                         view.plugin_snapshot_error = Some(error.to_string());
                     }
                 }
+                view.apply_terminal_capability(capability);
                 cx.notify();
             })
             .ok();

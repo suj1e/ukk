@@ -1,12 +1,20 @@
-//! Explicit, read-only terminal observation for the Desktop.
+//! Explicit terminal observation and one-line input for the Desktop.
 //!
 //! The Desktop opens `hc connect` and `terminal.attach {observe:true}` directly
 //! from a background worker. This is a deliberate read boundary: ukk's Host
 //! remains the owner of Agent control and terminal lifecycle, while the view
-//! only consumes an observer stream. No input, resize, interrupt, stop, kill
-//! or archive call exists here. Dropping the attachment sends CLOSE for this
-//! stream and dropping the connection reaps the local `hc connect` helper; the
-//! terminal program is never signalled.
+//! only consumes an observer stream. The observe path has no input, resize,
+//! interrupt, stop, kill or archive call. Dropping the attachment sends CLOSE
+//! for this stream and dropping the connection reaps the local `hc connect`
+//! helper; the terminal program is never signalled.
+//!
+//! A bound Session terminal may additionally offer one explicit line of
+//! input. That path does not write to the attach stream: it calls the Host's
+//! `runtime.send` through [`HostClient::runtime_send`], which requires the
+//! separate agent-control capability and the exact `core_id` +
+//! `terminal_address` binding. There is no keystroke stream, automatic input,
+//! resize, interrupt, stop, kill or detach path in the composer, and a failed
+//! send is never retried automatically.
 //!
 //! Attach happens only after an explicit pane/detail action. Raw terminal text
 //! is displayed as raw terminal text and is never parsed into Agent messages,
@@ -16,6 +24,7 @@ use super::terminal_buffer::{
     TerminalBuffer, TerminalSanitizer, TerminalStatus, TERMINAL_BUFFER_BYTES, TERMINAL_VIEW_LINES,
 };
 use super::*;
+use gpui::KeyDownEvent;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -23,6 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use ukk_hc_client::{AttachRequest, FramedConnection, HcError, StreamEvent, TerminalAddress};
+use ukk_host_client::{RuntimeCapabilityStatus, RuntimeSendOutcome};
 
 /// Initial geometry only. An observer never resizes after attaching.
 const ATTACH_COLS: u16 = 120;
@@ -358,6 +368,294 @@ impl Drop for TerminalFeeds {
     }
 }
 
+/// One explicit line per user action. This is not a keystroke stream: the
+/// composer accumulates printable characters locally and submits them only on
+/// Send or Enter.
+const TERMINAL_INPUT_MAX_BYTES: usize = ukk_host_client::MAX_RUNTIME_SEND_BYTES;
+
+/// Truthful projection of the Host's separate agent-control capability.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) enum TerminalControlCapability {
+    /// `runtime.status` has not answered yet.
+    #[default]
+    Unknown,
+    Enabled,
+    Disabled {
+        problem: Option<String>,
+    },
+    /// The local Host could not be reached or answered invalidly.
+    Offline {
+        error: String,
+    },
+}
+
+impl TerminalControlCapability {
+    pub(super) fn from_status(status: &RuntimeCapabilityStatus) -> Self {
+        if status.enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled {
+                problem: status.problem.clone(),
+            }
+        }
+    }
+
+    pub(super) fn is_enabled(&self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::Unknown => "Checking the separate agent-control capability…".to_owned(),
+            Self::Enabled => "agent-control enabled · one explicit line at a time".to_owned(),
+            Self::Disabled {
+                problem: Some(problem),
+            } => format!(
+                "Send unavailable: the separate agent-control capability is disabled ({})",
+                terminal_notice_text(problem)
+            ),
+            Self::Disabled { problem: None } => {
+                "Send unavailable: the separate agent-control capability is disabled".to_owned()
+            }
+            Self::Offline { error } => format!(
+                "Send unavailable: the local Host is unavailable ({})",
+                terminal_notice_text(error)
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TerminalNoticeKind {
+    Success,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TerminalInputNotice {
+    key: String,
+    kind: TerminalNoticeKind,
+    text: String,
+}
+
+impl TerminalInputNotice {
+    pub(super) fn kind(&self) -> TerminalNoticeKind {
+        self.kind
+    }
+
+    pub(super) fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// What one key event asks the view to do. Only Enter can produce `Send`;
+/// ordinary typing is local and never reaches the Host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TerminalKeyAction {
+    None,
+    Send,
+}
+
+/// Local composer state for one bound Session terminal.
+///
+/// The text is owned by one terminal key. Switching to another terminal drops
+/// the previous draft instead of risking input to the wrong process. The field
+/// is cleared only after the Host confirms the send; failures keep the draft
+/// and are shown verbatim. Nothing here retries.
+#[derive(Default)]
+pub(super) struct TerminalInputState {
+    owner: Option<String>,
+    text: String,
+    busy: bool,
+    /// Terminal key whose draft is currently submitted. Only that draft is
+    /// frozen; another pane can still be drafted locally.
+    busy_key: Option<String>,
+    notice: Option<TerminalInputNotice>,
+    capability: TerminalControlCapability,
+}
+
+impl TerminalInputState {
+    pub(super) fn capability(&self) -> &TerminalControlCapability {
+        &self.capability
+    }
+
+    pub(super) fn set_capability(&mut self, capability: TerminalControlCapability) {
+        self.capability = capability;
+    }
+
+    pub(super) fn busy(&self) -> bool {
+        self.busy
+    }
+
+    pub(super) fn busy_for(&self, key: &str) -> bool {
+        self.busy && self.busy_key.as_deref() == Some(key)
+    }
+
+    pub(super) fn text_for(&self, key: &str) -> &str {
+        if self.owner.as_deref() == Some(key) {
+            &self.text
+        } else {
+            ""
+        }
+    }
+
+    pub(super) fn notice_for(&self, key: &str) -> Option<&TerminalInputNotice> {
+        self.notice.as_ref().filter(|notice| notice.key == key)
+    }
+
+    fn ensure_owner(&mut self, key: &str) {
+        if self.owner.as_deref() != Some(key) {
+            self.owner = Some(key.to_owned());
+            self.text.clear();
+            self.notice = None;
+        }
+    }
+
+    fn can_send(&self) -> bool {
+        self.capability.is_enabled() && !self.busy && valid_terminal_line(&self.text)
+    }
+
+    /// Applies one key event. `Send` is returned only for Enter with a valid,
+    /// non-empty draft and an enabled capability.
+    pub(super) fn handle_key(&mut self, key: &str, event: &KeyDownEvent) -> TerminalKeyAction {
+        if self.busy && self.busy_key.as_deref() == Some(key) {
+            // The submitted draft must not drift while its Host reply is
+            // pending. Other panes are not blocked.
+            return TerminalKeyAction::None;
+        }
+        self.ensure_owner(key);
+        match event.keystroke.key.as_str() {
+            "enter" => {
+                if self.can_send() {
+                    TerminalKeyAction::Send
+                } else {
+                    TerminalKeyAction::None
+                }
+            }
+            "backspace" => {
+                self.text.pop();
+                TerminalKeyAction::None
+            }
+            "escape" => {
+                self.text.clear();
+                TerminalKeyAction::None
+            }
+            _ => {
+                let modifiers = event.keystroke.modifiers;
+                if modifiers.control || modifiers.platform || modifiers.alt {
+                    return TerminalKeyAction::None;
+                }
+                if let Some(text) = event.keystroke.key_char.as_deref() {
+                    if text
+                        .chars()
+                        .any(|character| character.is_control() || is_bidi_format(character))
+                    {
+                        return TerminalKeyAction::None;
+                    }
+                    if self.text.len() + text.len() <= TERMINAL_INPUT_MAX_BYTES {
+                        self.text.push_str(text);
+                    }
+                }
+                TerminalKeyAction::None
+            }
+        }
+    }
+
+    /// Reserve the current draft for one Host call. The draft stays visible
+    /// until the call is verified, so a failure cannot look like a success.
+    pub(super) fn begin_send(&mut self, key: &str) -> Option<String> {
+        if self.owner.as_deref() != Some(key) || !self.can_send() {
+            return None;
+        }
+        self.busy = true;
+        self.busy_key = Some(key.to_owned());
+        self.notice = None;
+        Some(self.text.clone())
+    }
+
+    pub(super) fn finish_success(
+        &mut self,
+        key: &str,
+        submitted: &str,
+        outcome: &RuntimeSendOutcome,
+    ) {
+        self.busy = false;
+        self.busy_key = None;
+        if self.owner.as_deref() == Some(key) && self.text == submitted {
+            self.text.clear();
+        }
+        let replay = if outcome.replayed {
+            " · idempotent replay"
+        } else {
+            ""
+        };
+        self.notice = Some(TerminalInputNotice {
+            key: key.to_owned(),
+            kind: TerminalNoticeKind::Success,
+            text: format!(
+                "Sent · Host turn {} · {}{replay}",
+                outcome.turn, outcome.terminal
+            ),
+        });
+    }
+
+    /// Keeps the draft on purpose: the user can inspect, correct or resend it
+    /// explicitly. The view never retries on its own.
+    pub(super) fn finish_failure(&mut self, key: &str, message: String) {
+        self.busy = false;
+        self.busy_key = None;
+        self.notice = Some(TerminalInputNotice {
+            key: key.to_owned(),
+            kind: TerminalNoticeKind::Error,
+            text: terminal_notice_text(&message),
+        });
+    }
+
+    /// Reports a refused send without reserving or clearing the draft.
+    pub(super) fn block_send(&mut self, key: &str, message: String) {
+        self.notice = Some(TerminalInputNotice {
+            key: key.to_owned(),
+            kind: TerminalNoticeKind::Error,
+            text: terminal_notice_text(&message),
+        });
+    }
+}
+
+/// A line is exactly one bounded, printable line. This mirrors the Host
+/// client's validation so the Send affordance never looks available for text
+/// the wire layer will reject.
+pub(super) fn valid_terminal_line(text: &str) -> bool {
+    !text.trim().is_empty()
+        && text.len() <= TERMINAL_INPUT_MAX_BYTES
+        && !text
+            .chars()
+            .any(|character| character.is_control() || is_bidi_format(character))
+}
+
+fn is_bidi_format(character: char) -> bool {
+    matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Error and capability text is Host-authored but still untrusted display
+/// text. Strip control and bidi characters and bound the notice.
+fn terminal_notice_text(text: &str) -> String {
+    const MAX_BYTES: usize = 2 * 1024;
+    let mut output = String::with_capacity(text.len().min(MAX_BYTES));
+    for character in text.chars() {
+        if output.len() >= MAX_BYTES {
+            output.push('…');
+            break;
+        }
+        if character == '\n'
+            || character == '\t'
+            || (!character.is_control() && !is_bidi_format(character))
+        {
+            output.push(character);
+        }
+    }
+    output
+}
+
 fn observe_request(terminal: TerminalAddress) -> AttachRequest {
     AttachRequest::observe(terminal, ATTACH_COLS, ATTACH_ROWS)
 }
@@ -688,6 +986,18 @@ impl Workspace {
             ));
         }
 
+        if let (Some(run), Some(snapshot)) = (binding, matching.as_ref()) {
+            if !snapshot.ended() {
+                body = body.child(self.terminal_input_composer(
+                    agent_run_id,
+                    pane_id,
+                    &run.core_id,
+                    &run.terminal_address,
+                    cx,
+                ));
+            }
+        }
+
         body.child(
             div()
                 .text_xs()
@@ -799,7 +1109,7 @@ impl Workspace {
                 .child(self.terminal_output_view(Some(&snapshot), &key, Some(320.0)));
         } else {
             view = view.child(self.terminal_notice(
-                "No stream attached. This selected Host terminal can be observed read-only after an explicit action. The Desktop never sends input or lifecycle control.",
+                "No stream attached. This selected Host terminal can be observed read-only after an explicit action. This card sends no input or lifecycle control; the bound Session Terminal pane has a separate capability-gated one-line composer.",
             ));
         }
         view
@@ -810,6 +1120,320 @@ impl Workspace {
                     .child("Observed text is raw terminal output, not an Agent event. It is sanitized for display and bounded in memory."),
             )
             .into_any_element()
+    }
+
+    /// Explicit one-line input for one bound Session terminal.
+    ///
+    /// The composer exists only for an AgentRun binding with a live observe
+    /// stream. When the separate agent-control capability is disabled, the
+    /// field is absent and the pane states why; it never falls back to the
+    /// workspace token or a synthetic success.
+    fn terminal_input_composer(
+        &self,
+        agent_run_id: &str,
+        pane_id: &str,
+        core_id: &str,
+        terminal: &str,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let key = terminal_pane_key(pane_id);
+        let capability = self.terminal_input.capability();
+        let enabled = capability.is_enabled();
+        let busy = self.terminal_input.busy();
+        let busy_here = self.terminal_input.busy_for(&key);
+        let text = self.terminal_input.text_for(&key).to_owned();
+        let notice = self.terminal_input.notice_for(&key).cloned();
+        let ready = valid_terminal_line(&text);
+
+        let mut section = div()
+            .id(format!("{pane_id}-terminal-input-section"))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .rounded_md()
+            .bg(rgb(SURFACE))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(MUTED))
+                    .child("TERMINAL INPUT · ONE LINE · AGENT-CONTROL"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(if enabled { 0x408463 } else { 0xb06e55 }))
+                    .child(capability.label()),
+            );
+
+        let notice_view = notice.map(|notice| {
+            let color = match notice.kind() {
+                TerminalNoticeKind::Success => 0x408463,
+                TerminalNoticeKind::Error => 0xb03a3a,
+            };
+            div()
+                .p_2()
+                .rounded_md()
+                .bg(rgb(WHITE))
+                .text_xs()
+                .text_color(rgb(color))
+                .child(notice.text().to_owned())
+                .into_any_element()
+        });
+
+        if !enabled {
+            let recheck = self.surface_button(
+                format!("{pane_id}-terminal-capability-recheck"),
+                "Recheck capability",
+                "Read the Host's agent-control capability state again".into(),
+                |this, cx| this.refresh_terminal_capability(cx),
+                cx,
+            );
+            let mut section =
+                section
+                    .child(recheck)
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(
+                        "The Desktop never substitutes the workspace token for terminal input.",
+                    ));
+            if let Some(notice) = notice_view {
+                section = section.child(notice);
+            }
+            return section.into_any_element();
+        }
+
+        let input_focus = self.terminal_input_focus.clone();
+        let field_click_focus = self.terminal_input_focus.clone();
+        let agent_for_keys = agent_run_id.to_owned();
+        let pane_for_keys = pane_id.to_owned();
+        let placeholder = if busy_here {
+            "Sending this line…".to_owned()
+        } else if ready {
+            "Press Enter or Send".to_owned()
+        } else {
+            format!("Type one line for {terminal}…")
+        };
+
+        section = section.child(
+            div()
+                .id(format!("{pane_id}-terminal-input"))
+                .role(Role::TextInput)
+                .aria_label("terminal one-line input")
+                .track_focus(&input_focus)
+                .focusable()
+                .focus_visible(|style| style.border_color(rgb(ACCENT)))
+                .px_3()
+                .py_2()
+                .min_h(px(38.0))
+                .rounded_lg()
+                .bg(rgb(BG))
+                .border_1()
+                .border_color(rgb(LINE))
+                .cursor_pointer()
+                .on_click(cx.listener(move |_, _, window, cx| {
+                    window.focus(&field_click_focus, cx);
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                    this.terminal_input_key(&agent_for_keys, &pane_for_keys, event, cx);
+                }))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(if text.is_empty() { MUTED } else { INK }))
+                        .child(if text.is_empty() {
+                            placeholder
+                        } else {
+                            text.clone()
+                        }),
+                ),
+        );
+
+        section =
+            section.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(self.terminal_send_button(
+                        agent_run_id,
+                        pane_id,
+                        enabled && ready && !busy,
+                        busy_here,
+                        cx,
+                    ))
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(
+                        "Enter sends · Escape clears · Backspace edits · no keystroke stream",
+                    )),
+            );
+
+        if let Some(notice) = notice_view {
+            section = section.child(notice);
+        }
+
+        section
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(format!(
+                        "binding {} / {} · Host runtime.send requires the separate agent-control token · no resize, interrupt or stop",
+                        core_id, terminal
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn terminal_send_button(
+        &self,
+        agent_run_id: &str,
+        pane_id: &str,
+        enabled: bool,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let label = if busy { "Sending…" } else { "Send line" };
+        let button = div()
+            .id(format!("{pane_id}-terminal-send"))
+            .role(Role::Button)
+            .aria_label("Send this one line to the bound terminal")
+            .focusable()
+            .focus_visible(|style| style.border_color(rgb(ACCENT)))
+            .px_3()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(LINE))
+            .bg(rgb(WHITE))
+            .text_xs()
+            .text_color(rgb(ACCENT))
+            .child(label);
+        if !enabled {
+            return button.opacity(0.5).into_any_element();
+        }
+        let agent_run_id = agent_run_id.to_owned();
+        let pane_id = pane_id.to_owned();
+        button
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(SURFACE)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.send_terminal_line(&agent_run_id, &pane_id, cx);
+            }))
+            .into_any_element()
+    }
+
+    fn terminal_input_key(
+        &mut self,
+        agent_run_id: &str,
+        pane_id: &str,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let key = terminal_pane_key(pane_id);
+        match self.terminal_input.handle_key(&key, event) {
+            TerminalKeyAction::Send => self.send_terminal_line(agent_run_id, pane_id, cx),
+            TerminalKeyAction::None => cx.notify(),
+        }
+        cx.stop_propagation();
+    }
+
+    /// One explicit user send. Re-resolves the binding and the attached
+    /// stream first, so a stale render can never target another terminal.
+    pub(super) fn send_terminal_line(
+        &mut self,
+        agent_run_id: &str,
+        pane_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.terminal_input.busy() {
+            return;
+        }
+        let key = terminal_pane_key(pane_id);
+        let Some((core_id, terminal)) = self
+            .domain
+            .agent_runs
+            .iter()
+            .find(|run| run.id == agent_run_id)
+            .map(|run| (run.core_id.clone(), run.terminal_address.clone()))
+        else {
+            return;
+        };
+        let stream_matches = self
+            .terminal_feeds
+            .get(&key)
+            .is_some_and(|feed| feed.address == terminal && feed.is_running());
+        if !stream_matches {
+            self.terminal_input.block_send(
+                &key,
+                "The attached stream is no longer live for this binding. Reattach read-only before sending."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+        let Some(line) = self.terminal_input.begin_send(&key) else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let submitted = line.clone();
+            let core = core_id.clone();
+            let terminal_address = terminal.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    HostClient::from_env().runtime_send(&core, &terminal_address, &submitted)
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                match result {
+                    Ok(outcome) => view.terminal_input.finish_success(&key, &line, &outcome),
+                    Err(error) => {
+                        // Show the failure and refresh the truthful capability
+                        // state. The line is never resent automatically.
+                        view.terminal_input.finish_failure(&key, error.to_string());
+                        view.refresh_terminal_capability(cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Read-only `runtime.status`; it never reads the control token.
+    pub(super) fn refresh_terminal_capability(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_capability_in_flight {
+            return;
+        }
+        self.terminal_capability_in_flight = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { HostClient::from_env().runtime_status() })
+                .await;
+            this.update(cx, |view, cx| {
+                view.terminal_capability_in_flight = false;
+                view.apply_terminal_capability(result);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn apply_terminal_capability(
+        &mut self,
+        result: Result<RuntimeCapabilityStatus, ukk_host_client::HostError>,
+    ) {
+        let capability = match result {
+            Ok(status) => TerminalControlCapability::from_status(&status),
+            Err(error) => TerminalControlCapability::Offline {
+                error: error.to_string(),
+            },
+        };
+        self.terminal_input.set_capability(capability);
     }
 
     fn terminal_status_row(&self, snapshot: &FeedSnapshot, key: &str) -> gpui::AnyElement {
@@ -1017,6 +1641,238 @@ mod tests {
         let diagnostics = feed.snapshot().diagnostics("pane:pane-1");
         assert!(diagnostics.contains("observe=true (no input, no resize, no stop)"));
         assert!(diagnostics.contains("not an Agent event"));
+    }
+
+    fn key_event(name: &str, character: Option<&str>) -> KeyDownEvent {
+        KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                modifiers: gpui::Modifiers::default(),
+                key: name.to_owned(),
+                key_char: character.map(str::to_owned),
+            },
+            is_held: false,
+            prefer_character_input: false,
+        }
+    }
+
+    fn type_text(input: &mut TerminalInputState, key: &str, text: &str) {
+        for character in text.chars() {
+            let character = character.to_string();
+            assert_eq!(
+                input.handle_key(key, &key_event(&character, Some(&character))),
+                TerminalKeyAction::None,
+                "ordinary typing must never send"
+            );
+        }
+    }
+
+    fn enabled_input() -> TerminalInputState {
+        let mut input = TerminalInputState::default();
+        input.set_capability(TerminalControlCapability::Enabled);
+        input
+    }
+
+    fn sent(turn: u64, replayed: bool) -> RuntimeSendOutcome {
+        RuntimeSendOutcome {
+            core_id: "core-1".into(),
+            terminal: "t7".into(),
+            turn,
+            status: Some("working".into()),
+            started: Some(true),
+            replayed,
+        }
+    }
+
+    #[test]
+    fn terminal_line_validation_is_one_line_and_bounded() {
+        assert!(valid_terminal_line("cargo test"));
+        assert!(valid_terminal_line("printf 'hi'"));
+        for invalid in ["", "   ", "one\ntwo", "one\rtwo", "tab\there", "bell\u{7}"] {
+            assert!(!valid_terminal_line(invalid), "{invalid:?}");
+        }
+        assert!(!valid_terminal_line(
+            &"x".repeat(TERMINAL_INPUT_MAX_BYTES + 1)
+        ));
+        assert!(valid_terminal_line(&"x".repeat(TERMINAL_INPUT_MAX_BYTES)));
+    }
+
+    #[test]
+    fn typing_is_local_and_only_enter_returns_send() {
+        let mut input = enabled_input();
+        type_text(&mut input, "pane:p1", "echo hi");
+        assert_eq!(input.text_for("pane:p1"), "echo hi");
+        assert_eq!(
+            input.handle_key("pane:p1", &key_event("enter", None)),
+            TerminalKeyAction::Send
+        );
+        assert!(!input.busy(), "Enter only asks the view to send");
+        assert_eq!(
+            input.handle_key("pane:p1", &key_event("escape", None)),
+            TerminalKeyAction::None
+        );
+        assert_eq!(input.text_for("pane:p1"), "");
+    }
+
+    #[test]
+    fn control_shortcuts_and_control_characters_are_ignored() {
+        let mut input = enabled_input();
+        let mut control = key_event("c", Some("c"));
+        control.keystroke.modifiers.control = true;
+        assert_eq!(
+            input.handle_key("pane:p1", &control),
+            TerminalKeyAction::None
+        );
+        assert_eq!(input.text_for("pane:p1"), "");
+        let mut platform = key_event("v", Some("v"));
+        platform.keystroke.modifiers.platform = true;
+        assert_eq!(
+            input.handle_key("pane:p1", &platform),
+            TerminalKeyAction::None
+        );
+        assert_eq!(input.text_for("pane:p1"), "");
+        assert_eq!(
+            input.handle_key("pane:p1", &key_event("tab", Some("\t"))),
+            TerminalKeyAction::None
+        );
+        assert_eq!(input.text_for("pane:p1"), "");
+    }
+
+    #[test]
+    fn capability_gates_the_send_action_truthfully() {
+        for capability in [
+            TerminalControlCapability::Unknown,
+            TerminalControlCapability::Disabled { problem: None },
+            TerminalControlCapability::Offline {
+                error: "Host unavailable".into(),
+            },
+        ] {
+            let mut input = TerminalInputState::default();
+            input.set_capability(capability.clone());
+            type_text(&mut input, "pane:p1", "echo hi");
+            assert_eq!(
+                input.handle_key("pane:p1", &key_event("enter", None)),
+                TerminalKeyAction::None
+            );
+            assert!(input.begin_send("pane:p1").is_none());
+            assert!(
+                capability.label().contains("Send unavailable")
+                    || capability.label().contains("Checking")
+            );
+        }
+    }
+
+    #[test]
+    fn a_draft_belongs_to_one_terminal_only() {
+        let mut input = enabled_input();
+        type_text(&mut input, "pane:p1", "ls");
+        assert_eq!(input.text_for("pane:p1"), "ls");
+        assert_eq!(input.text_for("pane:p2"), "");
+        assert!(input.begin_send("pane:p2").is_none());
+        // Typing in another pane starts a fresh draft; the old one is dropped
+        // rather than risking input to the wrong terminal.
+        type_text(&mut input, "pane:p2", "pwd");
+        assert_eq!(input.text_for("pane:p1"), "");
+        assert_eq!(input.text_for("pane:p2"), "pwd");
+    }
+
+    #[test]
+    fn draft_is_kept_on_failure_and_cleared_only_after_verified_success() {
+        let mut input = enabled_input();
+        type_text(&mut input, "pane:p1", "cargo test");
+        assert_eq!(input.begin_send("pane:p1").as_deref(), Some("cargo test"));
+        assert!(input.busy());
+        // The draft stays visible while the Host call is in flight.
+        assert_eq!(input.text_for("pane:p1"), "cargo test");
+        // Typing is ignored while busy so the submitted text cannot drift.
+        type_text(&mut input, "pane:p1", "x");
+        assert_eq!(input.text_for("pane:p1"), "cargo test");
+
+        input.finish_failure("pane:p1", "Host denied the send".into());
+        assert!(!input.busy());
+        assert_eq!(input.text_for("pane:p1"), "cargo test");
+        let notice = input.notice_for("pane:p1").unwrap();
+        assert_eq!(notice.kind(), TerminalNoticeKind::Error);
+        assert!(notice.text().contains("denied"));
+
+        assert_eq!(input.begin_send("pane:p1").as_deref(), Some("cargo test"));
+        input.finish_success("pane:p1", "cargo test", &sent(7, false));
+        assert!(!input.busy());
+        assert_eq!(input.text_for("pane:p1"), "");
+        let notice = input.notice_for("pane:p1").unwrap();
+        assert_eq!(notice.kind(), TerminalNoticeKind::Success);
+        assert!(notice.text().contains("turn 7"));
+    }
+
+    #[test]
+    fn capability_status_maps_to_truthful_labels() {
+        let enabled = TerminalControlCapability::from_status(&RuntimeCapabilityStatus {
+            enabled: true,
+            capability: "separate-agent-control".into(),
+            problem: None,
+        });
+        assert!(enabled.is_enabled());
+        assert!(enabled.label().contains("enabled"));
+
+        let disabled = TerminalControlCapability::from_status(&RuntimeCapabilityStatus {
+            enabled: false,
+            capability: "separate-agent-control".into(),
+            problem: Some("token file is missing".into()),
+        });
+        assert!(!disabled.is_enabled());
+        assert!(disabled.label().contains("disabled"));
+        assert!(disabled.label().contains("token file is missing"));
+
+        let offline = TerminalControlCapability::Offline {
+            error: "connection refused".into(),
+        };
+        assert!(offline.label().contains("unavailable"));
+        assert!(offline.label().contains("connection refused"));
+    }
+
+    #[test]
+    fn submitted_line_is_verbatim_without_rewriting() {
+        let mut input = enabled_input();
+        type_text(&mut input, "pane:p1", "git commit -m 'msg with spaces'");
+        assert_eq!(
+            input.begin_send("pane:p1"),
+            Some("git commit -m 'msg with spaces'".to_owned())
+        );
+        assert_eq!(input.text_for("pane:p1"), "git commit -m 'msg with spaces'");
+    }
+
+    #[test]
+    fn success_does_not_clear_text_the_user_changed_after_submitting() {
+        let mut input = enabled_input();
+        type_text(&mut input, "pane:p1", "one");
+        assert_eq!(input.begin_send("pane:p1").as_deref(), Some("one"));
+        // A different terminal becomes the owner while the reply is pending.
+        type_text(&mut input, "pane:p2", "two");
+        input.finish_success("pane:p1", "one", &sent(3, true));
+        assert_eq!(input.text_for("pane:p2"), "two");
+        let notice = input.notice_for("pane:p1").unwrap();
+        assert!(notice.text().contains("idempotent replay"));
+    }
+
+    #[test]
+    fn attaching_a_stream_alone_cannot_produce_terminal_input() {
+        let feeds = TerminalFeeds::default();
+        assert!(feeds.is_empty());
+        let mut input = enabled_input();
+        assert!(!input.busy());
+        assert_eq!(input.text_for("pane:p1"), "");
+        assert!(input.begin_send("pane:p1").is_none());
+        assert_eq!(
+            input.handle_key("pane:p1", &key_event("enter", None)),
+            TerminalKeyAction::None
+        );
+    }
+
+    #[test]
+    fn notices_strip_control_and_bidi_characters() {
+        let text = terminal_notice_text("denied\u{7}\u{202e} now\nretry");
+        assert_eq!(text, "denied now\nretry");
+        let long = "x".repeat(4096);
+        assert!(terminal_notice_text(&long).len() <= 2 * 1024 + 4);
     }
 
     #[cfg(unix)]

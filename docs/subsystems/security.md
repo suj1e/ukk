@@ -269,7 +269,8 @@ boundary has the following consequences:
 - The observer request fixes `observe:true`, sends no input, does not resize
   after the initial `cols`/`rows`, and has no call path to interrupt, stop,
   kill, archive or input. The client refuses those calls for observers before
-  writing a frame.
+  writing a frame. Explicit one-line input is a separate Host-gated path; see
+  below.
 - Dropping the attachment/connection only closes this view's stream and reaps
   the local `hc connect` helper. Terminal and Agent lifetime remain owned by
   herdr-core. See [GPUI_TERMINAL.md](desktop-terminal.md).
@@ -284,7 +285,44 @@ boundary has the following consequences:
   relies on framed CREDIT backpressure. Diagnostics never include terminal
   contents.
 
+### Desktop one-line terminal input
 
+The Session Terminal pane may offer one explicit line of input. This does not
+turn the observe stream into a writer and does not add terminal emulation:
+
+- The composer exists only for an `AgentRun { core_id, terminal_address }`
+  binding with a live observe stream. The unbound terminal detail card stays
+  read-only.
+- A send is only triggered by an explicit Send click or Enter in that field.
+  Nothing is sent on load, selection, Tab switch, attach, reattach or per
+  keystroke. There is no keystroke streaming, resize, interrupt, stop, kill or
+  detach path in the composer.
+- `HostClient::runtime_send` reads the separate, default-off agent-control
+  token **at call time**. The workspace metadata token and the plugin-control
+  token are never accepted or substituted. Every call carries a fresh
+  `request_id`, `intent: "user"` and the exact `core_id` +
+  `terminal_address` binding.
+- The line is one bounded printable line (8 KiB maximum); newlines, tabs,
+  other control characters and bidi overrides are rejected client-side before
+  the token is read or a socket is opened. The Host still validates the
+  address and text.
+- The Host preflights the capability, checks the binding against the connected
+  core identity, applies in-process idempotency by `request_id`, and writes an
+  audit entry (request id, action, core id, terminal address, intent, outcome).
+  Neither the token nor the submitted text is audited.
+- Failures are truthful: the draft is kept and the error is shown; the Desktop
+  never retries automatically. The field is cleared only after a verified Host
+  success. A Host-reported `replayed` outcome is labelled instead of hidden.
+- The capability state shown in the pane comes from read-only
+  `runtime.status`. When it is disabled or the Host is offline, the input field
+  is absent and the reason is displayed; there is no optimistic fallback.
+
+Residual risk: this is still a same-user local boundary. A process that can
+read the user's profile can read the agent-control token, and `intent: "user"`
+is a caller assertion rather than cryptographic proof. The Host capability is
+the control boundary, not the Desktop label. Full terminal emulation, resize
+and keystroke streaming are unsupported; real GUI line-send acceptance on
+macOS/Windows/Linux is **NOT VERIFIED** in this slice.
 
 ## omp RPC session surface
 
