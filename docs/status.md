@@ -1,6 +1,6 @@
 # ukk — Implementation status
 
-> **Snapshot:** 2026-11-08, reset to native Go/MyGo Desktop + external herdr-core + SwiftUI iOS. This page records **exact evidence**, not intentions. Where an item has not been verified, it says so. The integration owner appends build, CI, runtime and device evidence as it lands; planned module paths in [tech-design](tech-design.md) are not proof that code exists.
+> **Snapshot:** 2026-11-08, PR **#58** merged at `8b5660b5c98f6aaf380a8caa0ba94b05bc2c92cc` (native Go/MyGo Desktop + external herdr-core + SwiftUI iOS). This page records **exact evidence**, not intentions. Where an item has not been verified, it says so. The integration owner appends build, CI, runtime and device evidence as it lands; planned module paths in [tech-design](tech-design.md) are not proof that code exists.
 
 ## Product contract (fixed)
 
@@ -28,7 +28,7 @@ This table records the **claim**, not a promise. `Pending evidence` means the wo
 | M3 Relay + pairing + iOS | **Local + CI:** host-confirmed pairing, encrypted command dispatch, resume and revocation work through a real relay process; the iOS simulator build and its 94 unit tests pass in CI; the app renders a real SwiftUI screen | No deployed WSS relay, no WAN proof, no physical-device pairing/camera/APNs |
 | M4 Remote Screen | **Local:** real avfoundation capture produced an offer with ICE/DTLS and H.264; stop ended capture; input gating has tests | No TURN media session, no injection into a real app, no iPhone viewer |
 | M5 Plugin safety | Manifest/grants/supervisor/framing and a first-party moejs runtime have package tests (including timeout, import denial and no ambient globals); bridge API and a Settings surface are wired | Third-party helpers are process-isolated, not OS-sandboxed; no malicious-plugin acceptance run |
-| M6 Unsigned distribution | Local `mygo build` produced a macOS `.app`, a Linux `.deb`/`.tar.gz`/PKGBUILD and a Windows `.exe`, each with its native terminal library | Release CI artifacts, NSIS installer, IPA and install/uninstall matrix remain unverified |
+| M6 Unsigned distribution | **CI:** release run `42476394079` built and uploaded the macOS DMG, Windows NSIS installer, Linux deb/tar and unsigned device IPA; downloaded artifacts matched their `SHA256SUMS.txt` and formats locally | Unsigned IPA is non-installable; no three-OS install/uninstall/a11y matrix |
 
 ## Evidence register (2026-11-08)
 
@@ -43,11 +43,12 @@ This table records the **claim**, not a promise. `Pending evidence` means the wo
 | Relay + pairing | `TestPairResumeAndCommandsThroughRelay` | host-confirmed pairing, encrypted commands, resume, revocation denial |
 | Remote Screen | real ffmpeg/avfoundation capture | WebRTC offer with ICE/DTLS + H.264; stop ended capture |
 | Cross-compile | `GOOS=windows` / `GOOS=linux` build and vet | clean |
-| CI (`bacec97`) | Actions run 42472511431 | docs/layout, Go macOS/Ubuntu/Windows, launch smoke all success |
+| CI (`936994d`) | Actions run `42476717872` | docs/layout, Go macOS/Ubuntu/Windows, launch smoke all success |
 | iOS build | Xcode-beta 27.0 generic simulator build, test build | success; `build-for-testing` success |
 | iOS launch | simulator install + launch with `-ukk-fixture` | native screen renders with an explicit fixture banner |
 | iOS crypto | macOS Swift probe of SecureChannel | transcript/HKDF/codes matched RFC 7748-derived values |
-| iOS XCTest | CI simulator unit tests (run 42473514594) | **passed**: 94 tests on an available iPhone simulator |
+| iOS XCTest | CI simulator build + unit tests (run `42476718034`) | **passed**: 94 tests on an available iPhone simulator |
+| Release artifacts | Release run `42476394079` (`21e8d30`, same bridge code as the merged tree) | four jobs success; desktop archives and IPA checksums re-verified locally; NSIS/DMG/IPA formats confirmed |
 
 These are single-host observations beyond the CI run. Windows/Linux runtime GUI, a deployed relay/TURN path and physical iPhone remain **NOT VERIFIED**.
 
@@ -82,17 +83,18 @@ Do not copy a green result from one milestone or SHA to another. Do not treat an
 - Third-party plugin code does not run in the privileged bridge process by default.
 - Screen capture/input has visible consent, a one-tap stop and revoke teardown.
 
-## Open acceptance gaps
+## Open acceptance gaps and environment blockers
 
-The open work is the ordered plan in [mygo-implementation](goals/mygo-implementation.md), not a separate wish list:
+Everything below is **BLOCKED on external environment or credentials**, not on missing source. The implementation and CI evidence above must not be read as acceptance for these items.
 
-1. M0: active-tree cutover, single Go module and real native-shell build evidence.
-2. M1: real herdr-core process survival, attach/detach, provenance, resize and backpressure.
-3. M2: real omp UI run, tools/approvals where supported, bounded long Markdown, future-provider fixtures.
-4. M3: deployed relay/TLS/operator auth, E2E possession/revocation, WAN reconnect, iOS simulator tests; physical camera/APNs gate deferred.
-5. M4: real STUN/TURN media, capture/input permissions, stop/lease/revocation, iOS overlay.
-6. M5: sandboxed third-party plugins, durable grants/audit, denial/replay review.
-7. M6: unsigned installers/artifacts, three-OS install/window/a11y matrix, bridge restart, physical-iPhone gate where prerequisites exist.
+| Blocked acceptance item | Why it cannot run here | What would unblock it | Current evidence boundary |
+| --- | --- | --- | --- |
+| Windows and Linux native GUI/runtime matrix | No physical Windows/Linux machine or desktop VM with a display, GPU and OS permissions is attached to this session | A Windows 11 host and a Linux desktop (X11/Wayland) with the packaged artifacts; run window, terminal, pane/tab, Agent view and uninstall checks | CI compiles, tests and smoke-launches macOS only; Windows/Linux runtime interaction is **NOT VERIFIED** |
+| Deployed WSS relay + TURN WAN acceptance | No domain, TLS certificate, public relay deployment, TURN credentials or second network | Deploy `ukk-relay` behind TLS, configure TURN, then exercise pairing, resume, revocation, operator-auth denial and reconnect across two networks | Local in-process relay routing and pairing tests only; no WAN or media-over-TURN proof |
+| Physical iPhone camera/pairing/APNs/floating screen | No Apple signing identity, provisioning profile, physical iPhone or APNs key | Sign a device build, install on a physical iPhone, scan the real QR, approve a command and open Remote Screen over the deployed media path | Simulator build and 94 unit tests pass; device camera, APNs and physical pairing are **NOT VERIFIED** |
+| OS-level third-party plugin sandbox | The standard Go toolchain and this session provide no portable OS sandbox; helpers are process-isolated with cleared environment, bounds, deadlines and kill-on-disable | Per-OS sandbox design and implementation (macOS App Sandbox, Windows AppContainer/job objects, Linux namespaces/seccomp or equivalent) plus a malicious-plugin acceptance run | Documented as **process isolation, not an OS sandbox**; no malicious-plugin containment claim |
+
+The remaining ordered implementation work, if any, stays in [mygo-implementation](goals/mygo-implementation.md). Do not mark a blocked row as passing by inference from CI.
 
 ## Maintenance
 
