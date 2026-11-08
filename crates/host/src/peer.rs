@@ -19,11 +19,20 @@ use std::os::unix::net::UnixStream;
 /// Reject a connected Unix peer unless the kernel reports the same effective
 /// user that runs the Host.
 pub(super) fn verify_same_user(stream: &UnixStream) -> Result<(), String> {
+    verified_same_user_uid(stream).map(|_| ())
+}
+
+/// Verify the peer identity and return the kernel-reported uid.
+///
+/// The protocol transport must place this value in
+/// `TransportBinding::local_ipc`, not merely observe that a check passed: a
+/// local binding without a verified peer is a typed handshake failure.
+pub(super) fn verified_same_user_uid(stream: &UnixStream) -> Result<u32, String> {
     let expected = current_uid();
     let actual = peer_uid(stream.as_raw_fd())
         .map_err(|error| format!("could not read Unix peer credentials: {error}"))?;
     if actual == expected {
-        Ok(())
+        Ok(actual)
     } else {
         Err(format!(
             "rejected local client owned by uid {actual}; Host runs as uid {expected}"

@@ -28,6 +28,7 @@ Read [docs/OVERVIEW.zh-CN.md](docs/OVERVIEW.zh-CN.md), [docs/ARCHITECTURE.md](do
 - **Do not auto-assign orphan terminals to arbitrary Sessions.** Bind only with verified core identity and user intent.
 - Closing a Pane, switching a Session, archiving a Session, or quitting GPUI must not send any terminal-stop/kill signal.
 - Current local Host RPC `workspace.snapshot` is **read-only**. Do not add new mutation methods before local permissions and peer validation are designed.
+- The local versioned protocol stream (`~/.ukk/run/agent-host.protocol`) is also **read-only** in the current slice. It carries handshake, snapshot/replay/live events and ACKs only. Do not expose `session_create` or any other mutation there without a protocol-level local capability; workspace mutations remain on the rotated-capability JSON-RPC path.
 - Run `cargo test --workspace` including SQLite reopen, CAS conflicts and cross-Session Agent reference tests. See [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md).
 
 ## Code quality is part of feature completion

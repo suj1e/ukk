@@ -12,6 +12,12 @@ mod peer;
 mod plugin_audit;
 mod plugin_control;
 mod plugin_service;
+#[cfg(unix)]
+mod protocol_bridge;
+#[cfg(unix)]
+mod protocol_endpoint;
+#[cfg_attr(not(unix), allow(dead_code))]
+mod protocol_service;
 mod rpc;
 mod runtime;
 mod runtime_api;

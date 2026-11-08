@@ -10,6 +10,10 @@ use ukk_hc_client::{HcClient, HcError};
 #[derive(Clone, Debug)]
 struct State {
     revision: u64,
+    // Written from the subscription snapshot on every platform; read only by
+    // the Unix protocol bridge. Keep the write path shared without a warning.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    core_id: Option<String>,
     hc_seq: Option<u64>,
     connected: bool,
     terminals: Vec<Value>,
@@ -20,6 +24,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             revision: 0,
+            core_id: None,
             hc_seq: None,
             connected: false,
             terminals: Vec::new(),
@@ -92,10 +97,34 @@ impl Broker {
                 guard.connected = false;
                 guard.error = Some(error);
                 guard.hc_seq = None;
+                guard.core_id = None;
                 guard.revision = guard.revision.saturating_add(1);
                 self.updated.notify_all();
             }
         }
+    }
+
+    /// Process-local epoch. It is used to detect a Host restart in the local
+    /// broker only; it is never a durable protocol cursor.
+    ///
+    /// Only the Unix protocol bridge reads the epoch directly; on Windows the
+    /// existing JSON-RPC snapshot API is the only broker surface.
+    #[cfg(unix)]
+    pub(crate) fn epoch(&self) -> &str {
+        &self.epoch
+    }
+
+    /// herdr-core identity reported by the subscription snapshot, when the
+    /// core provides one. The protocol bridge uses it to bind a terminal to
+    /// the exact `(core_id, terminal_address)` AgentRun instead of guessing
+    /// across cores. It is not exposed on the JSON-RPC snapshot.
+    #[cfg(unix)]
+    pub(crate) fn core_id(&self) -> Option<String> {
+        let guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.core_id.clone()
     }
 
     pub(crate) fn snapshot(&self) -> Value {
@@ -149,6 +178,14 @@ fn replace_snapshot(state: &mut State, data: &Value) -> Result<(), String> {
     state.hc_seq = Some(seq);
     state.connected = true;
     state.error = None;
+    if let Some(id) = data
+        .get("core")
+        .and_then(|core| core.get("id"))
+        .and_then(Value::as_str)
+        .or_else(|| data.get("core_id").and_then(Value::as_str))
+    {
+        state.core_id = Some(id.to_owned());
+    }
     Ok(())
 }
 
