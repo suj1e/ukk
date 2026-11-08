@@ -105,7 +105,7 @@ apps/
   ios/                  SwiftUI companion (fixture code retained; real integration not yet claimed)
 ```
 
-The old Rust crates, GPUI app, root Cargo workspace, plugins directory, root Go metadata and obsolete build workflows are removed during the cutover. Only `ci.yml` and `ios.yml` remain as active workflows.
+The old Rust crates, GPUI app, root Cargo workspace, plugins directory, root Go metadata and obsolete build workflows are removed during the cutover. Active workflows are `ci.yml`, `ios.yml` and `release.yml`.
 
 ### Desktop build configuration
 

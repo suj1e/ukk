@@ -25,7 +25,7 @@ This table records the **claim**, not a promise. `Pending evidence` means the wo
 | M0 Cutover + build spine | **Local macOS:** module builds, `ukk.app` packages ad-hoc with the pinned `libghostty-vt.dylib`, and the packaged app opens a native window and self-starts the bridge; CI is green on `bacec97` for macOS/Ubuntu/Windows plus launch smoke | Windows/Linux runtime interaction remains unverified even though they compile and test in CI |
 | M1 Local workspace + terminals | **Local macOS:** real herdr-core v0.1.18 terminal `t1z` attached read/write and rendered in the MyGo terminal; observe/credit/resize behavior has package tests | Window-close process survival, observer denial against a real core, and Windows/Linux attach remain unverified |
 | M2 Provider-neutral omp | **Local macOS:** bridge-owned omp 18.18.1 session started, accepted a prompt, streamed a completed turn and usage, and rendered in the Desktop conversation (`OK`, 13,622 tokens) | Long-Markdown bounds, approvals against a provider that emits them, and provider restart/resume remain unverified |
-| M3 Relay + pairing + iOS | **Local:** host-confirmed pairing, encrypted command dispatch, resume and revocation work through a real relay process; the iOS app builds and test-builds for the simulator with real CryptoKit handshakes, RPC screens and a WebRTC viewer | No deployed WSS relay, no WAN proof, no physical-device pairing/camera/APNs; simulator XCTest execution is blocked by host tooling |
+| M3 Relay + pairing + iOS | **Local + CI:** host-confirmed pairing, encrypted command dispatch, resume and revocation work through a real relay process; the iOS simulator build and its 94 unit tests pass in CI; the app renders a real SwiftUI screen | No deployed WSS relay, no WAN proof, no physical-device pairing/camera/APNs |
 | M4 Remote Screen | **Local:** real avfoundation capture produced an offer with ICE/DTLS and H.264; stop ended capture; input gating has tests | No TURN media session, no injection into a real app, no iPhone viewer |
 | M5 Plugin safety | Manifest/grants/supervisor/framing have 93 package tests; bridge API and a Settings surface are wired | No malicious-plugin sandbox run; helpers are process-isolated, not OS-sandboxed |
 | M6 Unsigned distribution | A local macOS `.app` was built by `go tool mygo build` | No dmg/NSIS/deb artifacts from CI, no install matrix, no IPA |
@@ -47,7 +47,7 @@ This table records the **claim**, not a promise. `Pending evidence` means the wo
 | iOS build | Xcode-beta 27.0 generic simulator build, test build | success; `build-for-testing` success |
 | iOS launch | simulator install + launch with `-ukk-fixture` | native screen renders with an explicit fixture banner |
 | iOS crypto | macOS Swift probe of SecureChannel | transcript/HKDF/codes matched RFC 7748-derived values |
-| iOS XCTest | CI simulator unit tests | **BLOCKED / NOT PASSED**: host and runner test-host stalls; no assertion pass claim |
+| iOS XCTest | CI simulator unit tests (run 42473514594) | **passed**: 94 tests on an available iPhone simulator |
 
 These are single-host observations beyond the CI run. Windows/Linux runtime GUI, a deployed relay/TURN path and physical iPhone remain **NOT VERIFIED**.
 
