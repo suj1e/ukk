@@ -70,8 +70,11 @@ impl Workspace {
                     .aria_label(format!("Rename Space {rename_title}"))
                     .focusable()
                     .focus_visible(|style| style.border_color(rgb(ACCENT)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_rename_space(rename_id.clone(), cx);
+                        if this.space_editor.is_open() {
+                            window.focus(&this.space_title_focus, cx);
+                        }
                     }))
                     .child("✎"),
             )
@@ -297,7 +300,12 @@ impl Workspace {
                             .aria_label("Create a new Space")
                             .focusable()
                             .focus_visible(|style| style.border_color(rgb(ACCENT)))
-                            .on_click(cx.listener(|this, _, _, cx| this.open_new_space(cx)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_new_space(cx);
+                                if this.space_editor.is_open() {
+                                    window.focus(&this.space_title_focus, cx);
+                                }
+                            }))
                             .child("+ New Space"),
                     ),
             )
