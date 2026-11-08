@@ -26,7 +26,7 @@ pub(super) fn handle_request_with_plugins(
     match req["method"].as_str().unwrap_or_default() {
         "host.ping" => json!({
             "jsonrpc":"2.0","id":id,
-            "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":false,"agent_runtime_control":"separate-capability-opt-in","plugin_control":"separate-capability-opt-in","workspace_edits":"local-capability-only"}
+            "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":false,"agent_runtime_control":"separate-capability-opt-in","plugin_control":"separate-capability-opt-in","workspace_edits":"local-capability-only","omp_rpc":omp_service::status()}
         }),
         method @ ("workspace.session.create"
         | "workspace.pane.split"
@@ -117,6 +117,14 @@ pub(super) fn handle_request_with_plugins(
                 "error":{"code":-32001,"message":error.to_string()}
             }),
         },
+        method @ ("omp.snapshot" | "omp.wait" | "omp.start" | "omp.prompt" | "omp.abort") => {
+            let params = req.get("params").unwrap_or(&Value::Null);
+            match omp_service::dispatch(method, params) {
+                Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+                Err(error) => json!({"jsonrpc":"2.0","id":id,
+                    "error":{"code":error.code,"message":error.message}}),
+            }
+        }
         "plugin.snapshot" => json!({"jsonrpc":"2.0","id":id,"result":plugins.snapshot()}),
         method @ ("plugin.enable" | "plugin.disable" | "plugin.invoke") => {
             let params = req.get("params").unwrap_or(&Value::Null);
@@ -156,6 +164,82 @@ mod tests {
         assert_eq!(
             response["result"]["workspace_edits"],
             "local-capability-only"
+        );
+    }
+
+    #[test]
+    fn omp_mutations_are_denied_without_agent_control() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        let response = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":70,"method":"omp.start",
+                "params":{
+                    "session_id":"s1",
+                    "cwd": std::env::temp_dir().to_string_lossy(),
+                    "request_id":"r1",
+                    "intent":"user",
+                    "control":"wrong-capability"
+                }
+            }),
+            &broker,
+            &auth,
+        );
+        assert_eq!(response["error"]["code"], -32030);
+        // The workspace metadata capability is never accepted here.
+        let response = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":71,"method":"omp.prompt",
+                "params":{
+                    "session_id":"s1","message":"hi","request_id":"r2",
+                    "intent":"user","auth":auth.test_token()
+                }
+            }),
+            &broker,
+            &auth,
+        );
+        assert_eq!(response["error"]["code"], -32030);
+    }
+
+    #[test]
+    fn omp_read_only_methods_do_not_require_a_capability() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        for (id, method) in [(80, "omp.snapshot"), (81, "omp.wait")] {
+            let response = handle_request(
+                &json!({
+                    "jsonrpc":"2.0","id":id,"method":method,
+                    "params":{"session_id":"missing"}
+                }),
+                &broker,
+                &auth,
+            );
+            assert_eq!(
+                response["error"]["code"], -32034,
+                "{method} must reach the read-only omp surface without a token"
+            );
+        }
+    }
+
+    #[test]
+    fn ping_reports_omp_capability_boundary() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        let response = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":90,"method":"host.ping","params":{}
+            }),
+            &broker,
+            &auth,
+        );
+        assert_eq!(
+            response["result"]["omp_rpc"]["capability"],
+            "separate-agent-control"
+        );
+        assert_eq!(response["result"]["omp_rpc"]["view_close_stops_omp"], false);
+        assert_eq!(
+            response["result"]["omp_rpc"]["host_restart_reattaches"],
+            false
         );
     }
 

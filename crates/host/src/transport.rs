@@ -75,6 +75,7 @@ pub(super) fn serve() -> AppResult<()> {
         }
     });
     let plugins = Arc::new(PluginService::from_env());
+    let _omp_shutdown = omp_service::ShutdownGuard;
     println!("ukk Host listening on {}", path.display());
     println!(
         "Security: same-user Unix peers only; socket 0600 in a 0700 directory; \
@@ -251,6 +252,7 @@ pub(super) fn serve_windows() -> AppResult<()> {
     let broker = Broker::new();
     broker.start();
     let plugins = Arc::new(PluginService::from_env());
+    let _omp_shutdown = omp_service::ShutdownGuard;
     println!("ukk Host listening on local Named Pipe {name}");
     println!(
         "ukk protocol endpoint: Windows Named Pipe streaming is NOT VERIFIED and \

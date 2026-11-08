@@ -15,12 +15,13 @@ use std::fmt;
 use std::fs;
 #[cfg(any(unix, windows))]
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use ukk_domain::DomainSnapshot;
+use ukk_omp_client::OmpSnapshot;
+
 #[cfg(windows)]
 pub mod windows_pipe;
-use std::path::PathBuf;
-use std::time::Duration;
-
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 
@@ -60,6 +61,50 @@ impl From<serde_json::Error> for HostError {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
     }
+}
+
+/// Read a same-user capability file at call time. The token is never logged,
+/// stored in a snapshot or included in an error. `label` names the capability
+/// in diagnostics only.
+fn read_capability(path: &Path, label: &str) -> Result<String, HostError> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        HostError::Protocol(format!(
+            "{label} capability is unavailable at {}: {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(HostError::Protocol(format!(
+            "{label} capability must not be a symlink"
+        )));
+    }
+    if !metadata.file_type().is_file() {
+        return Err(HostError::Protocol(format!(
+            "{label} capability must be a regular file"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(HostError::Protocol(format!(
+                "{label} capability permissions must be 0600"
+            )));
+        }
+    }
+    let token = fs::read_to_string(path).map_err(|error| {
+        HostError::Protocol(format!(
+            "cannot read {label} capability at {}: {error}",
+            path.display()
+        ))
+    })?;
+    let token = token.trim();
+    if token.len() < 60 || !token.is_ascii() {
+        return Err(HostError::Protocol(format!(
+            "{label} capability is too short or not ASCII"
+        )));
+    }
+    Ok(token.to_owned())
 }
 
 /// Read one newline-terminated reply with a hard byte cap. A peer that never
@@ -665,45 +710,119 @@ impl HostClient {
     /// Read the plugin-control token at call time. The value is never printed,
     /// stored in a snapshot or included in an error.
     fn plugin_control_token(&self) -> Result<String, HostError> {
-        let path = self.plugin_control_token_path();
-        let metadata = fs::symlink_metadata(&path).map_err(|error| {
-            HostError::Protocol(format!(
-                "plugin control capability is unavailable at {}: {error}",
-                path.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(HostError::Protocol(
-                "plugin control capability must not be a symlink".into(),
-            ));
-        }
-        if !metadata.file_type().is_file() {
-            return Err(HostError::Protocol(
-                "plugin control capability must be a regular file".into(),
-            ));
+        read_capability(&self.plugin_control_token_path(), "plugin control")
+    }
+
+    /// Path of the **separate** agent-control capability. It is rotated only
+    /// by the operator (`ukk-host --provision-agent-control` or equivalent),
+    /// never by the Desktop.
+    pub fn agent_control_token_path(&self) -> PathBuf {
+        if let Some(path) = env::var_os("UKK_AGENT_CONTROL_TOKEN_FILE") {
+            return PathBuf::from(path);
         }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o077 != 0 {
-                return Err(HostError::Protocol(
-                    "plugin control capability permissions must be 0600".into(),
-                ));
-            }
+            self.path.with_extension("agent-control")
         }
-        let token = fs::read_to_string(&path).map_err(|error| {
-            HostError::Protocol(format!(
-                "cannot read plugin control capability at {}: {error}",
-                path.display()
-            ))
-        })?;
-        let token = token.trim();
-        if token.len() < 60 || !token.is_ascii() {
-            return Err(HostError::Protocol(
-                "plugin control capability is too short or not ASCII".into(),
-            ));
+        #[cfg(windows)]
+        {
+            env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("C:\\nonexistent\\ukk"))
+                .join("ukk")
+                .join("run")
+                .join("agent-host.agent-control")
         }
-        Ok(token.to_owned())
+        #[cfg(not(any(unix, windows)))]
+        {
+            PathBuf::from("ukk-agent-control-token-unsupported-platform")
+        }
+    }
+
+    /// Read the agent-control token only at the moment of an explicit user
+    /// action. It is never stored or sent anywhere except the local Host.
+    fn agent_control_token(&self) -> Result<String, HostError> {
+        read_capability(&self.agent_control_token_path(), "agent control")
+    }
+
+    /// Read-only omp conversation snapshot. It never mutates or stops the
+    /// Host-owned child.
+    pub fn omp_snapshot(&self, session_id: &str) -> Result<OmpSnapshot, HostError> {
+        let value =
+            self.request_with("omp.snapshot", json!({"session_id": session_id}), TIMEOUT)?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    /// Long-poll the Host-owned omp session. A timeout simply returns the
+    /// current snapshot; it never changes process state.
+    pub fn omp_wait(
+        &self,
+        session_id: &str,
+        after_generation: u64,
+    ) -> Result<OmpSnapshot, HostError> {
+        let value = self.request_with(
+            "omp.wait",
+            json!({
+                "session_id": session_id,
+                "after_generation": after_generation,
+                "timeout_ms": 10_000
+            }),
+            Duration::from_secs(13),
+        )?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    /// Explicitly start the omp RPC child for a Session. Requires the
+    /// separate agent-control capability.
+    pub fn omp_start(&self, session_id: &str, cwd: &str) -> Result<OmpSnapshot, HostError> {
+        let token = self.agent_control_token()?;
+        let value = self.request_with(
+            "omp.start",
+            json!({
+                "session_id": session_id,
+                "cwd": cwd,
+                "request_id": ukk_domain::new_id(),
+                "intent": "user",
+                "control": token
+            }),
+            Duration::from_secs(30),
+        )?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    /// Send one prompt. The Host refuses a second prompt while a turn runs;
+    /// callers must abort or wait for the snapshot's terminal turn state.
+    pub fn omp_prompt(&self, session_id: &str, message: &str) -> Result<OmpSnapshot, HostError> {
+        let token = self.agent_control_token()?;
+        let value = self.request_with(
+            "omp.prompt",
+            json!({
+                "session_id": session_id,
+                "message": message,
+                "request_id": ukk_domain::new_id(),
+                "intent": "user",
+                "control": token
+            }),
+            Duration::from_secs(30),
+        )?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    /// Cancel the active omp turn. The child keeps running and stays ready
+    /// for another prompt.
+    pub fn omp_abort(&self, session_id: &str) -> Result<OmpSnapshot, HostError> {
+        let token = self.agent_control_token()?;
+        let value = self.request_with(
+            "omp.abort",
+            json!({
+                "session_id": session_id,
+                "request_id": ukk_domain::new_id(),
+                "intent": "user",
+                "control": token
+            }),
+            Duration::from_secs(30),
+        )?;
+        Ok(serde_json::from_value(value)?)
     }
 
     /// Read-only plugin status and contributions. Never requires a capability.
@@ -1145,6 +1264,60 @@ mod tests {
             .with_plugin_control_token_path("/nonexistent/ukk-plugin-control");
         let error = client.plugin_control_token().unwrap_err();
         assert!(error.to_string().contains("unavailable"));
+    }
+
+    #[test]
+    fn parses_the_omp_snapshot_contract() {
+        let value = json!({
+            "session_id": "s1",
+            "cwd": "/work/project",
+            "state": "running",
+            "protocol_version": 1,
+            "provenance": "omp RPC · local",
+            "generation": 7,
+            "cursor": 12,
+            "turn": {"state": "complete", "agent_invoked": true,
+                     "started_ms": 1, "finished_ms": 2},
+            "timeline": [{
+                "seq": 1, "at_ms": 1, "kind": "assistant", "text": "OMP-OK",
+                "is_error": false, "truncated": false
+            }, {
+                "seq": 2, "at_ms": 2, "kind": "tool", "text": "OMP-TOOL-OK",
+                "tool_name": "bash", "tool_call_id": "call-1",
+                "is_error": false, "truncated": false
+            }],
+            "truncated": false,
+            "unknown_frames": 0,
+            "stderr_tail": [],
+            "exit": null,
+            "error": null,
+            "restart_note": "Host restart does not reattach"
+        });
+        let snapshot: OmpSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(snapshot.session_id, "s1");
+        assert_eq!(snapshot.turn.state, ukk_omp_client::OmpTurnState::Complete);
+        assert_eq!(
+            snapshot.timeline[1].kind,
+            ukk_omp_client::OmpTimelineKind::Tool
+        );
+        assert_eq!(snapshot.timeline[1].tool_name.as_deref(), Some("bash"));
+        assert!(snapshot.is_running());
+    }
+
+    #[test]
+    fn agent_control_token_path_is_separate_from_the_workspace_token() {
+        let client = HostClient::new("/tmp/ukk-omp-test.sock");
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                client.agent_control_token_path(),
+                std::path::PathBuf::from("/tmp/ukk-omp-test.agent-control")
+            );
+            assert_ne!(
+                client.agent_control_token_path(),
+                client.mutation_token_path()
+            );
+        }
     }
 
     #[test]
