@@ -314,8 +314,29 @@ mod tests {
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    /// Another test spawning a child can briefly inherit this listener's fd
+    /// between `fork` and `exec`, making a dropped socket look live for a few
+    /// milliseconds. `remove_stale_socket` correctly refuses to unlink in that
+    /// window, so the test retries until the kernel reports refused instead of
+    /// asserting on a scheduling race.
+    fn wait_until_stale(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let state = socket_state(path).unwrap();
+            if state == SocketState::Stale {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "socket did not become stale: {state:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     fn private_temp_dir(_tag: &str) -> PathBuf {
         // Keep the total Unix socket path below SUN_LEN; macOS temp dirs are
@@ -369,7 +390,7 @@ mod tests {
         assert!(live_error.contains("already listening"), "{live_error}");
         assert!(path.exists(), "a live socket must never be unlinked");
         drop(listener);
-        assert_eq!(socket_state(&path).unwrap(), SocketState::Stale);
+        wait_until_stale(&path);
         assert!(remove_stale_socket(&path).unwrap());
         assert!(!path.exists());
         let _ = fs::remove_dir_all(&directory);
@@ -382,6 +403,7 @@ mod tests {
         let listener = UnixListener::bind(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
         drop(listener);
+        wait_until_stale(&path);
         assert_eq!(socket_state(&path).unwrap(), SocketState::Stale);
         let error = remove_stale_socket(&path).unwrap_err();
         assert!(error.contains("0600"), "{error}");

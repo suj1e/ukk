@@ -8,6 +8,7 @@ description = "Local read-only IPC client for ukk Agent Host"
 [dependencies]
 serde_json = "1.0"
 ukk-domain = { path = "../domain" }
+ukk-omp-client = { path = "../omp-client" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [

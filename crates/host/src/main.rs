@@ -7,6 +7,8 @@ mod lifecycle;
 mod local_auth;
 #[cfg(unix)]
 mod local_fs;
+mod omp_service;
+mod omp_timeline;
 #[cfg(unix)]
 mod peer;
 mod plugin_audit;

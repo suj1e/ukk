@@ -50,6 +50,14 @@ Canonical constraints: [AGENTS.md](../AGENTS.md), [Product](PRODUCT.md), [Archit
 
 The Host has a **narrow local capability-protected mutation allowlist** for Session creation and Pane/Tab layout edits. This is *not* general Agent command authorization, remote device trust, or a complete identity/security review. Some older docs/issues describe these implemented pieces as pending; this status supersedes outdated progress claims, not their remaining acceptance requirements.
 
+## omp RPC structured Agent (branch `feat/omp-rpc-agent`)
+
+- New `crates/omp-client`: typed newline-delimited JSON RPC client for `omp --mode rpc --no-session` (configurable binary/args), separate stdin/stdout/stderr, `ready` validation, `id`-correlated command responses, streaming typed events, typed prompt/steer/follow_up/abort, bounded frames, stderr redaction, kill+reap on startup timeout/shutdown. Protocol v1 only; v2 chunk reassembly is deliberately rejected as unsupported.
+- Host `omp.*` service: one child per Session, Host-owned lifetime, bounded timeline (400 entries / 8 KiB per entry / 512 KiB total enforced on every push), generation-based `omp.snapshot`/`omp.wait`, agent-control-gated `omp.start`/`omp.prompt`/`omp.abort`/`omp.stop`, atomic Idle→Running prompt gate, bounded `request_id` idempotency, audit entries, explicit no-reattach note after Host restart. UI/view close sends nothing. Unix SIGTERM/SIGINT calls `shutdown_all`; Windows stop relies on stdin EOF.
+- Desktop Session action + conversation panel (`apps/desktop/src/workspace/omp.rs`): start/prompt/abort, streaming user/assistant/thinking/tool/notice/error/status entries (sanitized, newline-preserving), `omp RPC · local` provenance, read-only long-poll off the UI thread, local UI state only (no schema migration).
+- **Verified:** `ukk-omp-client` tests (mock RPC child, including reader-failure kill), `ukk-host` tests including omp capability denial/start/prompt/abort/stop/snapshot/wait/bounded timeline/no-kill-on-view-close/concurrent-prompt/idempotency, `ukk-host-client` typed snapshot tests, desktop unit tests, strict clippy. Real omp 18.18.1 smoke on macOS: `Reply with exactly: OMP-OK` returned `OMP-OK`; a bash prompt emitted `tool_execution_start/update/end` then `TOOL-DONE`, terminal `agent_end`, exit 0.
+- **NOT VERIFIED:** real GUI interaction, Windows/Linux real omp runs, automated signal-stop, Host restart resume, protocol v2, omp approvals/tool UI, IME/paste in the composer. See [OMP_RPC.md](OMP_RPC.md). Three-OS CI is the merge authority.
+
 ## In-flight / observed CI
 
 - **Q0 (merged):** [PR #14](https://github.com/suj1e/ukk/pull/14) fixed the Ubuntu `ETXTBSY` test-fixture race; [PR #15](https://github.com/suj1e/ukk/pull/15) added a pinned, checksum-verified hc 0.1.18 acceptance job that passed on **macOS, Ubuntu and Windows CI** (two live terminals, `doctor`/`list`, `watch` snapshot + `created`, survival after the Host viewer stops).

@@ -335,6 +335,7 @@ impl Workspace {
                         },
                     )),
             );
+        view = view.child(self.omp_section(&session.id, &project_root, cx));
         if let Some(root) = root {
             view = view.child(self.session_plugin_section(&session.id, cx));
             view = view.child(

@@ -15,6 +15,7 @@ mod agent_detail;
 mod focus_store;
 mod keymap;
 mod navigation;
+mod omp;
 mod pane_focus;
 mod panes;
 mod plugins;
@@ -161,6 +162,10 @@ pub(crate) struct Workspace {
     terminal_feeds: terminal::TerminalFeeds,
     /// Selected `session.tab` view id. Selection is local and never invokes.
     plugin_active_tab: Option<String>,
+    /// Host-owned omp RPC conversation. Local UI state only; no layout or
+    /// domain schema migration in this slice.
+    omp: omp::OmpPanel,
+    omp_input_focus: gpui::FocusHandle,
 }
 
 impl Workspace {
@@ -210,6 +215,8 @@ impl Workspace {
             plugin_notice: None,
             terminal_feeds: terminal::TerminalFeeds::default(),
             plugin_active_tab: None,
+            omp: omp::OmpPanel::default(),
+            omp_input_focus: cx.focus_handle(),
         };
         view.watch_updates(cx);
         view.watch_workspace(cx);

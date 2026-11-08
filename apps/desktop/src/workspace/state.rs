@@ -195,6 +195,12 @@ impl Workspace {
         self.domain = domain;
         self.terminal_feeds.retain_layouts(&self.domain.layouts);
         self.workspace_snapshot_loaded = true;
+        // The omp panel is scoped to one Session's Host conversation. A
+        // selection change only stops the local long-poll; it never signals
+        // the Host-owned child.
+        if self.omp.open && self.omp.session_id.as_deref() != self.selected_session.as_deref() {
+            self.close_omp(cx);
+        }
 
         if let (Some(session_id), Some(previous_pane), Some(previous_order)) =
             (previous_session.clone(), previous_pane, previous_order)

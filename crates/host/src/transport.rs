@@ -39,6 +39,10 @@ pub(super) fn socket_path() -> AppResult<std::path::PathBuf> {
 pub(super) fn serve() -> AppResult<()> {
     use std::fs;
 
+    // Block SIGTERM/SIGINT before any thread exists, then hand them to a
+    // dedicated thread. The Host must stop its omp children on systemd/
+    // launchd/Scheduled-Task stop instead of relying only on stdin EOF.
+    install_shutdown_signals();
     let path = socket_path()?;
     let parent = path.parent().ok_or("invalid socket path")?;
     let default_location = env::var_os("UKK_SOCKET").is_none();
@@ -75,6 +79,7 @@ pub(super) fn serve() -> AppResult<()> {
         }
     });
     let plugins = Arc::new(PluginService::from_env());
+    let _omp_shutdown = omp_service::ShutdownGuard;
     println!("ukk Host listening on {}", path.display());
     println!(
         "Security: same-user Unix peers only; socket 0600 in a 0700 directory; \
@@ -146,6 +151,30 @@ impl ConnectionSlot {
 impl Drop for ConnectionSlot {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(unix)]
+fn install_shutdown_signals() {
+    unsafe {
+        let mut signals: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut signals);
+        libc::sigaddset(&mut signals, libc::SIGTERM);
+        libc::sigaddset(&mut signals, libc::SIGINT);
+        // Blocks delivery in this thread; threads created afterwards inherit
+        // the mask. Only the waiter below consumes these signals.
+        if libc::pthread_sigmask(libc::SIG_BLOCK, &signals, std::ptr::null_mut()) != 0 {
+            eprintln!("ukk Host: could not block shutdown signals; relying on stdin EOF");
+            return;
+        }
+        std::thread::spawn(move || {
+            let mut signal: libc::c_int = 0;
+            if libc::sigwait(&signals, &mut signal) == 0 {
+                eprintln!("ukk Host: received signal {signal}; stopping omp children");
+                omp_service::shutdown_all();
+                std::process::exit(0);
+            }
+        });
     }
 }
 
@@ -251,6 +280,7 @@ pub(super) fn serve_windows() -> AppResult<()> {
     let broker = Broker::new();
     broker.start();
     let plugins = Arc::new(PluginService::from_env());
+    let _omp_shutdown = omp_service::ShutdownGuard;
     println!("ukk Host listening on local Named Pipe {name}");
     println!(
         "ukk protocol endpoint: Windows Named Pipe streaming is NOT VERIFIED and \
