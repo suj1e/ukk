@@ -30,10 +30,23 @@ struct ConnectionStatusView: View {
             Text(indicator.detail)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            if case .fixtureData = model.connection.state {
-                Text("Live, reconnecting and offline indicators are wired to a unit-tested state machine, but this build has no transport.")
+
+            if let error = model.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(Color.red)
+                    .accessibilityIdentifier("hostErrorLabel")
+            }
+
+            if model.isFixtureMode {
+                Text("Pair a Desktop to load real Sessions. Fixture rows are local samples and are never marked live.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            } else if !indicator.isLive {
+                Text("Cached Host data may be shown below. It is stale until a fresh authenticated session is online.")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.orange)
+                    .accessibilityIdentifier("staleDataNotice")
             }
         }
         .padding(12)
@@ -65,5 +78,37 @@ struct ConnectionStatusPill: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(indicator.tone.color.opacity(0.12), in: Capsule())
+    }
+}
+
+/// Top-of-app honesty banner. Fixture mode is yellow and explicit; a degraded
+/// or offline Host connection is orange/red. A live connection shows nothing.
+struct StatusBanner: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        if model.isFixtureMode {
+            FixtureBanner()
+        } else {
+            let indicator = model.connection.indicator
+            if !indicator.isLive {
+                HStack(spacing: 8) {
+                    Image(systemName: indicator.systemImage)
+                    Text(indicator.label.uppercased())
+                        .accessibilityIdentifier("staleBannerLabel")
+                    Spacer(minLength: 0)
+                    Text("STALE DATA")
+                        .font(.caption2.weight(.bold))
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(indicator.tone == .negative ? Color.red : Color.orange)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("staleBanner")
+            }
+        }
     }
 }

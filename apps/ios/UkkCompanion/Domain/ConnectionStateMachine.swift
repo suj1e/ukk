@@ -1,10 +1,15 @@
 import Foundation
 
 enum ConnectionState: Equatable, Sendable {
-    /// No Host is configured. Fixture content is rendered locally and must never
+    /// No Host is configured. Sample content is rendered locally and must never
     /// be presented as live.
     case fixtureData
+    /// A pinned Host exists and the client is dialling or resuming.
+    case connecting
     case online
+    /// The transport is still open but the last data is stale or a channel-level
+    /// failure occurred. Cached content must not be labelled live.
+    case degraded(String)
     case reconnecting(attempt: Int)
     case offline(OfflineReason)
     /// The app went to the background. iOS suspends transports; a foreground
@@ -16,24 +21,45 @@ enum ConnectionState: Equatable, Sendable {
     enum OfflineReason: Equatable, Sendable {
         case hostUnreachable
         case transportClosed
+        /// The Host no longer recognises this device. Re-pairing is required.
+        case pairingRequired
 
         var label: String {
             switch self {
             case .hostUnreachable: return "Host unreachable"
             case .transportClosed: return "Connection lost"
+            case .pairingRequired: return "Pairing required"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .hostUnreachable:
+                return "The Host did not answer. Cached content is stale; commands and approvals are disabled."
+            case .transportClosed:
+                return "The encrypted session ended. Cached content is stale; reconnect to continue."
+            case .pairingRequired:
+                return "The Host no longer recognises this device. Pair again with a fresh invite."
             }
         }
     }
 }
 
 enum ConnectionEvent: Equatable, Sendable {
+    case dialStarted
     case transportOpened
     case transportClosed
+    case connectionDegraded(String)
+    case dataFresh
     case reconnectAttemptFailed
+    case reconnectScheduled(Int)
+    case wentOffline(ConnectionState.OfflineReason)
+    case pairingRequired
     case userRequestedRetry
     case appEnteredBackground
     case appEnteredForeground
     case deviceRevoked
+    case hostForgotten
 }
 
 struct ConnectionIndicator: Equatable, Sendable {
@@ -53,9 +79,9 @@ struct ConnectionIndicator: Equatable, Sendable {
 
 /// Pure, deterministic connection state machine shared by UI and tests.
 ///
-/// Background/foreground and reconnect rules are intentionally conservative:
-/// only an authenticated `transportOpened` produces `.online`. A foreground
-/// return from suspension requires a fresh handshake.
+/// Only a completed authenticated resume produces `.online`. Stale data after a
+/// channel failure is `.degraded`, never "Live". Background/foreground remains
+/// conservative: a foreground return requires a fresh resume handshake.
 struct ConnectionStateMachine: Equatable, Sendable {
     private(set) var state: ConnectionState
     let maxReconnectAttempts: Int
@@ -77,50 +103,90 @@ struct ConnectionStateMachine: Equatable, Sendable {
         return false
     }
 
+    var isFixtureMode: Bool {
+        if case .fixtureData = state { return true }
+        return false
+    }
+
+    var isConfigured: Bool { !isFixtureMode }
+
     mutating func handle(_ event: ConnectionEvent) {
         if event == .deviceRevoked {
             state = .revoked
             return
         }
+        if event == .hostForgotten {
+            state = .fixtureData
+            return
+        }
         guard state != .revoked else { return }
 
         switch event {
+        case .dialStarted:
+            state = .connecting
+
         case .transportOpened:
             // While suspended the OS has paused transports. A late open must not
-            // bypass the foreground handshake; only a post-foreground
-            // `.reconnecting` state may become live.
+            // bypass the foreground handshake.
             if state != .suspended {
                 state = .online
             }
 
         case .transportClosed:
-            if state == .online {
-                state = .reconnecting(attempt: 1)
-            }
-
-        case .reconnectAttemptFailed:
-            if case .reconnecting(let attempt) = state {
-                if attempt < maxReconnectAttempts {
-                    state = .reconnecting(attempt: attempt + 1)
-                } else {
-                    state = .offline(.hostUnreachable)
-                }
-            }
-
-        case .userRequestedRetry:
             switch state {
-            case .offline, .fixtureData:
+            case .online, .connecting, .degraded(_):
                 state = .reconnecting(attempt: 1)
             default:
                 break
             }
 
-        case .appEnteredBackground:
-            // Only a state with a transport/session suspends. Fixture data and
-            // terminal offline states have nothing to pause and must not turn
-            // into a phantom reconnect on foreground.
+        case .connectionDegraded(let detail):
             switch state {
-            case .online, .reconnecting:
+            case .online, .connecting:
+                state = .degraded(detail)
+            default:
+                break
+            }
+
+        case .dataFresh:
+            if case .degraded(_) = state {
+                state = .online
+            }
+
+        case .reconnectScheduled(let attempt):
+            state = .reconnecting(attempt: max(1, attempt))
+
+        case .wentOffline(let reason):
+            state = .offline(reason)
+
+        case .reconnectAttemptFailed:
+            switch state {
+            case .reconnecting(let attempt):
+                if attempt < maxReconnectAttempts {
+                    state = .reconnecting(attempt: attempt + 1)
+                } else {
+                    state = .offline(.hostUnreachable)
+                }
+            case .connecting:
+                state = .offline(.hostUnreachable)
+            default:
+                break
+            }
+
+        case .pairingRequired:
+            state = .offline(.pairingRequired)
+
+        case .userRequestedRetry:
+            switch state {
+            case .offline, .fixtureData:
+                state = .connecting
+            default:
+                break
+            }
+
+        case .appEnteredBackground:
+            switch state {
+            case .online, .connecting, .reconnecting, .degraded(_):
                 state = .suspended
             default:
                 break
@@ -128,10 +194,10 @@ struct ConnectionStateMachine: Equatable, Sendable {
 
         case .appEnteredForeground:
             if state == .suspended {
-                state = .reconnecting(attempt: 1)
+                state = .connecting
             }
 
-        case .deviceRevoked:
+        case .deviceRevoked, .hostForgotten:
             // Handled above; kept for exhaustiveness.
             break
         }
@@ -147,18 +213,34 @@ struct ConnectionStateMachine: Equatable, Sendable {
                 tone: .neutral,
                 isLive: false
             )
+        case .connecting:
+            return ConnectionIndicator(
+                label: "Connecting",
+                detail: "Resuming the encrypted session with the pinned Host.",
+                systemImage: "arrow.triangle.2.circlepath",
+                tone: .warning,
+                isLive: false
+            )
         case .online:
             return ConnectionIndicator(
                 label: "Live",
-                detail: "Authenticated Host transport is open.",
+                detail: "Authenticated Host session is open.",
                 systemImage: "bolt.horizontal.circle.fill",
                 tone: .positive,
                 isLive: true
             )
+        case .degraded(let detail):
+            return ConnectionIndicator(
+                label: "Degraded",
+                detail: detail,
+                systemImage: "exclamationmark.arrow.triangle.2.circlepath",
+                tone: .warning,
+                isLive: false
+            )
         case .reconnecting(let attempt):
             return ConnectionIndicator(
                 label: "Reconnecting (attempt \(attempt))",
-                detail: "Negotiating an authenticated session. Content stays read-only.",
+                detail: "Negotiating a fresh resume handshake. Cached content is stale.",
                 systemImage: "arrow.triangle.2.circlepath",
                 tone: .warning,
                 isLive: false
@@ -166,7 +248,7 @@ struct ConnectionStateMachine: Equatable, Sendable {
         case .offline(let reason):
             return ConnectionIndicator(
                 label: reason.label,
-                detail: "Read-only cached view. Commands and approvals are disabled.",
+                detail: reason.detail,
                 systemImage: "wifi.slash",
                 tone: .negative,
                 isLive: false
@@ -174,7 +256,7 @@ struct ConnectionStateMachine: Equatable, Sendable {
         case .suspended:
             return ConnectionIndicator(
                 label: "Paused in background",
-                detail: "iOS suspends network transports. A foreground return reconnects and re-authenticates.",
+                detail: "iOS suspends network transports. A foreground return resumes and re-authenticates.",
                 systemImage: "moon.zzz",
                 tone: .neutral,
                 isLive: false
@@ -182,7 +264,7 @@ struct ConnectionStateMachine: Equatable, Sendable {
         case .revoked:
             return ConnectionIndicator(
                 label: "Device revoked",
-                detail: "Trust was revoked. Re-pairing requires explicit Host confirmation.",
+                detail: "This device's trust was revoked. Pair again to reconnect.",
                 systemImage: "lock.slash",
                 tone: .negative,
                 isLive: false

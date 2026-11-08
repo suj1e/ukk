@@ -1,75 +1,102 @@
 import Foundation
 
-/// A parsed QR pairing invitation. Values are **untrusted input**: this type only
-/// validates shape and expiry locally. It never proves Host identity, never
-/// establishes trust, and its secret must never be logged or persisted here.
+/// A v1 pairing invitation. Every value is untrusted input: parsing proves only
+/// that the shape is valid and that the invitation has not expired. Trust is
+/// established only by the handshake and the six-digit confirmation.
 ///
-/// The documented proposal (docs/subsystems/pairing.md) is illustrative; S2 owns the final
-/// cryptographic construction and Host-side single-use enforcement.
+/// The invite secret is never logged, displayed or persisted. It exists for the
+/// lifetime of one pairing attempt and is zeroized when that attempt ends.
 struct PairingInvite: Equatable, Sendable, CustomStringConvertible {
-    let version: Int
-    let relayOrigin: URL
-    let hostID: UUID
-    let hostPublicKey: String
-    let inviteID: String
-    let inviteSecret: String
-    let expiresAt: Date
+    static let maximumLifetime: TimeInterval = 5 * 60
 
-    /// Deliberately omits `inviteSecret`.
+    let version: Int
+    let hostID: String
+    let hostEd: Data
+    let hostX: Data
+    let inviteID: String
+    let secret: Data
+    let expireMS: Int64
+    let relay: URL
+
+    var expiresAt: Date {
+        Date(timeIntervalSince1970: Double(expireMS) / 1000)
+    }
+
+    /// Deliberately omits `secret`.
     var description: String {
-        "PairingInvite(v\(version), relay: \(relayOrigin.absoluteString), host: \(hostID.uuidString), invite: \(inviteID))"
+        "PairingInvite(v\(version), relay: \(relay.absoluteString), host: \(hostID), invite: \(inviteID))"
     }
 }
 
 enum PairingInviteParseError: Error, Equatable, Sendable {
     case malformedJSON
+    case unknownField(String)
     case unsupportedVersion(Int)
     case missingField(String)
     case invalidRelayOrigin
     case invalidHostID
-    case invalidPublicKey
+    case invalidKey(String)
     case invalidInviteIdentifier
     case invalidInviteSecret
     case invalidExpiry
     case expired
+    case lifetimeTooLong
 
     var message: String {
         switch self {
         case .malformedJSON:
-            return "Not a valid JSON pairing invite."
+            return "Not a valid pairing invite. Paste the exact JSON from the Desktop."
+        case .unknownField(let field):
+            return "The invite contains an unsupported field “\(field)”."
         case .unsupportedVersion(let version):
             return "Unsupported invite version \(version). This build understands version 1."
         case .missingField(let field):
             return "The invite is missing the “\(field)” field."
         case .invalidRelayOrigin:
-            return "The relay origin must be an https or wss URL with a host."
+            return "The relay must be an absolute wss:// URL without credentials."
         case .invalidHostID:
-            return "The host identifier is not a UUID."
-        case .invalidPublicKey:
-            return "The host public key is not a base64url string."
+            return "The host identifier is malformed."
+        case .invalidKey(let field):
+            return "The host “\(field)” key must be 32 base64url bytes."
         case .invalidInviteIdentifier:
             return "The invite identifier is empty or malformed."
         case .invalidInviteSecret:
-            return "The invite secret is shorter than the minimum length."
+            return "The invite secret must be 32 base64url bytes."
         case .invalidExpiry:
-            return "The expiry timestamp is not ISO-8601."
+            return "The invite expiry is not a Unix millisecond timestamp."
         case .expired:
             return "This invitation has expired. Ask the Desktop to generate a new one."
+        case .lifetimeTooLong:
+            return "This invitation claims a lifetime longer than five minutes and is refused."
         }
     }
 }
 
 enum PairingInviteParser {
-    static func parse(payload: String, now: Date) -> Result<PairingInvite, PairingInviteParseError> {
-        guard let data = payload.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data),
-              let object = root as? [String: Any] else {
+    private static let allowedFields: Set<String> = [
+        "v", "host_id", "host_ed", "host_x", "invite_id", "secret", "expire_ms", "relay"
+    ]
+
+    /// Parses an invite. `now` is injectable so expiry is deterministic in tests.
+    static func parse(payload: String, now: Date = Date()) -> Result<PairingInvite, PairingInviteParseError> {
+        guard let data = payload.data(using: .utf8) else {
+            return .failure(.malformedJSON)
+        }
+        let object: [String: Any]
+        do {
+            object = try StrictJSON.object(data, allowed: allowedFields)
+        } catch StrictJSON.Failure.malformed {
+            return .failure(.malformedJSON)
+        } catch StrictJSON.Failure.unknownField(let field) {
+            return .failure(.unknownField(field))
+        } catch {
             return .failure(.malformedJSON)
         }
 
-        guard let version = object["v"] as? Int else {
+        guard let versionNumber = object["v"] as? NSNumber, !(object["v"] is Bool) else {
             return .failure(.missingField("v"))
         }
+        let version = versionNumber.intValue
         guard version == 1 else {
             return .failure(.unsupportedVersion(version))
         }
@@ -81,6 +108,18 @@ enum PairingInviteParser {
             return .success(value)
         }
 
+        func key(_ field: String) -> Result<Data, PairingInviteParseError> {
+            switch string(field) {
+            case .success(let text):
+                guard let raw = Base64URL.decode(text), raw.count == 32 else {
+                    return .failure(.invalidKey(field))
+                }
+                return .success(raw)
+            case .failure(let error):
+                return .failure(error)
+            }
+        }
+
         let relayString: String
         switch string("relay") {
         case .success(let value): relayString = value
@@ -89,32 +128,33 @@ enum PairingInviteParser {
 
         guard let relayURL = URL(string: relayString),
               let scheme = relayURL.scheme?.lowercased(),
-              scheme == "https" || scheme == "wss",
+              scheme == "wss",
               let host = relayURL.host,
-              !host.isEmpty else {
+              !host.isEmpty,
+              relayURL.user == nil,
+              relayURL.password == nil else {
             return .failure(.invalidRelayOrigin)
         }
 
-        let hostIDString: String
+        let hostID: String
         switch string("host_id") {
-        case .success(let value): hostIDString = value
+        case .success(let value): hostID = value
         case .failure(let error): return .failure(error)
         }
-        guard let hostID = UUID(uuidString: hostIDString) else {
+        guard !hostID.isEmpty, hostID.count <= 128 else {
             return .failure(.invalidHostID)
         }
 
-        let publicKey: String
-        switch string("host_public_key") {
-        case .success(let value): publicKey = value
+        let hostEd: Data
+        switch key("host_ed") {
+        case .success(let value): hostEd = value
         case .failure(let error): return .failure(error)
         }
-        let allowedKeyCharacters = CharacterSet(
-            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-        )
-        guard publicKey.count >= 32,
-              publicKey.rangeOfCharacter(from: allowedKeyCharacters.inverted) == nil else {
-            return .failure(.invalidPublicKey)
+
+        let hostX: Data
+        switch key("host_x") {
+        case .success(let value): hostX = value
+        case .failure(let error): return .failure(error)
         }
 
         let inviteID: String
@@ -122,51 +162,89 @@ enum PairingInviteParser {
         case .success(let value): inviteID = value
         case .failure(let error): return .failure(error)
         }
-        guard inviteID.count >= 8 else {
+        guard inviteID.count >= 8, inviteID.count <= 128 else {
             return .failure(.invalidInviteIdentifier)
         }
 
-        let inviteSecret: String
-        switch string("invite_secret") {
-        case .success(let value): inviteSecret = value
-        case .failure(let error): return .failure(error)
-        }
-        guard inviteSecret.count >= 16 else {
-            return .failure(.invalidInviteSecret)
+        let secret: Data
+        switch string("secret") {
+        case .success(let text):
+            guard let decoded = Base64URL.decode(text), decoded.count == 32 else {
+                return .failure(.invalidInviteSecret)
+            }
+            secret = decoded
+        case .failure(let error):
+            return .failure(error)
         }
 
-        let expiryString: String
-        switch string("expires_at") {
-        case .success(let value): expiryString = value
-        case .failure(let error): return .failure(error)
+        guard let expiryNumber = object["expire_ms"] as? NSNumber, !(object["expire_ms"] is Bool) else {
+            return .failure(.missingField("expire_ms"))
         }
-        guard let expiresAt = iso8601Date(expiryString) else {
+        let expireMS = expiryNumber.int64Value
+        let nowMS = Int64((now.timeIntervalSince1970 * 1000).rounded())
+        guard expireMS > 0 else {
             return .failure(.invalidExpiry)
         }
-        guard expiresAt > now else {
+        guard expireMS > nowMS else {
             return .failure(.expired)
+        }
+        guard expireMS - nowMS <= Int64(PairingInvite.maximumLifetime * 1000) else {
+            return .failure(.lifetimeTooLong)
         }
 
         return .success(
             PairingInvite(
                 version: version,
-                relayOrigin: relayURL,
                 hostID: hostID,
-                hostPublicKey: publicKey,
+                hostEd: hostEd,
+                hostX: hostX,
                 inviteID: inviteID,
-                inviteSecret: inviteSecret,
-                expiresAt: expiresAt
+                secret: secret,
+                expireMS: expireMS,
+                relay: relayURL
             )
         )
     }
+}
 
-    private static func iso8601Date(_ value: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: value) { return date }
+/// Strict JSON object decoding shared by the invite and handshake messages.
+/// Rejects non-objects, trailing data and unknown fields without ever echoing
+/// input values in errors.
+enum StrictJSON {
+    enum Failure: Error, Equatable {
+        case malformed
+        case unknownField(String)
+    }
 
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: value)
+    static func object(_ data: Data, allowed: Set<String>? = nil) throws -> [String: Any] {
+        let decoded: Any
+        do {
+            decoded = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw Failure.malformed
+        }
+        guard let object = decoded as? [String: Any] else {
+            throw Failure.malformed
+        }
+        if let allowed {
+            for key in object.keys where !allowed.contains(key) {
+                throw Failure.unknownField(key)
+            }
+        }
+        return object
+    }
+
+    static func base64(_ value: Any?, field: String) throws -> Data {
+        guard let text = value as? String, let data = Base64URL.decode(text) else {
+            throw Failure.malformed
+        }
+        _ = field
+        return data
+    }
+
+    static func key32(_ value: Any?) throws -> Data {
+        let data = try base64(value, field: "")
+        guard data.count == 32 else { throw Failure.malformed }
+        return data
     }
 }

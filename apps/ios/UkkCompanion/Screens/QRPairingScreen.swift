@@ -1,50 +1,48 @@
 import SwiftUI
 
-/// QR pairing presentation. The scanner is real AVFoundation code, but this
-/// build never redeems an invitation, never performs a handshake and never
-/// stores trust material. The camera is unavailable in the simulator, which is
-/// surfaced explicitly instead of failing silently.
+/// Real pairing: scan or paste a v1 invite, complete the handshake, show the
+/// six-digit code and require explicit confirmation before trust is stored.
 struct QRPairingScreen: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var pairing: PairingCoordinator
 
     @StateObject private var scanner = QRScannerController()
     @State private var availability = CameraAvailability.current()
+    @State private var pasteDraft = ""
+    @Environment(\.dismiss) private var dismiss
+
+    init(model: AppModel) {
+        self.model = model
+        self._pairing = ObservedObject(wrappedValue: model.pairing)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            FixtureBanner()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    switch availability {
-                    case .available:
-                        scannerSection
-                    case .requestingPermission:
-                        requestingSection
-                    case .unavailable(let reason):
-                        unavailableSection(reason)
-                    }
-
-                    payloadSection
-
-                    if let message = model.pairingParseMessage {
-                        resultSection(message)
-                    }
-
-                    securitySection
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                switch availability {
+                case .available:
+                    scannerSection
+                case .requestingPermission:
+                    requestingSection
+                case .unavailable(let reason):
+                    unavailableSection(reason)
                 }
-                .padding(16)
+
+                if model.trust == nil {
+                    payloadSection
+                }
+                stateSection
+                securitySection
             }
+            .padding(16)
         }
         .navigationTitle("Pair Device")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                FixtureTag()
-            }
-        }
         .onAppear {
             scanner.onPayload = { payload in
-                model.handleScannedCode(payload)
+                model.beginPairing(payload: payload)
+                pasteDraft = ""
+                scanner.stop()
             }
         }
         .task {
@@ -55,7 +53,7 @@ struct QRPairingScreen: View {
             }
         }
         .onChange(of: availability) { _, newValue in
-            if newValue.isAvailable {
+            if newValue.isAvailable, model.trust == nil {
                 scanner.start()
             } else {
                 scanner.stop()
@@ -80,7 +78,7 @@ struct QRPairingScreen: View {
                         .frame(width: 180, height: 180)
                         .accessibilityHidden(true)
                 }
-                Text("Point the camera at the Desktop pairing QR code. The first code read stops the capture session.")
+                Text("Point the camera at the Desktop pairing QR code. The first code read starts the handshake and stops the capture session.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -95,7 +93,7 @@ struct QRPairingScreen: View {
                 Text("Requesting camera access…")
                     .font(.headline)
             }
-            Text("QR scanning needs camera permission. This build never connects to a Host.")
+            Text("QR scanning needs camera permission. You can paste the invite JSON instead.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -116,7 +114,7 @@ struct QRPairingScreen: View {
             Text(message)
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Text("You can still validate the shape of an invite payload below. Validation is local and performs no network request.")
+            Text("You can paste the invite payload below instead.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -137,7 +135,7 @@ struct QRPairingScreen: View {
             Text(reason.message)
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Text("You can still validate the shape of an invite payload below. Validation is local and performs no network request.")
+            Text("You can paste the invite payload below instead.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -153,9 +151,9 @@ struct QRPairingScreen: View {
 
     private var payloadSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Validate an invite payload")
+            Text("Pairing invite")
                 .font(.headline)
-            TextEditor(text: $model.pairingPayloadDraft)
+            TextEditor(text: $pasteDraft)
                 .font(.caption.monospaced())
                 .frame(minHeight: 110)
                 .scrollContentBackground(.hidden)
@@ -169,24 +167,125 @@ struct QRPairingScreen: View {
                         .strokeBorder(Color(.separator), lineWidth: 0.5)
                 )
                 .accessibilityIdentifier("pairingPayloadField")
-            Button("Validate payload (no network)") {
-                model.validatePairingDraft()
+            Button("Begin pairing") {
+                let payload = pasteDraft
+                pasteDraft = ""
+                model.beginPairing(payload: payload)
             }
-            .buttonStyle(.bordered)
-            .accessibilityIdentifier("validatePayloadButton")
+            .buttonStyle(.borderedProminent)
+            .disabled(pairing.isBusy || pasteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityIdentifier("beginPairingButton")
         }
     }
 
-    private func resultSection(_ message: String) -> some View {
-        Text(message)
-            .font(.callout)
+    @ViewBuilder
+    private var stateSection: some View {
+        switch pairing.state {
+        case .idle, .cancelled:
+            Text("Scan the Desktop QR code or paste its invite JSON to start pairing.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("pairingIdle")
+
+        case .connecting:
+            stateCard {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Contacting the Host…")
+                        .font(.headline)
+                }
+                Text("The invite is being used once. It is not stored.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityIdentifier("pairingConnecting")
+
+        case .awaitingConfirmation(let code, let hostID):
+            stateCard {
+                Text("Compare this code with the Desktop")
+                    .font(.headline)
+                Text(code)
+                    .font(.system(size: 44, weight: .bold, design: .monospaced))
+                    .tracking(8)
+                    .accessibilityIdentifier("pairingCode")
+                Text("Host \(hostID.prefix(12))…")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                Text("Only confirm when the Desktop displays the same six digits. Confirming sends the proof that completes pairing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Button("The codes match — pair") {
+                        pairing.confirm()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("confirmPairingButton")
+
+                    Button("Cancel", role: .cancel) {
+                        model.cancelPairing()
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("cancelPairingButton")
+                }
+            }
+            .accessibilityIdentifier("pairingConfirmation")
+
+        case .finishing:
+            stateCard {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Finishing pairing…")
+                        .font(.headline)
+                }
+                Text("Verifying the encrypted channel with the Host.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityIdentifier("pairingFinishing")
+
+        case .paired(let trust):
+            stateCard {
+                Label("Paired", systemImage: "checkmark.seal.fill")
+                    .font(.headline)
+                    .foregroundStyle(Color.green)
+                Text(trust.label)
+                    .font(.callout)
+                Text("Host keys are pinned in the Keychain. Sessions load over the encrypted channel.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("pairingDoneButton")
+            }
+            .accessibilityIdentifier("pairingPaired")
+
+        case .failed(let message):
+            stateCard {
+                Label("Pairing failed", systemImage: "xmark.octagon.fill")
+                    .font(.headline)
+                    .foregroundStyle(Color.red)
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("pairingFailureMessage")
+                Button("Try again") {
+                    model.cancelPairing()
+                }
+                .buttonStyle(.bordered)
+            }
+            .accessibilityIdentifier("pairingFailed")
+        }
+    }
+
+    private func stateCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8, content: content)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
+            .padding(14)
             .background(
                 Color(.secondarySystemGroupedBackground),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
             )
-            .accessibilityIdentifier("pairingResult")
     }
 
     private var securitySection: some View {
@@ -194,7 +293,7 @@ struct QRPairingScreen: View {
             Image(systemName: "lock.shield")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text("Pairing is not implemented. This screen presents the scanner and validates invitation shape only; scanned values never leave this device, and the invite secret is never displayed or logged.")
+            Text("The invite secret stays in memory for this one attempt, is never displayed or logged, and is never written to disk. Only the device key seeds and the pinned Host public keys are stored, in the Keychain with ThisDeviceOnly protection.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

@@ -1,11 +1,18 @@
 import Foundation
 
-/// Where a value came from. This build only ships fixture data; reading a real
-/// Host is owned by the S1/S2 protocol lanes and is not implemented here.
+/// Where a value came from. Fixture values are deterministic local samples; live
+/// values were produced by an authenticated Host RPC and may be stale while the
+/// connection is degraded or offline.
 enum DataProvenance: String, Equatable, Sendable {
     case fixture
+    case live
 
-    var label: String { "fixture" }
+    var label: String {
+        switch self {
+        case .fixture: return "fixture"
+        case .live: return "host"
+        }
+    }
 }
 
 enum StatusTone: Equatable, Sendable {
@@ -70,6 +77,19 @@ enum AgentRunStatus: String, CaseIterable, Equatable, Sendable {
         case .unknown: return .neutral
         }
     }
+
+    init(providerState: String) {
+        switch providerState.lowercased() {
+        case "created": self = .created
+        case "starting": self = .starting
+        case "running": self = .running
+        case "blocked": self = .blocked
+        case "finished", "completed": self = .finished
+        case "failed", "error": self = .failed
+        case "cancelled", "canceled": self = .cancelled
+        default: self = .unknown
+        }
+    }
 }
 
 /// Binding to the herdr-core runtime. The value is copied, never inferred.
@@ -86,7 +106,7 @@ struct AgentRun: Identifiable, Equatable, Sendable {
     let name: String
     let adapterKind: String
     let status: AgentRunStatus
-    /// Provenance of the status itself, e.g. "structured adapter event (fixture)".
+    /// Provenance of the status itself, e.g. "provider snapshot (codex)".
     let statusSource: String
     let terminalRef: TerminalRef
     let provenance: DataProvenance
@@ -96,6 +116,14 @@ enum ChatRole: String, Equatable, Sendable {
     case user
     case agent
     case system
+
+    init(wireRole: String) {
+        switch wireRole.lowercased() {
+        case "user": self = .user
+        case "assistant", "agent": self = .agent
+        default: self = .system
+        }
+    }
 }
 
 struct ChatMessage: Identifiable, Equatable, Sendable {
@@ -104,8 +132,51 @@ struct ChatMessage: Identifiable, Equatable, Sendable {
     let agentRunID: AgentRunID?
     let role: ChatRole
     let text: String
+    let isFinal: Bool
     let occurredAt: Date
     let provenance: DataProvenance
+
+    init(
+        id: ChatMessageID,
+        sessionID: SessionID,
+        agentRunID: AgentRunID?,
+        role: ChatRole,
+        text: String,
+        isFinal: Bool = true,
+        occurredAt: Date,
+        provenance: DataProvenance
+    ) {
+        self.id = id
+        self.sessionID = sessionID
+        self.agentRunID = agentRunID
+        self.role = role
+        self.text = text
+        self.isFinal = isFinal
+        self.occurredAt = occurredAt
+        self.provenance = provenance
+    }
+}
+
+/// One provider-reported tool call. Tool calls are shown only when the provider
+/// emitted them; they are never reconstructed from terminal text.
+struct ToolCall: Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let status: String
+    let input: String?
+    let output: String?
+    let isError: Bool
+}
+
+/// One provider-emitted approval request.
+struct ApprovalRequest: Identifiable, Equatable, Sendable {
+    let id: String
+    let toolName: String
+    let input: String?
+    let state: String
+    let expiresAt: Date?
+
+    var isPending: Bool { state.lowercased() == "pending" }
 }
 
 struct Session: Identifiable, Equatable, Sendable {
@@ -115,8 +186,38 @@ struct Session: Identifiable, Equatable, Sendable {
     let lifecycle: SessionLifecycle
     let agentRuns: [AgentRun]
     let messages: [ChatMessage]
+    let tools: [ToolCall]
+    let approvals: [ApprovalRequest]
     let capabilities: SessionCapabilities
+    /// The Host's opaque Session id. Absent for fixture sessions.
+    let rpcID: String?
     let provenance: DataProvenance
+
+    init(
+        id: SessionID,
+        spaceID: SpaceID,
+        title: String,
+        lifecycle: SessionLifecycle,
+        agentRuns: [AgentRun],
+        messages: [ChatMessage],
+        tools: [ToolCall] = [],
+        approvals: [ApprovalRequest] = [],
+        capabilities: SessionCapabilities,
+        rpcID: String? = nil,
+        provenance: DataProvenance
+    ) {
+        self.id = id
+        self.spaceID = spaceID
+        self.title = title
+        self.lifecycle = lifecycle
+        self.agentRuns = agentRuns
+        self.messages = messages
+        self.tools = tools
+        self.approvals = approvals
+        self.capabilities = capabilities
+        self.rpcID = rpcID
+        self.provenance = provenance
+    }
 
     func agentRun(_ id: AgentRunID) -> AgentRun? {
         agentRuns.first { $0.id == id }
@@ -124,6 +225,10 @@ struct Session: Identifiable, Equatable, Sendable {
 
     func messages(for agentRunID: AgentRunID) -> [ChatMessage] {
         messages.filter { $0.agentRunID == agentRunID }
+    }
+
+    var pendingApprovals: [ApprovalRequest] {
+        approvals.filter(\.isPending)
     }
 }
 
@@ -149,4 +254,33 @@ struct Workspace: Identifiable, Equatable, Sendable {
     func space(_ id: SpaceID) -> Space? {
         spaces.first { $0.id == id }
     }
+}
+
+// MARK: - Stable identifiers for Host strings
+
+extension EntityID {
+    /// Maps a Host id string to a stable typed identifier without losing UUID
+    /// inputs. Non-UUID identifiers are hashed so navigation stays stable across
+    /// refreshes.
+    static func fromHost(_ value: String) -> EntityID<Tag> {
+        if let uuid = UUID(uuidString: value) {
+            return EntityID(rawValue: uuid)
+        }
+        let digest = HandshakeCrypto.sha256(Data(value.utf8))
+        var bytes = Array(digest.prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x40
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        let uuid = uuidFromBytes(bytes)
+        return EntityID(rawValue: uuid)
+    }
+}
+
+private func uuidFromBytes(_ bytes: [UInt8]) -> UUID {
+    let tuple: uuid_t = (
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11],
+        bytes[12], bytes[13], bytes[14], bytes[15]
+    )
+    return UUID(uuid: tuple)
 }

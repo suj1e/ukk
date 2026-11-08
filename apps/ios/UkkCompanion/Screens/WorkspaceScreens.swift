@@ -5,7 +5,7 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FixtureBanner()
+            StatusBanner(model: model)
             NavigationStack(path: $model.navigation.path) {
                 WorkspaceListView(model: model)
                     .navigationDestination(for: AppRoute.self) { route in
@@ -14,6 +14,7 @@ struct RootView: View {
             }
         }
         .tint(UkkTheme.accent)
+        .task { model.start() }
         .sheet(isPresented: $model.isShowingTrustedDevices) {
             NavigationStack {
                 TrustedDevicesScreen(model: model)
@@ -32,30 +33,30 @@ struct RootView: View {
     private func destination(for route: AppRoute) -> some View {
         switch route {
         case .workspace(let id):
-            if let workspace = model.catalog.workspace(id) {
+            if let workspace = model.workspace(id) {
                 WorkspaceDetailScreen(model: model, workspace: workspace)
             } else {
                 MissingEntityView(title: "Workspace unavailable")
             }
 
         case .space(let id):
-            if let space = model.catalog.space(id) {
+            if let space = model.space(id) {
                 SpaceScreen(model: model, space: space)
             } else {
                 MissingEntityView(title: "Space unavailable")
             }
 
         case .session(let id):
-            if let session = model.catalog.session(id) {
+            if let session = model.session(id) {
                 SessionScreen(model: model, session: session)
             } else {
                 MissingEntityView(title: "Session unavailable")
             }
 
         case .agentRun(let id):
-            if let agent = model.catalog.agentRun(id),
-               let session = model.catalog.session(agent.sessionID) {
-                AgentScreen(session: session, agentRun: agent)
+            if let agent = model.agentRun(id),
+               let session = model.session(agent.sessionID) {
+                AgentScreen(model: model, session: session, agentRun: agent)
             } else {
                 MissingEntityView(title: "Agent unavailable")
             }
@@ -74,17 +75,36 @@ struct WorkspaceListView: View {
                     .listRowBackground(Color.clear)
             }
 
-            Section {
-                ForEach(model.catalog.workspaces) { workspace in
-                    NavigationLink(value: AppRoute.workspace(workspace.id)) {
-                        WorkspaceRow(workspace: workspace)
-                    }
-                    .accessibilityIdentifier("workspaceRow-\(workspace.id)")
+            if model.workspaces.isEmpty {
+                Section {
+                    ContentUnavailableView(
+                        "No Host data",
+                        systemImage: "network.slash",
+                        description: Text(
+                            model.isFixtureMode
+                                ? "Pair a Desktop to load Spaces and Sessions."
+                                : "The authenticated workspace snapshot is not available. Reconnect to load it."
+                        )
+                    )
+                    .accessibilityIdentifier("workspaceUnavailable")
                 }
-            } header: {
-                Text("Workspaces")
-            } footer: {
-                Text(FixtureCatalog.disclaimer)
+            } else {
+                Section {
+                    ForEach(model.workspaces) { workspace in
+                        NavigationLink(value: AppRoute.workspace(workspace.id)) {
+                            WorkspaceRow(workspace: workspace)
+                        }
+                        .accessibilityIdentifier("workspaceRow-\(workspace.id)")
+                    }
+                } header: {
+                    Text("Workspaces")
+                } footer: {
+                    if model.isFixtureMode {
+                        Text(FixtureCatalog.disclaimer)
+                    } else {
+                        Text("Loaded from the paired Host. Rows are stale while the connection is not live.")
+                    }
+                }
             }
         }
         .listStyle(.insetGrouped)
@@ -113,7 +133,7 @@ struct WorkspaceDetailScreen: View {
                     HStack(spacing: 8) {
                         Text(workspace.name)
                             .font(.title3.weight(.semibold))
-                        FixtureTag()
+                        ProvenanceTag(provenance: workspace.provenance)
                     }
                     Text(workspace.hostLabel)
                         .font(.footnote)
@@ -132,7 +152,11 @@ struct WorkspaceDetailScreen: View {
             } header: {
                 Text("Spaces")
             } footer: {
-                Text("A Space is a project root on one Host. Fixture roots do not exist on this simulator.")
+                Text(
+                    workspace.provenance == .fixture
+                        ? "A Space is a project root on one Host. Fixture roots do not exist on this simulator."
+                        : "A Space is a project root on the paired Desktop."
+                )
             }
         }
         .listStyle(.insetGrouped)
@@ -152,7 +176,7 @@ struct SpaceScreen: View {
                     Text(space.projectRoot)
                         .font(.footnote.monospaced())
                         .foregroundStyle(.secondary)
-                    Text("\(space.sessions.count) sessions · fixture data")
+                    Text("\(space.sessions.count) sessions · \(space.provenance.label) data")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

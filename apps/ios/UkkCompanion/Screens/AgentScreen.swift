@@ -3,11 +3,13 @@ import SwiftUI
 /// Agent detail: observation provenance, runtime binding and capability
 /// negotiation. Never derives status from terminal text.
 struct AgentScreen: View {
+    @ObservedObject var model: AppModel
     let session: Session
     let agentRun: AgentRun
 
     private var agentMessages: [ChatMessage] {
-        session.messages(for: agentRun.id)
+        let scoped = session.messages(for: agentRun.id)
+        return scoped.isEmpty && session.agentRuns.count == 1 ? session.messages : scoped
     }
 
     var body: some View {
@@ -26,7 +28,8 @@ struct AgentScreen: View {
                         .font(.caption.monospaced())
                 }
                 LabeledContent("Provenance") {
-                    FixtureTag()
+                    Text(agentRun.provenance.label)
+                        .font(.caption.weight(.semibold))
                 }
             }
 
@@ -52,14 +55,37 @@ struct AgentScreen: View {
                 capabilityRow("Screen preview", session.capabilities.screenPreview)
                 capabilityRow("Screen control", session.capabilities.screenControl)
             } header: {
-                Text("Capabilities")
+                Text("Grants for this device")
             } footer: {
-                Text("Only capabilities negotiated with a Host are shown as available. This build negotiated nothing.")
+                Text("Only grants reported by the Host are shown. Pairing grants nothing by itself.")
+            }
+
+            if !session.tools.isEmpty {
+                Section("Provider tools") {
+                    ForEach(session.tools) { tool in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text(tool.name)
+                                    .font(.callout.weight(.semibold))
+                                Spacer()
+                                Text(tool.status)
+                                    .font(.caption)
+                                    .foregroundStyle(tool.isError ? Color.red : Color.secondary)
+                            }
+                            if let input = tool.input {
+                                Text(input)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(4)
+                            }
+                        }
+                    }
+                }
             }
 
             Section("Transcript for this agent") {
                 if agentMessages.isEmpty {
-                    Text("No fixture messages for this AgentRun.")
+                    Text("No provider messages for this Agent.")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(agentMessages) { message in
@@ -89,7 +115,7 @@ struct AgentScreen: View {
         HStack {
             Text(title)
             Spacer()
-            Text(isAvailable ? "Available" : "Unavailable")
+            Text(isAvailable ? "Granted" : "Not granted")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(isAvailable ? Color.green : Color.secondary)
         }

@@ -54,6 +54,18 @@ struct FixtureTag: View {
     }
 }
 
+/// Only fixture rows carry a provenance badge. Live rows rely on the connection
+/// indicator instead of pretending a badge proves freshness.
+struct ProvenanceTag: View {
+    let provenance: DataProvenance
+
+    var body: some View {
+        if provenance == .fixture {
+            FixtureTag()
+        }
+    }
+}
+
 /// Persistent, unmistakable marker that the whole app is local sample content.
 struct FixtureBanner: View {
     var body: some View {
@@ -81,7 +93,7 @@ struct MissingEntityView: View {
         ContentUnavailableView(
             title,
             systemImage: "questionmark.folder",
-            description: Text("The requested fixture does not exist in this deterministic catalogue.")
+            description: Text("This item is no longer present in the current Host snapshot.")
         )
     }
 }
@@ -93,8 +105,11 @@ struct MetadataLine: View {
         HStack(spacing: 5) {
             Text(message.occurredAt, format: .dateTime.hour().minute())
             Text("·")
-            Text(FixtureCatalog.badgeLabel.lowercased())
+            Text(message.provenance.label)
                 .fontWeight(.semibold)
+            if !message.isFinal {
+                Text("· streaming")
+            }
         }
         .font(.caption2)
         .foregroundStyle(.secondary)

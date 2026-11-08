@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 /// Camera availability is resolved deterministically so simulator and permission
-/// failures are explicit rather than silent. This build never connects to a Host.
+/// failures are explicit rather than silent.
 enum CameraAvailability: Equatable, Sendable {
     enum UnavailableReason: Equatable, Sendable {
         case simulator
@@ -12,11 +12,11 @@ enum CameraAvailability: Equatable, Sendable {
         var message: String {
             switch self {
             case .simulator:
-                return "The iOS Simulator has no camera. QR scanning needs a physical iPhone or iPad; this fixture build never connects to a Host."
+                return "The iOS Simulator has no camera. QR scanning needs a physical iPhone or iPad; paste the invite JSON instead."
             case .noCaptureDevice:
                 return "No capture device is available on this device. QR scanning cannot start."
             case .permissionDenied:
-                return "Camera access is denied or restricted. Enable camera access for ukk in Settings to scan a pairing QR code; this build never connects to a Host."
+                return "Camera access is denied or restricted. Enable camera access for ukk in Settings to scan a pairing QR code, or paste the invite JSON instead."
             }
         }
     }

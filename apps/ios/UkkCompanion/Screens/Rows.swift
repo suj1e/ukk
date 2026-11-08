@@ -8,7 +8,7 @@ struct WorkspaceRow: View {
             HStack(spacing: 8) {
                 Text(workspace.name)
                     .font(.headline)
-                FixtureTag()
+                ProvenanceTag(provenance: workspace.provenance)
             }
             Text(workspace.hostLabel)
                 .font(.footnote)
@@ -54,13 +54,20 @@ struct SessionRow: View {
                 Text(session.title)
                     .font(.headline)
                 Spacer(minLength: 4)
+                if session.capabilities.structuredApprovals, !session.pendingApprovals.isEmpty {
+                    Text("\(session.pendingApprovals.count) approvals")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.orange)
+                }
                 StatusChip(text: session.lifecycle.label, tone: session.lifecycle.tone)
             }
-            Text(agentSummary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            Text("\(session.messages.count) fixture messages")
+            if !agentSummary.isEmpty {
+                Text(agentSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Text("\(session.messages.count) messages · \(session.tools.count) tools")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
