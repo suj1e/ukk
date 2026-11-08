@@ -15,14 +15,20 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ukk_domain::new_id;
 use ukk_protocol::{
-    ClientHello, ClientMessage, Command as ProtocolCommand, CommandEnvelope, DurableCursor,
-    IdempotencyKey, Limits, RequestId, ServerMessage, SessionCreate, SubscribeRequest,
-    CURRENT_GENERATION,
+    ClientHello, ClientMessage, DurableCursor, Event, EventId, Limits, RequestId, ServerMessage,
+    SessionCreated, StreamId, SubscribeRequest, CURRENT_GENERATION,
 };
 use ukk_store::Store;
+
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
 
 struct Fixture {
     child: Child,
@@ -102,10 +108,26 @@ fn serve_exposes_the_local_protocol_stream_next_to_the_rpc_socket() {
     let protocol_socket = directory.join("agent-host.protocol");
     let database = directory.join("workspace.sqlite3");
 
-    let space_id = {
+    {
         let mut store = Store::open(&database).unwrap();
-        store.create_space("ukk", "/src/ukk").unwrap().id
-    };
+        let space = store.create_space("ukk", "/src/ukk").unwrap();
+        // The local protocol plane is read-only in this slice, so the test
+        // seeds one durable event directly and proves replay over the socket.
+        let stream = StreamId::new("workspace").unwrap();
+        store
+            .append_event(
+                &stream,
+                EventId::new_random(),
+                Event::SessionCreated(SessionCreated {
+                    space_id: ukk_protocol::DomainId::new(&space.id).unwrap(),
+                    session_id: ukk_protocol::DomainId::new(new_id()).unwrap(),
+                    title: "Serve protocol Session".into(),
+                    revision: 0,
+                }),
+                now(),
+            )
+            .unwrap();
+    }
 
     let child = Command::new(env!("CARGO_BIN_EXE_ukk-host"))
         .arg("serve")
@@ -139,35 +161,7 @@ fn serve_exposes_the_local_protocol_stream_next_to_the_rpc_socket() {
     };
     assert_eq!(hello.protocol, CURRENT_GENERATION);
     assert_eq!(hello.streams[0].stream.as_str(), "workspace");
-    assert_eq!(hello.streams[0].head, DurableCursor::ZERO);
-
-    let request_id = new_id();
-    client.send(&ClientMessage::Command(CommandEnvelope {
-        protocol: CURRENT_GENERATION,
-        request_id: RequestId::new(&request_id).unwrap(),
-        idempotency_key: IdempotencyKey::new("serve-stream-key").unwrap(),
-        issued_at_ms: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64,
-        command: ProtocolCommand::SessionCreate(SessionCreate {
-            space_id: ukk_protocol::DomainId::new(&space_id).unwrap(),
-            title: "Serve protocol Session".into(),
-            expected_revision: None,
-        }),
-    }));
-    match client.recv() {
-        ServerMessage::Result(result) => {
-            assert!(!result.replayed);
-            assert_eq!(
-                result.result,
-                ukk_protocol::CommandResult::Completed {
-                    detail: Some(request_id)
-                }
-            );
-        }
-        other => panic!("expected a completed result, got {other:?}"),
-    }
+    assert_eq!(hello.streams[0].head, DurableCursor::from_raw(1));
 
     client.send(&ClientMessage::Subscribe(SubscribeRequest::new(
         CURRENT_GENERATION,

@@ -147,7 +147,7 @@ request = json.loads(sys.stdin.readline())
 assert request["method"] == "events.subscribe"
 print(json.dumps({
     "jsonrpc": "2.0", "id": 1,
-    "result": {"seq": 1, "terminals": [{
+    "result": {"seq": 1, "core": {"id": "core-1"}, "terminals": [{
         "address": "t3", "state": "live", "cwd": "/code",
         "argv": ["codex"], "name": "Bound Agent", "parent": None,
         "status": {"state": "working"}

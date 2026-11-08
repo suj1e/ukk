@@ -53,6 +53,9 @@ fn watch(host: Arc<ProtocolHost>, broker: Arc<Broker>) {
         let Some(terminals) = snapshot.get("terminals").and_then(Value::as_array) else {
             continue;
         };
+        // Bind against the reporting core when herdr-core exposes it; without
+        // it the store only accepts an unambiguous single terminal binding.
+        let core_id = broker.core_id();
         for terminal in terminals {
             let Some(address) = terminal.get("address").and_then(Value::as_str) else {
                 continue;
@@ -61,7 +64,7 @@ fn watch(host: Arc<ProtocolHost>, broker: Arc<Broker>) {
             if published.get(address) == Some(&status) {
                 continue;
             }
-            match host.publish_broker_status(address, status, now_ms()) {
+            match host.publish_broker_status(core_id.as_deref(), address, status, now_ms()) {
                 Ok(true) => {
                     published.insert(address.to_owned(), status);
                 }

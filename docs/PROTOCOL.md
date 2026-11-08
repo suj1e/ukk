@@ -356,8 +356,8 @@ newline-delimited JSON-RPC socket, whose semantics are unchanged.
 | Handshake | first frame must be `hello`; commands/subscriptions before it are refused. A device claim on this local binding is `plane_mismatch` |
 | Streams | one durable stream, `workspace`; the `hello` reply carries its persisted `floor`/`head`. Live and replay frames are ordered by the event log cursor. Session commands and the herdr-core status bridge append to this stream, and open subscriptions receive the new cursor live |
 | Snapshot | a cursor below the retention floor yields a `snapshot` at the durable head whose body is the Host's durable workspace snapshot; the client resumes at `at_cursor` |
-| Commands | `session_create` (idempotent Session metadata + `session_created` event) and `device_revoke` (`device.manage`; the local owner holds all scopes, and pairing never grants `device.manage`). `agent_send`, `approval_respond` and `pointer_input` are **refused before admission**; they belong to the separate runtime-control and controller-lease surfaces and are never reported as `accepted` |
-| Idempotency | `Store::begin_idempotent_command`/`finish` are the durable authority; the in-memory `IdempotencyStore` in `ProtocolService` is bypassed to avoid two sources of truth. A retry across a Host restart returns the stored result with `replayed: true` |
+| Commands | The **local plane is read-only** in this slice: every `command` frame is refused before admission, because the merged wire has no local capability field and the JSON-RPC mutations require the rotated per-Host `LocalAuth` token. The command/idempotency path remains implemented and tested on the remote plane (`session_create` + `device_revoke`); it becomes reachable in production only when S2 authenticates a device. `agent_send`, `approval_respond` and `pointer_input` are also refused; they belong to the separate runtime-control and controller-lease surfaces and are never reported as `accepted` |
+| Idempotency | `Store::begin_idempotent_command`/`finish` are the durable authority; the in-memory `IdempotencyStore` in `ProtocolService` is bypassed to avoid two sources of truth. A retry across a Host restart returns the stored result with `replayed: true`. Input that cannot execute (unknown Space, non-UUID request id, unknown device) is rejected before admission, and an execution failure aborts its in-flight record so a retry is not permanently burned |
 | Delivery | `authorize_delivery` runs before every outbound batch, including an idle live stream. Revocation, key rotation or grant expiry sends a typed `error` and closes the subscription/connection |
 | Bounds | 16 concurrent connections, `max_queue_depth` outbound frames per connection (a non-draining client is closed), 60 s idle deadline for pre-handshake, non-subscribing and partial-frame connections, 10 s write deadline, 256-event replay batches |
 
@@ -365,6 +365,15 @@ The 40 ms live poll means a newly appended event reaches an open subscription
 without a reconnect; replay itself is served from SQLite in bounded batches.
 Acknowledgements are advisory and tracked per connection with a monotonic
 check; no per-client checkpoint is persisted by this slice.
+
+Why the local plane does not carry mutations: the existing JSON-RPC workspace
+mutations require a short-lived per-Host capability, and the merged protocol
+wire has no field for it. Executing `session_create` on same-user peer identity
+alone would create a local RPC path stronger than the capability-gated one.
+The durable command/idempotency adapter stays in the binary and is exercised
+through the test-only remote binding; production local clients use the
+JSON-RPC endpoint for mutations until a protocol-level local capability is
+designed.
 
 The herdr-core runtime broker stays on the JSON-RPC plane for its snapshot
 API. A bridge (`crates/host/src/protocol_bridge.rs`) additionally publishes a
@@ -391,11 +400,14 @@ remote plane. `EndpointPlane::RemoteForTests` exists only under `cfg(test)` to
 exercise device grants, unauthorized commands and mid-stream revocation over
 the same socket; production constructs `EndpointPlane::Local` only.
 
-**NOT VERIFIED in this slice:** a Windows Named Pipe implementation of this
-streaming endpoint (the shared logic compiles and is unit-tested on all three
-OSes, but no Windows protocol listener exists); a real relay/TLS/WAN listener;
-pairing proof-of-possession; OS key storage; iOS client integration; and
-cross-account peer denial beyond the existing single-user runbook.
+**NOT VERIFIED in this slice:** local command execution (intentionally disabled
+until a protocol-level local capability exists; the adapter is exercised on the
+test-only remote plane, which is not reachable from production builds); a
+Windows Named Pipe implementation of this streaming endpoint (the shared logic
+compiles and is unit-tested on all three OSes, but no Windows protocol listener
+exists); a real relay/TLS/WAN listener; pairing proof-of-possession; OS key
+storage; iOS client integration; and cross-account peer denial beyond the
+existing single-user runbook.
 
 ## Limits and backpressure
 
@@ -460,12 +472,14 @@ See [security](SECURITY.md), [pairing](PAIRING.md),
   bounds and disjoint-generation refusal.
 * `subscribe_replays_batches_snapshots_pruned_history_and_streams_live` — ordered
   replay, cursor-beyond-head error, retention snapshot, live cursor continuation.
-* `command_idempotency_never_executes_twice` — durable retry classification and
-  fingerprint conflict.
+* `command_idempotency_never_executes_twice` — remote-plane durable retry
+  classification and fingerprint conflict; the local plane refuses commands and
+  burns no idempotency record.
 * `handshake_is_required_and_remote_commands_need_their_scope` — pre-handshake
   refusal, local device-claim rejection, remote `missing_scope`.
-* `revocation_and_grant_expiry_terminate_an_open_stream` — live revocation and
-  absolute grant expiry close delivery with typed denials.
+* `revocation_and_grant_expiry_terminate_an_open_stream` — live revocation,
+  external-store revocation (proving per-batch registry reload) and absolute
+  grant expiry close delivery with typed denials.
 * `oversized_and_malformed_frames_are_rejected` — length-prefix bound, malformed
   JSON/UTF-8/empty frames, connection remains usable after recoverable errors.
 * `reconnect_resumes_from_the_persisted_cursor` — disconnect, bounded replay,
@@ -473,8 +487,10 @@ See [security](SECURITY.md), [pairing](PAIRING.md),
 * `events_and_idempotency_survive_a_host_restart` — SQLite reopen preserves
   event ids/cursors and the completed idempotency record.
 * `protocol_service` unit tests — trust hydration from `devices`/`device_grants`,
-  durable idempotency, generation mismatch before execution, and broker-status
-  publication only for bound AgentRuns; these compile and run on all three OSes.
+  durable idempotency, generation mismatch before execution, local-command
+  refusal, execute-failure abort, per-authorization trust reload, and
+  broker-status publication only for the exact `(core_id, terminal)` AgentRun;
+  these compile and run on all three OSes.
 * `crates/host/tests/protocol_stream.rs` — the shipped `ukk-host serve` process
   derives the sibling endpoint path, hydrates the seeded database and answers
   `hello`/`session_create`/`subscribe` over a raw client.

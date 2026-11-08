@@ -183,6 +183,15 @@ fn temporary_database() -> (PathBuf, PathBuf) {
     (directory.clone(), directory.join("workspace.sqlite3"))
 }
 
+fn start_remote_server(host: ProtocolHost, scopes: &[Scope]) -> (TestServer, String, String) {
+    let device = new_id();
+    let fingerprint = format!("sha256:{device}");
+    host.register_test_device(&device, &fingerprint, scopes, now_ms() + 60_000)
+        .unwrap();
+    let server = TestServer::start(host, EndpointPlane::RemoteForTests);
+    (server, device, fingerprint)
+}
+
 fn local_hello(client: &mut TestClient) -> ServerHello {
     client.send(&ClientMessage::Hello(ClientHello::local(
         RequestId::new_random(),
@@ -314,21 +323,62 @@ fn hello_negotiates_generation_and_rejects_incompatible_versions() {
 }
 
 #[test]
+fn partial_frames_are_tracked_for_the_idle_deadline() {
+    let (mut reader, mut writer) = UnixStream::pair().unwrap();
+    reader
+        .set_read_timeout(Some(Duration::from_millis(10)))
+        .unwrap();
+    let mut decoder = FrameDecoder::new();
+    // Prefix only: the body never arrives before the poll deadline.
+    writer.write_all(&5u32.to_be_bytes()).unwrap();
+    match decoder.poll(&mut reader, 64) {
+        Ok(FrameRead::Empty) => assert!(
+            decoder.has_partial_frame(),
+            "a half-received frame must be visible to the idle check"
+        ),
+        other => panic!("expected an empty poll, got {other:?}"),
+    }
+    writer.write_all(b"hello").unwrap();
+    match decoder.poll(&mut reader, 64) {
+        Ok(FrameRead::Frame(body)) => assert_eq!(body, b"hello"),
+        other => panic!("expected the completed frame, got {other:?}"),
+    }
+    assert!(!decoder.has_partial_frame());
+}
+
+#[test]
+fn outbound_queue_is_bounded() {
+    let limits = Limits {
+        max_queue_depth: 2,
+        ..Limits::default()
+    };
+    let mut outbound = Outbound::new(&limits);
+    assert!(outbound.push(vec![1]));
+    assert!(outbound.push(vec![2]));
+    assert!(
+        !outbound.push(vec![3]),
+        "a non-draining client must hit the queue bound, not grow Host memory"
+    );
+}
+
+#[test]
 fn subscribe_replays_batches_snapshots_pruned_history_and_streams_live() {
     let (directory, path) = temporary_database();
     let mut store = Store::open(&path).unwrap();
     let space = store.create_space("ukk", "/src/ukk").unwrap();
-    let server = TestServer::start(ProtocolHost::open(store).unwrap(), EndpointPlane::Local);
+    let host = ProtocolHost::open(store).unwrap();
+    let (server, device, fingerprint) =
+        start_remote_server(host, &[Scope::SessionObserve, Scope::SessionManage]);
 
     let mut writer = server.client();
-    local_hello(&mut writer);
+    remote_hello(&mut writer, &device, &fingerprint);
     for _ in 0..3 {
         writer.send(&session_create(&space.id, &new_id(), &new_id()));
         completed_session(expect_result(&mut writer, false));
     }
 
     let mut reader = server.client();
-    local_hello(&mut reader);
+    remote_hello(&mut reader, &device, &fingerprint);
     reader.send(&ClientMessage::Subscribe(SubscribeRequest::new(
         CURRENT_GENERATION,
         ukk_protocol::StreamId::new(WORKSPACE).unwrap(),
@@ -380,10 +430,11 @@ fn command_idempotency_never_executes_twice() {
     let (directory, path) = temporary_database();
     let mut store = Store::open(&path).unwrap();
     let space = store.create_space("ukk", "/src/ukk").unwrap();
-    let server = TestServer::start(ProtocolHost::open(store).unwrap(), EndpointPlane::Local);
+    let host = ProtocolHost::open(store).unwrap();
+    let (server, device, fingerprint) = start_remote_server(host, &[Scope::SessionManage]);
 
     let mut client = server.client();
-    local_hello(&mut client);
+    remote_hello(&mut client, &device, &fingerprint);
     let request_id = new_id();
     let command = session_create(&space.id, &request_id, "idempotent-key-1");
 
@@ -444,6 +495,24 @@ fn handshake_is_required_and_remote_commands_need_their_scope() {
     let error = expect_error(&mut local_claim);
     assert_eq!(error.denial, Some(Denial::PlaneMismatch));
     local_claim.expect_closed();
+
+    // The local plane is read-only in this slice: there is no local capability
+    // field on the merged wire, so a same-user socket must not execute what the
+    // JSON-RPC path gates behind the rotated LocalAuth token.
+    let mut local_command = server.client();
+    local_hello(&mut local_command);
+    local_command.send(&session_create(&space.id, &new_id(), "local-key"));
+    let error = expect_error(&mut local_command);
+    assert!(
+        error
+            .message
+            .contains("local protocol commands are disabled"),
+        "{}",
+        error.message
+    );
+    assert!(error.denial.is_none());
+    assert_eq!(server.host().session_count(), 0);
+    assert_eq!(server.host().idempotency_count(), 0);
 
     drop(server);
 
@@ -540,6 +609,28 @@ fn revocation_and_grant_expiry_terminate_an_open_stream() {
         })
     );
     client.expect_closed();
+    drop(client);
+
+    // A revocation committed outside this adapter (another store writer) must
+    // still stop delivery: each batch re-reads the durable registry.
+    let external = "externally-revoked";
+    server
+        .host()
+        .register_test_device(
+            external,
+            "sha256:externally-revoked",
+            &[Scope::SessionObserve],
+            now_ms() + 60_000,
+        )
+        .unwrap();
+    let mut client = server.client();
+    remote_hello(&mut client, external, "sha256:externally-revoked");
+    subscribe(&mut client, 0, 16);
+    assert_eq!(expect_event(&mut client).cursor.get(), 1);
+    server.host().revoke_device_in_store_only(external).unwrap();
+    let error = expect_error(&mut client);
+    assert_eq!(error.denial, Some(Denial::DeviceRevoked));
+    client.expect_closed();
 
     drop(client);
     drop(server);
@@ -551,6 +642,7 @@ fn oversized_and_malformed_frames_are_rejected() {
     let (directory, path) = temporary_database();
     let mut store = Store::open(&path).unwrap();
     let space = store.create_space("ukk", "/src/ukk").unwrap();
+    seed_session_event(&mut store, &space.id);
     let server = TestServer::start(ProtocolHost::open(store).unwrap(), EndpointPlane::Local);
 
     // A declared length above the envelope bound is refused before the body is
@@ -582,8 +674,10 @@ fn oversized_and_malformed_frames_are_rejected() {
     let error = expect_error(&mut client);
     assert!(error.message.contains("malformed"), "{}", error.message);
 
-    client.send(&session_create(&space.id, &new_id(), "after-malformed"));
-    completed_session(expect_result(&mut client, false));
+    // The connection still serves a valid read request after recoverable
+    // malformed frames.
+    subscribe(&mut client, 0, 16);
+    assert_eq!(expect_event(&mut client).cursor.get(), 1);
 
     drop(client);
     drop(server);
@@ -595,10 +689,12 @@ fn reconnect_resumes_from_the_persisted_cursor() {
     let (directory, path) = temporary_database();
     let mut store = Store::open(&path).unwrap();
     let space = store.create_space("ukk", "/src/ukk").unwrap();
-    let server = TestServer::start(ProtocolHost::open(store).unwrap(), EndpointPlane::Local);
+    let host = ProtocolHost::open(store).unwrap();
+    let (server, device, fingerprint) =
+        start_remote_server(host, &[Scope::SessionObserve, Scope::SessionManage]);
 
     let mut writer = server.client();
-    local_hello(&mut writer);
+    remote_hello(&mut writer, &device, &fingerprint);
     for _ in 0..3 {
         writer.send(&session_create(&space.id, &new_id(), &new_id()));
         completed_session(expect_result(&mut writer, false));
@@ -606,7 +702,7 @@ fn reconnect_resumes_from_the_persisted_cursor() {
 
     {
         let mut first = server.client();
-        local_hello(&mut first);
+        remote_hello(&mut first, &device, &fingerprint);
         subscribe(&mut first, 0, 16);
         for expected in 1..=3 {
             assert_eq!(expect_event(&mut first).cursor.get(), expected);
@@ -619,7 +715,7 @@ fn reconnect_resumes_from_the_persisted_cursor() {
     completed_session(expect_result(&mut writer, false));
 
     let mut resumed = server.client();
-    local_hello(&mut resumed);
+    remote_hello(&mut resumed, &device, &fingerprint);
     subscribe(&mut resumed, 3, 16);
     assert_eq!(expect_event(&mut resumed).cursor.get(), 4);
 
@@ -641,10 +737,12 @@ fn events_and_idempotency_survive_a_host_restart() {
     let mut store = Store::open(&database).unwrap();
     let space = store.create_space("ukk", "/src/ukk").unwrap();
     let space_id = space.id;
-    let mut server = TestServer::start(ProtocolHost::open(store).unwrap(), EndpointPlane::Local);
+    let host = ProtocolHost::open(store).unwrap();
+    let (mut server, device, fingerprint) =
+        start_remote_server(host, &[Scope::SessionObserve, Scope::SessionManage]);
 
     let mut client = server.client();
-    local_hello(&mut client);
+    remote_hello(&mut client, &device, &fingerprint);
     let first_request = new_id();
     client.send(&session_create(&space_id, &first_request, "restart-key-1"));
     completed_session(expect_result(&mut client, false));
@@ -669,9 +767,12 @@ fn events_and_idempotency_survive_a_host_restart() {
     drop(server);
 
     let store = Store::open(&database).unwrap();
-    let server = TestServer::start(ProtocolHost::open(store).unwrap(), EndpointPlane::Local);
+    let host = ProtocolHost::open(store).unwrap();
+    // The device registration itself is durable: no test re-registration is
+    // needed after the restart.
+    let server = TestServer::start(host, EndpointPlane::RemoteForTests);
     let mut client = server.client();
-    let hello = local_hello(&mut client);
+    let hello = remote_hello(&mut client, &device, &fingerprint);
     assert_eq!(hello.streams[0].head.get(), 2);
 
     subscribe(&mut client, 0, 16);

@@ -280,6 +280,7 @@ fn write_message(stream: &mut UnixStream, message: &ServerMessage, limits: &Limi
 
 /// Server-side frame decoder. The declared length is checked before the body is
 /// read or allocated, so an oversized claim cannot consume the budget.
+#[derive(Debug)]
 enum FrameRead {
     Frame(Vec<u8>),
     /// No complete frame yet (read deadline elapsed).

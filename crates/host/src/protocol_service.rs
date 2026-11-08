@@ -29,7 +29,7 @@ use ukk_protocol::{
     authorize_command, AgentRunStatusChanged, AgentStatus, AuthenticatedSession, ClientHello,
     Command, CommandEnvelope, CommandError, CommandResult, CommandResultEnvelope, Denial, DomainId,
     DurableCursor, EnvelopeError, Event, EventEnvelope, EventId, IdError, IdempotencyAdmission,
-    IdempotencyError, LimitError, Limits, ProtocolService, RequestFingerprint, RequestId,
+    IdempotencyError, LimitError, Limits, Plane, ProtocolService, RequestFingerprint, RequestId,
     ServerHello, SessionCreated, SessionError, Snapshot, StreamBounds, StreamId, SubscribeRequest,
     SyncError, TransportBinding,
 };
@@ -248,7 +248,10 @@ impl ProtocolHost {
         hello: &ClientHello,
         now_ms: i64,
     ) -> Result<(AuthenticatedSession, ServerHello), ProtocolHostError> {
-        let inner = self.lock();
+        let mut inner = self.lock();
+        // A handshake must also observe an externally committed revocation or
+        // rotation. Never trust a registry snapshot from Host startup.
+        inner.reload_trust()?;
         let session = inner.service.accept_hello(binding, hello, now_ms)?;
         let hello = inner.service.server_hello(
             &session,
@@ -275,6 +278,7 @@ impl ProtocolHost {
             ));
         }
         let mut inner = self.lock();
+        inner.reload_trust()?;
         inner.service.authorize_subscribe(session, now_ms)?;
         let batch = limited_batch(request.max_batch, &inner.service.limits);
         inner.resume(request.cursor, batch)
@@ -293,6 +297,9 @@ impl ProtocolHost {
         now_ms: i64,
     ) -> Result<Delivery, ProtocolHostError> {
         let mut inner = self.lock();
+        // Re-read the durable registry before every batch: an external
+        // writer's revocation, rotation or grant change must stop delivery.
+        inner.reload_trust()?;
         inner.service.authorize_delivery(session, now_ms)?;
         if cursor >= inner.head {
             return Ok(Delivery::Idle);
@@ -316,7 +323,19 @@ impl ProtocolHost {
             }
             .into());
         }
+        if session.plane == Plane::LocalIpc {
+            // The merged local transport has no capability field. The existing
+            // JSON-RPC mutations require the rotated per-Host LocalAuth token,
+            // so this socket must not expose a same-user mutation path that is
+            // stronger than the RPC path. Local mutations stay on RPC until a
+            // protocol-level local capability is designed.
+            return Err(ProtocolHostError::Unsupported(
+                "local protocol commands are disabled; local mutations use the \
+                 rotated workspace capability on the JSON-RPC endpoint",
+            ));
+        }
         envelope.command.validate(&inner.service.limits)?;
+        inner.reload_trust()?;
         authorize_command(
             session,
             &envelope.command,
@@ -327,11 +346,14 @@ impl ProtocolHost {
         // Reject clearly unexecutable input before admission. An in-flight
         // record must not be left behind for input this Host can never
         // execute; such a record never expires by design.
-        if let Command::SessionCreate(_) = &envelope.command {
+        if let Command::SessionCreate(create) = &envelope.command {
             if uuid::Uuid::parse_str(envelope.request_id.as_str()).is_err() {
                 return Err(
                     EnvelopeError::Invalid("session_create request id must be a UUID").into(),
                 );
+            }
+            if !inner.store.space_exists(create.space_id.as_str())? {
+                return Err(StoreError::NotFound(format!("space {}", create.space_id)).into());
             }
         }
         if let Command::DeviceRevoke(revoke) = &envelope.command {
@@ -362,7 +384,24 @@ impl ProtocolHost {
             now_ms,
         )? {
             IdempotencyAdmission::Execute => {
-                let result = inner.execute(envelope, now_ms)?;
+                let result = match inner.execute(envelope, now_ms) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        // Execution failed before a classification. An
+                        // in-flight record never expires by design, so it must
+                        // be aborted instead of burning capacity forever.
+                        if let Err(abort) = inner
+                            .store
+                            .abort_idempotent_command(&envelope.idempotency_key)
+                        {
+                            eprintln!(
+                                "ukk protocol service could not abort an in-flight command: \
+                                 {abort}"
+                            );
+                        }
+                        return Err(error);
+                    }
+                };
                 inner.store.finish_idempotent_command(
                     &envelope.idempotency_key,
                     result.clone(),
@@ -395,13 +434,15 @@ impl ProtocolHost {
     /// durable cursor and fans the event out to open subscriptions.
     pub(crate) fn publish_broker_status(
         &self,
+        core_id: Option<&str>,
         terminal_address: &str,
         status: AgentStatus,
         now_ms: i64,
     ) -> Result<bool, ProtocolHostError> {
         let mut inner = self.lock();
-        let Some((session_id, agent_run_id)) =
-            inner.store.agent_run_for_terminal(terminal_address)?
+        let Some((session_id, agent_run_id)) = inner
+            .store
+            .agent_run_for_terminal(core_id, terminal_address)?
         else {
             return Ok(false);
         };
@@ -598,6 +639,33 @@ impl ProtocolHost {
         Ok(self.lock().store.create_space(title, "/src/ukk")?.id)
     }
 
+    pub(crate) fn idempotency_count(&self) -> usize {
+        self.lock()
+            .store
+            .idempotency_record_count()
+            .unwrap_or_default()
+    }
+
+    /// Revokes through the store only, without updating the adapter's cached
+    /// registry. Used to prove that authorization reloads durable state on the
+    /// next handshake, command or delivery batch.
+    pub(crate) fn revoke_device_in_store_only(
+        &self,
+        device: &str,
+    ) -> Result<(), ProtocolHostError> {
+        use ukk_protocol::DeviceId;
+
+        let device_id = DeviceId::new(device)?;
+        let mut inner = self.lock();
+        let now = now_ms();
+        let generation = inner
+            .store
+            .device_generation(&device_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("device {device}")))?;
+        inner.store.revoke_device(&device_id, generation, now)?;
+        Ok(())
+    }
+
     pub(crate) fn session_count(&self) -> usize {
         self.lock()
             .store
@@ -690,8 +758,27 @@ mod tests {
         std::fs::remove_dir_all(directory).ok();
     }
 
+    fn remote_session(host: &ProtocolHost, scopes: &[Scope]) -> AuthenticatedSession {
+        let device = new_id();
+        let fingerprint = format!("sha256:{device}");
+        host.register_test_device(&device, &fingerprint, scopes, now_ms() + 60_000)
+            .unwrap();
+        let hello = ClientHello::remote(
+            RequestId::new_random(),
+            vec![CURRENT_GENERATION],
+            DeviceClaim {
+                device_id: DeviceId::new(device).unwrap(),
+                key_fingerprint: KeyFingerprint::new(fingerprint).unwrap(),
+                generation: IdentityGeneration::FIRST,
+            },
+        );
+        host.accept_hello(&TransportBinding::remote(), &hello, now_ms())
+            .unwrap()
+            .0
+    }
+
     #[test]
-    fn local_command_is_admitted_once_and_replayed_from_the_durable_record() {
+    fn remote_command_is_admitted_once_and_replayed_from_the_durable_record() {
         let (directory, path) = temporary_database();
         let store = Store::open(&path).unwrap();
         let host = ProtocolHost::open(store).unwrap();
@@ -701,11 +788,7 @@ mod tests {
             .create_space("ukk", "/src/ukk")
             .unwrap()
             .id;
-
-        let hello = ClientHello::local(RequestId::new_random(), vec![CURRENT_GENERATION]);
-        let (session, _) = host
-            .accept_hello(&TransportBinding::local_ipc(1000), &hello, now_ms())
-            .unwrap();
+        let session = remote_session(&host, &[Scope::SessionManage]);
         let request_id = new_id();
         let envelope = session_create_envelope(&space_id, &request_id, "retry-key-1");
 
@@ -738,6 +821,127 @@ mod tests {
             1,
             "idempotent retry must create exactly one Session"
         );
+        assert_eq!(host.idempotency_count(), 1);
+
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn local_commands_are_refused_without_a_local_capability() {
+        let (directory, path) = temporary_database();
+        let store = Store::open(&path).unwrap();
+        let host = ProtocolHost::open(store).unwrap();
+        let space_id = host
+            .lock()
+            .store
+            .create_space("ukk", "/src/ukk")
+            .unwrap()
+            .id;
+        let hello = ClientHello::local(RequestId::new_random(), vec![CURRENT_GENERATION]);
+        let (session, _) = host
+            .accept_hello(&TransportBinding::local_ipc(1000), &hello, now_ms())
+            .unwrap();
+
+        let envelope = session_create_envelope(&space_id, &new_id(), "local-refused");
+        let error = host.command(&session, &envelope, now_ms()).unwrap_err();
+        assert!(
+            matches!(error, ProtocolHostError::Unsupported(_)),
+            "{error}"
+        );
+        assert_eq!(host.session_count(), 0);
+        assert_eq!(
+            host.idempotency_count(),
+            0,
+            "a refused local command must not occupy an idempotency record"
+        );
+
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn execute_failure_aborts_the_in_flight_record() {
+        let (directory, path) = temporary_database();
+        let mut store = Store::open(&path).unwrap();
+        let space = store.create_space("ukk", "/src/ukk").unwrap();
+        let host = ProtocolHost::open(store).unwrap();
+        let session = remote_session(&host, &[Scope::SessionManage]);
+
+        // The request id already names a Session with a different title, so
+        // execution fails after admission.
+        let colliding_id = new_id();
+        host.lock()
+            .store
+            .create_session_with_id(&space.id, "Existing title", &colliding_id)
+            .unwrap();
+        let colliding = session_create_envelope(&space.id, &colliding_id, "collision-key");
+        let error = host.command(&session, &colliding, now_ms()).unwrap_err();
+        assert!(matches!(error, ProtocolHostError::Store(_)), "{error}");
+        assert_eq!(
+            host.idempotency_count(),
+            0,
+            "an execute failure must abort the in-flight record"
+        );
+
+        // An unknown Space is rejected before admission.
+        let unknown = session_create_envelope(&new_id(), &new_id(), "unknown-space-key");
+        let error = host.command(&session, &unknown, now_ms()).unwrap_err();
+        assert!(
+            matches!(error, ProtocolHostError::Store(StoreError::NotFound(_))),
+            "{error}"
+        );
+        assert_eq!(host.idempotency_count(), 0);
+
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn delivery_and_handshake_reload_external_revocation_from_sqlite() {
+        let (directory, path) = temporary_database();
+        let store = Store::open(&path).unwrap();
+        let host = ProtocolHost::open(store).unwrap();
+        let device = new_id();
+        let fingerprint = format!("sha256:{device}");
+        host.register_test_device(
+            &device,
+            &fingerprint,
+            &[Scope::SessionObserve],
+            now_ms() + 60_000,
+        )
+        .unwrap();
+        let claim = DeviceClaim {
+            device_id: DeviceId::new(device.clone()).unwrap(),
+            key_fingerprint: KeyFingerprint::new(fingerprint.clone()).unwrap(),
+            generation: IdentityGeneration::FIRST,
+        };
+        let hello = ClientHello::remote(
+            RequestId::new_random(),
+            vec![CURRENT_GENERATION],
+            claim.clone(),
+        );
+        let (session, _) = host
+            .accept_hello(&TransportBinding::remote(), &hello, now_ms())
+            .unwrap();
+        assert!(host
+            .deliver(&session, DurableCursor::ZERO, 16, now_ms())
+            .is_ok());
+
+        // Bypass the adapter's cache; the next delivery must re-read SQLite.
+        host.revoke_device_in_store_only(&device).unwrap();
+        let error = host
+            .deliver(&session, DurableCursor::ZERO, 16, now_ms())
+            .unwrap_err();
+        assert_eq!(error.denial(), Some(&Denial::DeviceRevoked));
+
+        // A new handshake must fail too.
+        let hello = ClientHello::remote(RequestId::new_random(), vec![CURRENT_GENERATION], claim);
+        let error = host
+            .accept_hello(&TransportBinding::remote(), &hello, now_ms())
+            .unwrap_err();
+        assert_eq!(
+            error.denial(),
+            Some(&Denial::DeviceRevoked),
+            "handshake must reload the durable registry"
+        );
 
         std::fs::remove_dir_all(directory).ok();
     }
@@ -755,13 +959,36 @@ mod tests {
 
         assert!(
             !host
-                .publish_broker_status("unbound-terminal", AgentStatus::Running, now_ms())
+                .publish_broker_status(
+                    Some("core-1"),
+                    "unbound-terminal",
+                    AgentStatus::Running,
+                    now_ms()
+                )
                 .unwrap(),
             "an unbound terminal must not gain an Agent identity"
         );
+        // Two cores sharing one terminal address must never be guessed at when
+        // the reporting core is unknown.
+        host.lock()
+            .store
+            .bind_agent(&session.id, "core-2", "t3", "claude", None)
+            .unwrap();
+        assert!(
+            !host
+                .publish_broker_status(None, "t3", AgentStatus::Running, now_ms())
+                .unwrap(),
+            "an ambiguous terminal binding must not be attributed"
+        );
         assert!(host
-            .publish_broker_status("t3", AgentStatus::Running, now_ms())
+            .publish_broker_status(Some("core-1"), "t3", AgentStatus::Running, now_ms())
             .unwrap());
+        assert!(
+            !host
+                .publish_broker_status(Some("core-3"), "t3", AgentStatus::Running, now_ms())
+                .unwrap(),
+            "a different core must not claim another core's terminal"
+        );
 
         let hello = ClientHello::local(RequestId::new_random(), vec![CURRENT_GENERATION]);
         let (auth, _) = host

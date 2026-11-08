@@ -399,9 +399,9 @@ Use macOS Keychain / iOS Keychain. Host identity and pairing material must never
 | Version negotiation mismatch and envelope generation mismatch | `tests/wire.rs` |
 | Reserved `hc_seq`/`host_epoch` rejection; unknown fields | `tests/wire.rs` |
 | Durable event log, trust grants and idempotency records survive reopen; rotation/revocation CAS invalidation; concurrent begin | `crates/store/src/s1_tests.rs` |
-| Local Unix protocol endpoint: same-user acceptance, handshake-before-command, bounded length-prefixed frames, oversized/malformed rejection | `crates/host/src/protocol_endpoint/tests.rs` |
-| Endpoint enforcement: typed pre-handshake refusal, local device-claim rejection, remote `missing_scope`, mid-stream revocation and grant expiry closing delivery | `crates/host/src/protocol_endpoint/tests.rs` |
-| Adapter enforcement: SQLite trust hydration, durable idempotency across retries/restart, generation mismatch before execution | `crates/host/src/protocol_service.rs` unit tests |
+| Local Unix protocol endpoint: same-user acceptance, handshake-before-command, bounded length-prefixed frames, oversized/malformed rejection, partial-frame tracking and bounded outbound queue | `crates/host/src/protocol_endpoint/tests.rs` |
+| Endpoint enforcement: typed pre-handshake refusal, local device-claim rejection, local `command` refusal without a local capability, remote `missing_scope`, mid-stream revocation, external-store revocation and grant expiry closing delivery | `crates/host/src/protocol_endpoint/tests.rs` |
+| Adapter enforcement: SQLite trust hydration and reload per handshake/command/delivery, durable idempotency across retries/restart, execute-failure abort, pre-admission Space validation, generation mismatch before execution | `crates/host/src/protocol_service.rs` unit tests |
 | Shipped `serve` exposes the sibling protocol socket and serves the seeded database end to end | `crates/host/tests/protocol_stream.rs` |
 | herdr-core structured status becomes a durable event only for bound AgentRuns; `blocked` never becomes an inferred approval | `crates/host/tests/protocol_bridge.rs`, `crates/host/src/protocol_bridge.rs` unit tests |
 
@@ -415,7 +415,12 @@ working:
   registry inputs that S2 pairing must produce and authenticate.
 * **Host transport integration (local only).** `ukk-host serve` starts a
   same-user Unix Domain Socket at `~/.ukk/run/agent-host.protocol` using
-  length-prefixed protocol frames (see PROTOCOL.md). There is no TCP/WAN
+  length-prefixed protocol frames (see PROTOCOL.md). The local plane is
+  **read-only**: `command` frames are refused because the merged wire has no
+  local capability field and the JSON-RPC mutations require the rotated
+  per-Host capability. Command execution and durable idempotency remain
+  implemented and tested on the test-only remote plane; they become reachable
+  in production only after S2 authenticates a device. There is no TCP/WAN
   listener, no Windows Named Pipe protocol stream (**NOT VERIFIED**), and no
   relay connection from this adapter. Tests use a real socket plus a raw
   client, not a mock transport.
@@ -423,9 +428,10 @@ working:
   trust/grants and idempotency records with reopen, CAS and migration tests.
   The local endpoint hydrates all three from SQLite and survives a Host restart
   in tests. Relay/WAN delivery, OS key storage and real-device persistence
-  remain separate. An idempotency record left `in_flight` by a crash between
-  admission and completion is intentionally not expired; it needs explicit
-  reconciliation and blocks blind retries.
+  remain separate. An execution failure aborts its in-flight record before
+  returning the error; only a crash between admission and completion can leave
+  an `in_flight` record, which is intentionally not expired and needs explicit
+  reconciliation rather than blind retries.
 * **Controller lease issuance UI.** Leases are API-typed and expiry-tested, but
   no local consent surface exists yet (M1).
 * **Rate limiting and fuzzing.** Size/queue bounds exist; per-connection rate

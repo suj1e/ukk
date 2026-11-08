@@ -172,22 +172,58 @@ impl Store {
         Ok(run)
     }
 
-    /// Looks up the AgentRun bound to a herdr-core terminal address.
+    /// Looks up the AgentRun bound to a herdr-core `(core_id, terminal)`.
     ///
     /// Returns `(session_id, agent_run_id)`. An unbound terminal has no
-    /// durable Agent identity and must not gain one implicitly.
+    /// durable Agent identity and must not gain one implicitly. When the
+    /// caller does not know the reporting core, only an unambiguous single
+    /// binding is returned; two cores sharing a terminal address must not be
+    /// attributed to the wrong AgentRun.
     pub fn agent_run_for_terminal(
         &self,
+        core_id: Option<&str>,
         terminal_address: &str,
     ) -> Result<Option<(String, String)>> {
+        if let Some(core_id) = core_id {
+            return Ok(self
+                .conn
+                .query_row(
+                    "SELECT session_id,id FROM agent_runs
+                     WHERE core_id=?1 AND terminal_address=?2",
+                    params![core_id, terminal_address],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT session_id,id FROM agent_runs WHERE terminal_address=?1 LIMIT 2")?;
+        let rows = stmt.query_map(params![terminal_address], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut matches = Vec::new();
+        for row in rows {
+            matches.push(row?);
+        }
+        Ok(if matches.len() == 1 {
+            matches.into_iter().next()
+        } else {
+            None
+        })
+    }
+
+    /// True when a Space exists. Used to reject an unexecutable command before
+    /// idempotency admission.
+    pub fn space_exists(&self, space_id: &str) -> Result<bool> {
         Ok(self
             .conn
             .query_row(
-                "SELECT session_id,id FROM agent_runs WHERE terminal_address=?1",
-                params![terminal_address],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                "SELECT 1 FROM spaces WHERE id=?1",
+                params![space_id],
+                |_| Ok(()),
             )
-            .optional()?)
+            .optional()?
+            .is_some())
     }
 
     pub fn archive_session(&mut self, session_id: &str) -> Result<()> {

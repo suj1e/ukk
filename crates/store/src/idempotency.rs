@@ -160,6 +160,24 @@ impl Store {
         })
     }
 
+    /// Aborts an in-flight record whose execution produced no classification.
+    ///
+    /// This is only for a command that failed before a side effect was
+    /// classified. Completed records are never removed. A retry after abort
+    /// may execute again; command execution is domain-idempotent (for example
+    /// `create_session_with_id`), so re-execution cannot duplicate a Session.
+    /// Returns `true` when an in-flight row was deleted.
+    pub fn abort_idempotent_command(&mut self, key: &IdempotencyKey) -> Result<bool> {
+        let raw = key.as_str().to_owned();
+        with_immediate(&mut self.conn, |tx| {
+            let changed = tx.execute(
+                "DELETE FROM idempotency_records WHERE key=?1 AND state=?2",
+                params![raw, IN_FLIGHT],
+            )?;
+            Ok(changed > 0)
+        })
+    }
+
     /// Records the final classification for an in-flight command. A second
     /// completion, an unknown key or an oversized detail is refused.
     pub fn finish_idempotent_command(
