@@ -69,7 +69,7 @@ impl Broker {
 
     /// Applies a real hc notification. If this returns an error, caller must
     /// end the subscription and obtain a fresh snapshot on a new connection.
-    fn apply(&self, message: &Value) -> Result<(), String> {
+    pub(crate) fn apply(&self, message: &Value) -> Result<(), String> {
         let mut guard = self.inner.lock().map_err(|_| "broker lock poisoned")?;
         let changed = match message.get("kind").and_then(Value::as_str) {
             Some("snapshot") => {
@@ -292,6 +292,10 @@ fn apply_terminal_delta(
                         data,
                         &["reason", "exit_code", "signal", "finished_ms"],
                     )?;
+                    // A lost terminal is not live. Keep the non-live
+                    // observation explicit instead of leaving a stale "live"
+                    // state that a later metadata write could trust.
+                    record.insert("state".into(), json!("lost"));
                     record.insert("pid".into(), Value::Null);
                     record.insert("foreground".into(), Value::Null);
                 }
@@ -477,5 +481,31 @@ mod tests {
             .apply(&event(3, "unsupported", "t3", json!({})))
             .is_err());
         assert_eq!(broker.snapshot()["revision"], 1);
+    }
+
+    #[test]
+    fn lost_terminal_is_no_longer_live() {
+        let broker = Broker::new();
+        broker.apply(&snapshot(5)).unwrap();
+        broker
+            .apply(&event(6, "lost", "t3", json!({"reason":"disconnected"})))
+            .unwrap();
+        let state = broker.snapshot();
+        assert_eq!(state["terminals"][0]["state"], "lost");
+        assert!(state["terminals"][0]["pid"].is_null());
+    }
+
+    #[test]
+    fn snapshot_exposes_the_live_core_identity() {
+        let broker = Broker::new();
+        assert!(broker.snapshot()["core_id"].is_null());
+        broker
+            .apply(&json!({"kind":"snapshot","data":{
+                "seq":1,
+                "core":{"id":"core-1","name":"hc"},
+                "terminals":[{"address":"t7","state":"live","cwd":"/repo","argv":["codex"]}]
+            }}))
+            .unwrap();
+        assert_eq!(broker.snapshot()["core_id"], "core-1");
     }
 }

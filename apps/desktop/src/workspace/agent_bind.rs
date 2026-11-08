@@ -22,7 +22,7 @@ pub(super) enum BindAvailability {
     Ready,
     HostOffline,
     CoreUnknown,
-    TerminalFinished,
+    TerminalNotLive,
     AlreadyBound,
     NoSessions,
 }
@@ -40,7 +40,7 @@ pub(super) fn bind_availability(
     } else if core_id.is_none_or(str::is_empty) {
         BindAvailability::CoreUnknown
     } else if terminal_lifecycle != "live" {
-        BindAvailability::TerminalFinished
+        BindAvailability::TerminalNotLive
     } else if already_bound {
         BindAvailability::AlreadyBound
     } else if !has_sessions {
@@ -197,7 +197,9 @@ pub(super) fn bind_error_text(error: &HostError) -> String {
         Some(-32031) => format!("Conflict: {message}. The terminal or request is already bound."),
         Some(-32045) => format!("Core mismatch: {message}"),
         Some(-32034) => format!("Terminal not verified: {message}"),
+        Some(-32035) => format!("Unknown Session or parent: {message}"),
         Some(-32061) => format!("Ambiguous terminal: {message}"),
+        Some(-32062) => format!("Terminal not live: {message}"),
         Some(-32040) => format!("Cannot verify the live terminal: {message}"),
         _ => message.to_owned(),
     }
@@ -376,6 +378,66 @@ impl Workspace {
             );
         }
 
+        if self.agent_bind.is_open() {
+            // A Host error belongs to the open form, not only to the terminal
+            // that happened to be selected when the request failed.
+            if let Some(error) = self.agent_bind.error.clone() {
+                card = card.child(
+                    div()
+                        .id("agent-bind-error")
+                        .role(Role::Alert)
+                        .aria_label(format!("Terminal binding failed: {error}"))
+                        .text_xs()
+                        .text_color(rgb(0xa14b32))
+                        .child(error),
+                );
+            }
+            let matches_current = self
+                .core_id
+                .as_deref()
+                .is_some_and(|core_id| self.agent_bind.is_open_for(core_id, &term.address));
+            if !matches_current {
+                let pending = self.agent_bind.target.as_ref().map(|target| {
+                    format!(
+                        "Pending confirmation for {} on {}.",
+                        target.terminal_address, target.core_id
+                    )
+                });
+                if let Some(pending) = pending {
+                    card = card
+                        .child(
+                            div()
+                                .id("agent-bind-pending-other")
+                                .role(Role::Status)
+                                .aria_label(pending.clone())
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(pending),
+                        )
+                        .child(
+                            div()
+                                .id("agent-bind-discard")
+                                .role(Role::Button)
+                                .aria_label("Discard the pending terminal binding")
+                                .focusable()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(LINE))
+                                .bg(rgb(WHITE))
+                                .text_xs()
+                                .text_color(rgb(INK))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.cancel_agent_bind(cx);
+                                }))
+                                .child("Discard pending confirmation"),
+                        );
+                }
+            }
+        }
+
         if let Some(run) = existing {
             let title = self.bind_session_title(&run.session_id);
             card = card
@@ -405,8 +467,8 @@ impl Workspace {
             BindAvailability::CoreUnknown => {
                 Some("herdr-core identity is not available yet; refresh after it connects.")
             }
-            BindAvailability::TerminalFinished => {
-                Some("This terminal is finished; only a live terminal can be bound.")
+            BindAvailability::TerminalNotLive => {
+                Some("This terminal is not live; only a live terminal can be bound.")
             }
             BindAvailability::AlreadyBound => {
                 Some("This terminal is already bound to an AgentRun.")
@@ -636,17 +698,6 @@ impl Workspace {
                 ),
         );
 
-        if let Some(error) = editor.error.clone() {
-            form = form.child(
-                div()
-                    .id("agent-bind-error")
-                    .role(Role::Alert)
-                    .aria_label(format!("Terminal binding failed: {error}"))
-                    .text_xs()
-                    .text_color(rgb(0xa14b32))
-                    .child(error),
-            );
-        }
         form.into_any_element()
     }
 }
@@ -671,7 +722,7 @@ mod tests {
         );
         assert_eq!(
             bind_availability(true, Some("core"), "finished", false, true),
-            BindAvailability::TerminalFinished
+            BindAvailability::TerminalNotLive
         );
         assert_eq!(
             bind_availability(true, Some("core"), "live", true, true),
@@ -782,7 +833,9 @@ mod tests {
         assert!(bind_error_text(&remote(-32031, "already bound")).contains("Conflict"));
         assert!(bind_error_text(&remote(-32045, "core")).contains("Core mismatch"));
         assert!(bind_error_text(&remote(-32034, "missing")).contains("not verified"));
+        assert!(bind_error_text(&remote(-32035, "session x")).contains("Unknown Session or parent"));
         assert!(bind_error_text(&remote(-32061, "two")).contains("Ambiguous"));
+        assert!(bind_error_text(&remote(-32062, "finished")).contains("not live"));
         assert!(bind_error_text(&remote(-32040, "offline")).contains("Cannot verify"));
         assert_eq!(bind_error_text(&remote(-32602, "bad")), "bad");
     }

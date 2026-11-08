@@ -225,6 +225,8 @@ impl Terminal {
     pub fn state_label(&self) -> &str {
         if self.lifecycle == "finished" {
             "Finished"
+        } else if self.lifecycle == "lost" {
+            "Lost"
         } else {
             match self.reported_status.as_deref() {
                 Some("working") => "Working",
@@ -1405,6 +1407,22 @@ mod tests {
         ] {
             assert!(!is_allowed_local_workspace_mutation(method), "{method}");
         }
+    }
+
+    #[test]
+    fn live_host_state_carries_the_read_only_core_identity() {
+        let live = LiveHostState::from_result(&serde_json::json!({
+            "host_epoch":"host-a","revision":3,"connected":true,
+            "core_id":"core-1","message":null,"terminals":[]
+        }))
+        .unwrap();
+        assert_eq!(live.core_id.as_deref(), Some("core-1"));
+        let unknown = LiveHostState::from_result(&serde_json::json!({
+            "host_epoch":"host-a","revision":3,"connected":false,
+            "message":"offline","terminals":[]
+        }))
+        .unwrap();
+        assert_eq!(unknown.core_id, None);
     }
 
     #[test]

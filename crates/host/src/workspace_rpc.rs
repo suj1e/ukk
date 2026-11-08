@@ -16,14 +16,24 @@ use ukk_store::{Store, StoreError};
 /// address apart without parsing English.
 const BIND_CORE_MISMATCH: i32 = -32045;
 const BIND_UNKNOWN_TERMINAL: i32 = -32034;
+/// The referenced Session or parent AgentRun does not exist. Distinct from
+/// [`BIND_UNKNOWN_TERMINAL`] so the Desktop does not mislabel it.
+const BIND_UNKNOWN_REFERENCE: i32 = -32035;
 const BIND_AMBIGUOUS_TERMINAL: i32 = -32061;
+const BIND_TERMINAL_NOT_LIVE: i32 = -32062;
 const BIND_SNAPSHOT_UNAVAILABLE: i32 = -32040;
 const BIND_CONFLICT: i32 = -32031;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LiveTerminal {
+    pub(crate) address: String,
+    pub(crate) state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LiveTerminalSnapshot {
     pub(crate) core_id: String,
-    pub(crate) addresses: Vec<String>,
+    pub(crate) terminals: Vec<LiveTerminal>,
 }
 
 /// Injectable live-terminal lookup. Production reads the Host's herdr-core
@@ -42,15 +52,19 @@ impl TerminalSnapshotSource for BrokerSnapshotSource<'_> {
             .and_then(Value::as_str)
             .ok_or_else(|| "herdr-core identity is not available".to_owned())?
             .to_owned();
-        let addresses = value
+        let terminals = value
             .get("terminals")
             .and_then(Value::as_array)
             .ok_or_else(|| "live terminal snapshot is not available".to_owned())?
             .iter()
-            .filter_map(|terminal| terminal.get("address").and_then(Value::as_str))
-            .map(str::to_owned)
+            .filter_map(|terminal| {
+                Some(LiveTerminal {
+                    address: terminal.get("address")?.as_str()?.to_owned(),
+                    state: terminal.get("state")?.as_str()?.to_owned(),
+                })
+            })
             .collect();
-        Ok(LiveTerminalSnapshot { core_id, addresses })
+        Ok(LiveTerminalSnapshot { core_id, terminals })
     }
 }
 
@@ -113,8 +127,10 @@ fn revision_arg(params: &Value) -> Result<i64, RpcError> {
         .ok_or_else(|| RpcError::invalid("expected_revision"))
 }
 
-/// Mirror the typed runtime binding grammar so a host id or terminal address
-/// cannot smuggle control characters into durable metadata.
+/// Mirror the typed runtime binding grammar. Core ids use the runtime
+/// grammar, terminal addresses must parse as an `hc` terminal address, and the
+/// adapter is bounded printable text; no field can smuggle control
+/// characters into durable metadata.
 fn validate_bind_fields(
     core_id: &str,
     terminal_address: &str,
@@ -128,7 +144,7 @@ fn validate_bind_fields(
     {
         return Err(RpcError::invalid("core_id"));
     }
-    if terminal_address.is_empty() || terminal_address.chars().count() > 200 {
+    if ukk_hc_client::TerminalAddress::parse(terminal_address).is_err() {
         return Err(RpcError::invalid("terminal_address"));
     }
     if adapter.is_empty() || adapter.chars().count() > 200 || adapter.chars().any(char::is_control)
@@ -156,26 +172,36 @@ fn verify_live_terminal(
             ),
         });
     }
-    let matches = snapshot
-        .addresses
+    let mut matches = snapshot
+        .terminals
         .iter()
-        .filter(|address| address.as_str() == terminal_address)
-        .count();
-    match matches {
-        0 => Err(RpcError {
+        .filter(|terminal| terminal.address == terminal_address);
+    let Some(terminal) = matches.next() else {
+        return Err(RpcError {
             code: BIND_UNKNOWN_TERMINAL,
             message: format!(
                 "terminal {terminal_address} is not present in the live herdr-core snapshot"
             ),
-        }),
-        1 => Ok(()),
-        _ => Err(RpcError {
+        });
+    };
+    if matches.next().is_some() {
+        return Err(RpcError {
             code: BIND_AMBIGUOUS_TERMINAL,
             message: format!(
                 "terminal address {terminal_address} is ambiguous in the live herdr-core snapshot"
             ),
-        }),
+        });
     }
+    if terminal.state != "live" {
+        return Err(RpcError {
+            code: BIND_TERMINAL_NOT_LIVE,
+            message: format!(
+                "terminal {terminal_address} is {} in the live herdr-core snapshot, not live",
+                terminal.state
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn bind_store_error(error: StoreError) -> RpcError {
@@ -183,6 +209,10 @@ fn bind_store_error(error: StoreError) -> RpcError {
         StoreError::Conflict => RpcError {
             code: BIND_CONFLICT,
             message: "request_id was already used with different AgentRun binding details".into(),
+        },
+        StoreError::NotFound(detail) => RpcError {
+            code: BIND_UNKNOWN_REFERENCE,
+            message: format!("AgentRun binding references an unknown {detail}"),
         },
         other => other.into(),
     }
@@ -752,7 +782,10 @@ mod tests {
             (
                 Ok(LiveTerminalSnapshot {
                     core_id: "core-2".into(),
-                    addresses: vec!["t7".into()],
+                    terminals: vec![LiveTerminal {
+                        address: "t7".into(),
+                        state: "live".into(),
+                    }],
                 }),
                 BIND_CORE_MISMATCH,
                 "belongs to core core-2",
@@ -760,7 +793,10 @@ mod tests {
             (
                 Ok(LiveTerminalSnapshot {
                     core_id: "core-1".into(),
-                    addresses: vec!["t8".into()],
+                    terminals: vec![LiveTerminal {
+                        address: "t8".into(),
+                        state: "live".into(),
+                    }],
                 }),
                 BIND_UNKNOWN_TERMINAL,
                 "not present",
@@ -768,10 +804,41 @@ mod tests {
             (
                 Ok(LiveTerminalSnapshot {
                     core_id: "core-1".into(),
-                    addresses: vec!["t7".into(), "t7".into()],
+                    terminals: vec![
+                        LiveTerminal {
+                            address: "t7".into(),
+                            state: "live".into(),
+                        },
+                        LiveTerminal {
+                            address: "t7".into(),
+                            state: "live".into(),
+                        },
+                    ],
                 }),
                 BIND_AMBIGUOUS_TERMINAL,
                 "ambiguous",
+            ),
+            (
+                Ok(LiveTerminalSnapshot {
+                    core_id: "core-1".into(),
+                    terminals: vec![LiveTerminal {
+                        address: "t7".into(),
+                        state: "finished".into(),
+                    }],
+                }),
+                BIND_TERMINAL_NOT_LIVE,
+                "finished",
+            ),
+            (
+                Ok(LiveTerminalSnapshot {
+                    core_id: "core-1".into(),
+                    terminals: vec![LiveTerminal {
+                        address: "t7".into(),
+                        state: "lost".into(),
+                    }],
+                }),
+                BIND_TERMINAL_NOT_LIVE,
+                "lost",
             ),
         ] {
             let mut source = FixedSnapshot(snapshot);
@@ -787,11 +854,26 @@ mod tests {
         // never auto-assigned to a Session.
         let mut source = FixedSnapshot(Ok(LiveTerminalSnapshot {
             core_id: "core-1".into(),
-            addresses: vec!["t7".into()],
+            terminals: vec![LiveTerminal {
+                address: "t7".into(),
+                state: "live".into(),
+            }],
         }));
         let mut missing = bind_params(&request_id, &session.id, "core-1", "t7");
         missing.as_object_mut().unwrap().remove("terminal_address");
         let error = dispatch_with_source(&mut store, &mut source, "workspace.agent.bind", &missing)
+            .unwrap_err();
+        assert_eq!(error.code, -32602);
+        assert!(store.snapshot().unwrap().agent_runs.is_empty());
+
+        // A terminal address outside the hc grammar is refused before the
+        // snapshot is trusted.
+        let mut invalid = bind_params(&request_id, &session.id, "core-1", "t7\u{7}");
+        let error = dispatch_with_source(&mut store, &mut source, "workspace.agent.bind", &invalid)
+            .unwrap_err();
+        assert_eq!(error.code, -32602);
+        invalid["terminal_address"] = json!("t7/../x");
+        let error = dispatch_with_source(&mut store, &mut source, "workspace.agent.bind", &invalid)
             .unwrap_err();
         assert_eq!(error.code, -32602);
         assert!(store.snapshot().unwrap().agent_runs.is_empty());
@@ -806,7 +888,10 @@ mod tests {
         let params = bind_params(&request_id, &session.id, "core-1", "t7");
         let mut source = FixedSnapshot(Ok(LiveTerminalSnapshot {
             core_id: "core-1".into(),
-            addresses: vec!["t7".into()],
+            terminals: vec![LiveTerminal {
+                address: "t7".into(),
+                state: "live".into(),
+            }],
         }));
         let first =
             dispatch_with_source(&mut store, &mut source, "workspace.agent.bind", &params).unwrap();
@@ -839,7 +924,16 @@ mod tests {
         different_request["terminal_address"] = json!("t8");
         let mut live = FixedSnapshot(Ok(LiveTerminalSnapshot {
             core_id: "core-1".into(),
-            addresses: vec!["t7".into(), "t8".into()],
+            terminals: vec![
+                LiveTerminal {
+                    address: "t7".into(),
+                    state: "live".into(),
+                },
+                LiveTerminal {
+                    address: "t8".into(),
+                    state: "live".into(),
+                },
+            ],
         }));
         let second = dispatch_with_source(
             &mut store,
@@ -868,12 +962,16 @@ mod tests {
         let params = bind_params(&new_id(), &new_id(), "core-1", "t7");
         let mut source = FixedSnapshot(Ok(LiveTerminalSnapshot {
             core_id: "core-1".into(),
-            addresses: vec!["t7".into()],
+            terminals: vec![LiveTerminal {
+                address: "t7".into(),
+                state: "live".into(),
+            }],
         }));
         let missing =
             dispatch_with_source(&mut store, &mut source, "workspace.agent.bind", &params)
                 .unwrap_err();
-        assert_eq!(missing.code, -32034);
+        assert_eq!(missing.code, BIND_UNKNOWN_REFERENCE);
+        assert!(missing.message.contains("unknown session"), "{missing:?}");
 
         let mut with_parent = bind_params(&new_id(), &other.id, "core-1", "t7");
         with_parent["parent_run_id"] = json!(new_id());
@@ -884,7 +982,11 @@ mod tests {
             &with_parent,
         )
         .unwrap_err();
-        assert_eq!(parent.code, -32034);
+        assert_eq!(parent.code, BIND_UNKNOWN_REFERENCE);
+        assert!(
+            parent.message.contains("unknown parent AgentRun"),
+            "{parent:?}"
+        );
 
         let parent_run = dispatch_with_source(
             &mut store,
@@ -897,7 +999,16 @@ mod tests {
         cross_session["parent_run_id"] = parent_run["id"].clone();
         let mut two = FixedSnapshot(Ok(LiveTerminalSnapshot {
             core_id: "core-1".into(),
-            addresses: vec!["t7".into(), "t8".into()],
+            terminals: vec![
+                LiveTerminal {
+                    address: "t7".into(),
+                    state: "live".into(),
+                },
+                LiveTerminal {
+                    address: "t8".into(),
+                    state: "live".into(),
+                },
+            ],
         }));
         let cross =
             dispatch_with_source(&mut store, &mut two, "workspace.agent.bind", &cross_session)

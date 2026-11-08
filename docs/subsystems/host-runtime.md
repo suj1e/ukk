@@ -42,7 +42,7 @@ The release archive used for CI acceptance is pinned by
 |---|---|---|---|
 | `hello` | `{framed:true, generation:1}` | `Hello {generation, version, core, framed, methods, features}` | Capability document for every connection. |
 | `terminal.list` | `all`, `labels` | `ListResult {terminals, hidden_finished, machines}` | Read-only. |
-| `terminal.get` | `terminal` | `Terminal` | Used for binding verification and idempotent launch. |
+| `terminal.get` | `terminal` | `Terminal` | Typed runtime action lookup and idempotent launch. AgentRun binding verification uses the `events.subscribe` broker snapshot instead. |
 | `terminal.run` | `RunRequest` | `RunResult` | Launch/run; name is unique among live terminals. |
 | `terminal.attach` | `AttachRequest` | `AttachResult` + `Attachment` | Framed connection required. |
 | `terminal.send` | `SendRequest` | `SendResult` | Paste + Enter after the quiet period. |
@@ -80,8 +80,10 @@ Before any write the Host verifies the binding against its live
 | `core_id` differs from the live core | `-32045`; nothing written |
 | Terminal address absent from the snapshot | `-32034`; nothing written |
 | Address present more than once | `-32061`; nothing written |
-| A missing terminal address | `-32602`; the Host never picks a terminal |
-| Address lives, core matches, exactly once | Store binding is written |
+| A missing or non-`hc` terminal address | `-32602`; the Host never picks a terminal |
+| Address lives, core matches, exactly once, state `live` | Store binding is written |
+| Snapshot record state is `finished` or `lost` | `-32062`; nothing written |
+| Unknown Session or parent AgentRun | `-32035`; nothing written |
 
 `host.snapshot` reports the live `core_id` (read-only) so the Desktop can show
 the exact identity it is about to bind; an absent value disables binding
