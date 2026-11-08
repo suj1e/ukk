@@ -31,6 +31,7 @@ impl Workspace {
             self.selected = None; // A Space/Session should be the initial focus.
         }
         self.snapshot = live.snapshot;
+        self.terminal_feeds.retain_known_addresses(&self.snapshot);
     }
 
     /// A long-poll task stays alive only as long as this GPUI entity exists.
@@ -192,6 +193,7 @@ impl Workspace {
             self.local_focus.set_selected_session(Some(&session_id));
         }
         self.domain = domain;
+        self.terminal_feeds.retain_layouts(&self.domain.layouts);
         self.workspace_snapshot_loaded = true;
 
         if let (Some(session_id), Some(previous_pane), Some(previous_order)) =

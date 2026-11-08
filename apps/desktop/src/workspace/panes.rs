@@ -114,7 +114,10 @@ impl Workspace {
                         match binding {
                             Some(run) => (
                                 "Terminal".into(),
-                                format!("{} · PTY attachment is upcoming.", run.terminal_address),
+                                format!(
+                                    "{} · read-only observer; attach is explicit.",
+                                    run.terminal_address
+                                ),
                             ),
                             None => ("Unresolved Terminal".into(), "Binding not found.".into()),
                         }
@@ -129,7 +132,7 @@ impl Workspace {
                                 self.unsupported_agent_pane(agent_run_id, id, cx)
                             }
                             PaneContent::Terminal { agent_run_id } => {
-                                self.unsupported_terminal_pane(agent_run_id, id, cx)
+                                self.terminal_pane(agent_run_id, id, cx)
                             }
                             // Unreachable today; reported instead of panicking.
                             _ => div()

@@ -91,7 +91,7 @@ impl Workspace {
             );
 
         if let Some(term) = selected {
-            body = body.child(self.terminal_detail(&term));
+            body = body.child(self.terminal_detail(&term, cx));
         } else {
             body = body.child(
                 div()
@@ -114,7 +114,11 @@ impl Workspace {
         body.into_any_element()
     }
 
-    pub(super) fn terminal_detail(&self, term: &Terminal) -> impl IntoElement {
+    pub(super) fn terminal_detail(
+        &self,
+        term: &Terminal,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let title = term.display_name().to_owned();
         let state = if self.online {
             term.state_label().to_owned()
@@ -180,7 +184,7 @@ impl Workspace {
                             .child(if self.tab == DetailTab::Overview {
                                 "Terminal and provider information comes directly from the Host snapshot."
                             } else {
-                                "Runtime identity and process metadata. Structured turns and approvals are not wired yet."
+                                "Runtime identity and process metadata. The terminal can be observed read-only; structured turns and approvals are not wired yet."
                             }),
                     ),
             )
@@ -201,6 +205,7 @@ impl Workspace {
                     .child(Self::meta_row("Parent terminal", parent))
                     .child(Self::meta_row("Reported Agent", app)),
             )
+            .child(self.terminal_detail_attachment(term, cx))
             .child(
                 div()
                     .p_4()
@@ -208,7 +213,7 @@ impl Workspace {
                     .bg(rgb(0xeef0f8))
                     .text_color(rgb(0x666b85))
                     .text_sm()
-                    .child("Agent conversation and live terminal attach are not connected yet (R1/R2). Files, Diff and Activity inspect the local working tree; this prototype deliberately does not fabricate runtime data."),
+                    .child("Agent conversation is not connected yet (R2). The terminal section above is a separate read-only observer: it never sends input and never stops or signals the herdr-core process. Files, Diff and Activity inspect the local working tree."),
             )
     }
 

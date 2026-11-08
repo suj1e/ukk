@@ -92,7 +92,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** render real per-Agent conversation/events and framed terminal attachment; read-only Git status, files, diff/hunks and activity; session navigation, source/error/loading indicators, copyable diagnostics and safe no-data state. Do not synthesize fake chats. Add reviewed write operations only behind specific capabilities. Preserve independent Pane/Tab membership and Agent lifetimes.
 - **Exit:** start two Agents, switch content views, inspect real changed files, close/reopen UI and retain ongoing runtime; proof via native window and tests on all three platforms.
 - **Dependency:** R1/R2 structured data; read-only file/diff views can start against explicit fixtures now.
-- **Status (2026-11-08):** read-only slice merged as `83b5b76` (PR #24): bounded worktree service + Files/Diff/Activity panes, review-fixed pathspec/truncation/HEAD defects, three-OS CI. Live Agent conversation, structured turns and terminal attach/input remain blocked on R1/R2; real GUI interaction is **NOT VERIFIED**.
+- **Status (2026-11-08):** read-only slice merged as `83b5b76` (PR #24): bounded worktree service + Files/Diff/Activity panes, review-fixed pathspec/truncation/HEAD defects, three-OS CI. A follow-up slice adds explicit observe-only terminal attachment from the AgentRun binding or a selected Host terminal, with a 256 KiB sanitized ring and no input/stop/kill path; macOS real `hc 0.1.18` attach is verified, while Windows/Linux real attach, terminal input/full emulation and Agent conversation remain open. Real GUI interaction is **NOT VERIFIED**.
 
 ## Wave C — Extensibility and secure cross-device foundations (P1, independent contracts)
 
