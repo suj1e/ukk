@@ -278,7 +278,9 @@ def main(argv: list[str]) -> int:
 
     archive_hash = sha256_file(archive)
     checksum = archive.with_name(f"{archive.name}.sha256")
-    checksum.write_text(f"{archive_hash}  {archive.name}\n", encoding="utf-8")
+    # Always write LF: text mode would turn this into CRLF on Windows and break
+    # `sha256sum -c`/`shasum -c` after downloading the artifact elsewhere.
+    checksum.write_bytes(f"{archive_hash}  {archive.name}\n".encode("utf-8"))
 
     print(f"Packaged {archive}")
     print(f"  sha256={archive_hash}")
