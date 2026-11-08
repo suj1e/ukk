@@ -103,7 +103,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** versioned manifest, declared commands/events, narrowly scoped native UI slots (including Session tabs/overlays), user grants, lifecycle, enable/disable, isolated helper supervision, crash containment, audit. Distinguish trusted in-process contributions from untrusted helpers.
 - **Exit:** harmless sample Session action + tab/overlay contribution enabled/disabled without Host restart; permission-denial, forged command and crash tests. No privileged capture plugin before the broker exists.
 - **Dependency:** coordinate future M1 screen plugin and R2 provider adapter surfaces.
-- **Status (2026-11-08):** crates merged as `ef9038c` (PR #20) with the sample Session action/tab/overlay proven in a headless broker and a fixed timed-out-helper containment blocker. Host RPC/GPUI slot wiring, durable grants/audit and OS sandbox remain outstanding; the sample is not yet visible in the Desktop UI.
+- **Status (2026-11-08):** broker merged as `ef9038c` (PR #20) and Host/Desktop sample wiring as `2e05d5a` (PR #37). Security review fixed startup blocking, missing audit, uid/private-parent checks and registry races. Third-party helper trust, durable grants/audit, capture grants, OS sandbox and real-window acceptance remain.
 
 ### S1 — Remote Host protocol, durable event sync and authorization
 
@@ -112,7 +112,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** versioned typed command/event envelopes, server-side scopes, device identity/grants, monotonic per-stream cursor, snapshot/replay on gaps, idempotency keys and result classification. **Never** use ephemeral `hc_seq` or Host `host_epoch` as a durable cross-device cursor. Bound payload sizes, queues and retention; forbid blind replay of approvals or pointer input.
 - **Exit:** mock two-client reconnect/revocation/duplication/dropped-ACK/out-of-order/gap tests; security review and migration strategy; local IPC remains distinct from WAN protocol.
 - **Dependency:** H1 authorization boundary; can build protocol crate and contract tests in parallel with R1/R2.
-- **Status (2026-11-08):** crate merged as `e0eff7f` (PR #23) with 30 integration tests and three-OS CI. Security review found no blocker; live revocation, snapshot inbox resume and in-flight idempotency were fixed before merge. Host transport/SQLite wiring and S2 pairing/E2EE remain.
+- **Status (2026-11-08):** protocol crate merged as `e0eff7f` (PR #23); SQLite schema v3 persistence merged as `a100baa` (PR #35). Security review found no blocker and fixed live revocation/inbox/idempotency; persistence adds durable cursors, trusts/grants and idempotency with reopen/migration tests. Host transport/event delivery and S2 relay networking remain.
 
 ### S2 — QR pairing, device trust, Relay integration
 
@@ -121,7 +121,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** short-lived QR challenge, desktop confirmation, device key storage, scoped grants, expiry/rotation/revoke and unauthenticated denial. Spike against **actual** alma-relay behavior before reuse; end-to-end encryption and device trust independent of transport. Outbound Host connection; no unapproved public inbound port.
 - **Exit:** connect iPhone test client outside LAN, resume exact Session, revoke device and prove command denial, rotate keys, handle offline/relay outage; repeatable packet/contract tests and a documented TURN/media signalling boundary.
 - **Dependency:** S1 wire/auth contract. Pairing crypto and relay compatibility spikes can be separate PRs.
-- **Status (2026-11-08):** pairing/device-trust core merged as `8102761` (PR #28) with 62 crate tests and three-OS CI; security review fixed confirmation typing, low-order X25519 rejection, frame bounds and ack completion. No relay networking, OS key storage or WAN proof-of-possession; docs prevent deploying a listener yet.
+- **Status (2026-11-08):** pairing/device-trust core merged as `8102761` (PR #28) and the outbound-only mock relay boundary as `967f0de` (PR #34). Security reviews found no blocker; confirmation typing, low-order keys, frame bounds, ack completion and relay framing/fencing were fixed. Still mock-only: no WSS/TLS, relay operator auth, TURN, WAN proof-of-possession, OS key store or physical iPhone.
 
 ### I1 — Native SwiftUI iOS/iPadOS companion (fixture-first)
 
@@ -151,7 +151,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 - **Do:** installer/updater and user-service setup on macOS, Windows, Linux; native application signing where applicable; SQLite migration/backup/recovery; logs and diagnostics without credentials; perf/memory and multi-observer backpressure tests; accessibility and locale; threat review, plugin sandbox and device revocation checks. iOS TestFlight/App Store requirements separately.
 - **Exit:** documented end-to-end matrix showing *actual* running Agents survive Desktop close, reattach on all three OSes, an iPhone pairs over a different network, an Agent instruction and approval work where supported, and Remote Screen opens/closes on demand without leaving the Session. Every unsupported combination named.
 - **Dependency:** continuous quality owner throughout all waves; final closure after D3 + P1 + S2 + I1 + M1.
-- **Status (2026-11-08):** first slice merged as `7461a39` (PR #29): unsigned macOS/Windows/Linux release archives with deterministic packaging, SHA-256 manifests and embedded `--version` identity; artifacts built and downloaded/verified. Signing/notarization, installers/updater, backup/recovery, full E2E, locale and final security gate remain.
+- **Status (2026-11-08):** release artifacts merged as `7461a39` (PR #29); verified SQLite backup/restore and `db-doctor` merged as `ef49bc3` (PR #36), with a v3 CLI smoke on main. Signing/notarization, installers/updater, heavy-WAL/live-Host backup acceptance, full E2E, locale and final security gate remain.
 
 ## Parallelization / merge discipline
 
