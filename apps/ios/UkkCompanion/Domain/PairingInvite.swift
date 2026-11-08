@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// A v1 pairing invitation. Every value is untrusted input: parsing proves only
@@ -73,6 +74,14 @@ enum PairingInviteParseError: Error, Equatable, Sendable {
 }
 
 enum PairingInviteParser {
+    /// Distinguishes a JSON number from a boolean. `NSNumber` bridges 0/1 to
+    /// `Bool`, so `is Bool` is not a reliable test on Darwin.
+    private static func number(_ value: Any?) -> NSNumber? {
+        guard let value = value as? NSNumber else { return nil }
+        guard CFGetTypeID(value) != CFBooleanGetTypeID() else { return nil }
+        return value
+    }
+
     private static let allowedFields: Set<String> = [
         "v", "host_id", "host_ed", "host_x", "invite_id", "secret", "expire_ms", "relay"
     ]
@@ -93,7 +102,7 @@ enum PairingInviteParser {
             return .failure(.malformedJSON)
         }
 
-        guard let versionNumber = object["v"] as? NSNumber, !(object["v"] is Bool) else {
+        guard let versionNumber = number(object["v"]) else {
             return .failure(.missingField("v"))
         }
         let version = versionNumber.intValue
@@ -177,7 +186,7 @@ enum PairingInviteParser {
             return .failure(error)
         }
 
-        guard let expiryNumber = object["expire_ms"] as? NSNumber, !(object["expire_ms"] is Bool) else {
+        guard let expiryNumber = number(object["expire_ms"]) else {
             return .failure(.missingField("expire_ms"))
         }
         let expireMS = expiryNumber.int64Value
