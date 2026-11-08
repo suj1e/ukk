@@ -549,5 +549,5 @@ target/debug/ukk-host serve
 - Wasm sandboxing is a schema placeholder only and is rejected until a runtime
   is validated.
 
-See [remote screen](REMOTE_SCREEN.md), [security](SECURITY.md),
-[architecture](ARCHITECTURE.md) and [roadmap](roadmap.md).
+See [remote screen](remote-screen.md), [security](security.md),
+[architecture](../tech-design.md) and [roadmap](../roadmap.md).

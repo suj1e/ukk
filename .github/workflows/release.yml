@@ -1,4 +1,4 @@
-name: Unsigned release artifacts
+name: Release (unsigned packages)
 
 # Builds release-mode ukk-host and ukk-desktop on macOS, Windows and Linux and
 # uploads per-OS archives. This workflow never publishes a GitHub Release, signs,
@@ -18,9 +18,9 @@ on:
       - 'docs/**'
   pull_request:
     paths:
-      - '.github/workflows/release-artifacts.yml'
+      - '.github/workflows/release.yml'
       - 'scripts/package_release.py'
-      - 'docs/RELEASE.md'
+      - 'docs/release.md'
       - 'README.md'
       - 'LICENSE'
       - 'Cargo.toml'

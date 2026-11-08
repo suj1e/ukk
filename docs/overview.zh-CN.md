@@ -1,6 +1,6 @@
 # ukk 产品与技术总览（中文版）
 
-> 版本：设计基线 v0.1 · 2026-11-07。当前仓库以架构与产品文档为主，尚不是可运行的软件。
+> 版本：实现切片 v0.1 · 2026-11-08。Desktop、Host、Domain/SQLite、协议和 omp 会话已在 `main`；三平台 CI 与未签名包已产出。真机三平台交互、WAN/iPhone 与屏幕控制仍未验收，详见 [status](status.md)。
 
 ## 一句话定位
 
@@ -95,16 +95,16 @@ Mac 启动多个 Agent（包括子 Agent）→ 关掉桌面窗口但不结束 Ag
 
 ## 文档索引
 
-- [系统架构](ARCHITECTURE.md)
-- [完整产品需求](PRODUCT.md)
-- [领域模型](DOMAIN_MODEL.md)
-- [插件系统](PLUGINS.md)
-- [扫码配对](PAIRING.md)
-- [传输和事件同步](PROTOCOL.md)
-- [远控悬浮插件](REMOTE_SCREEN.md)
-- [安全设计](SECURITY.md)
+- [系统架构](tech-design.md)
+- [完整产品需求](requirements.md)
+- [领域模型](subsystems/domain-model.md)
+- [插件系统](subsystems/plugins.md)
+- [扫码配对](subsystems/pairing.md)
+- [传输和事件同步](subsystems/protocol.md)
+- [远控悬浮插件](subsystems/remote-screen.md)
+- [安全设计](subsystems/security.md)
 - [开发路线](roadmap.md)
-- [技术选型决策](adr/0001-platform-and-runtime.md)
+- [技术选型决策](decisions/0001-platform-and-runtime.md)
 
 ## 待验证而非已实现
 

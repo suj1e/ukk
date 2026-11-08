@@ -4,7 +4,7 @@ import Foundation
 /// validates shape and expiry locally. It never proves Host identity, never
 /// establishes trust, and its secret must never be logged or persisted here.
 ///
-/// The documented proposal (docs/PAIRING.md) is illustrative; S2 owns the final
+/// The documented proposal (docs/subsystems/pairing.md) is illustrative; S2 owns the final
 /// cryptographic construction and Host-side single-use enforcement.
 struct PairingInvite: Equatable, Sendable, CustomStringConvertible {
     let version: Int

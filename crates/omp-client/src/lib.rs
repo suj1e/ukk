@@ -14,7 +14,7 @@
 //! view must never call [`OmpClient::shutdown`]. Only the Host process (or an
 //! explicit user "stop" action routed through the Host) terminates the child.
 //!
-//! See `docs/OMP_RPC.md` for the transport contract and for the semantics
+//! See `docs/subsystems/omp-rpc.md` for the transport contract and for the semantics
 //! that are currently NOT VERIFIED.
 
 mod client;

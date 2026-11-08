@@ -38,7 +38,7 @@
 //! contacted, no OS key store was used, no physical iPhone ran this code and
 //! there has been no external cryptographic or security review. The
 //! ukk-internal signalling envelope is **not** alma-relay-compatible; see
-//! [docs/PAIRING.md](../../../docs/PAIRING.md) for the gap record. Do not
+//! [docs/subsystems/pairing.md](../../../docs/subsystems/pairing.md) for the gap record. Do not
 //! describe this as production-ready cryptography.
 
 pub mod error;

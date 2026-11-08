@@ -41,7 +41,7 @@
 //!
 //! Not wired in this crate, deliberately: no Host RPC method, no SQLite grant
 //! persistence, no GPUI types, no OS sandbox/entitlements, no automatic
-//! restart, and no capture/input implementation. See `docs/PLUGINS.md`.
+//! restart, and no capture/input implementation. See `docs/subsystems/plugins.md`.
 mod audit;
 mod config;
 mod contributions;

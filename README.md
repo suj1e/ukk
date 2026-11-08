@@ -2,8 +2,8 @@
 
 **Native, extensible Multi-Agent Workspace.**
 
-> **设计阶段 / Architecture-first** · GPUI Desktop + SwiftUI iOS + herdr-core + Relay + Plugins  
-> **当前阶段：Runtime Spike 01 + Desktop Spike 02 + Live Sync Spike 03 + Durable Workspace Spike 04。** 已提交本地只读 Rust Host / hc-client 与 GPUI 桌面原生窗口源码，含真实终端快照读取；尚未经过真实 Mac + herdr-core 联调，也未确认 macOS GPUI 编译通过。下面的完整架构与功能仍是目标设计。
+> **Active implementation · 2026-11-08** · Rust/GPUI Desktop + SwiftUI iOS + herdr-core + omp RPC + Host<br>
+> Desktop, Host, domain/SQLite, protocol and unsigned three-OS packages are on `main`; three-OS CI and macOS real-runtime checks pass. Real Windows/Linux GUI, WAN/iPhone pairing, screen control and signing remain **NOT VERIFIED**. See [status](docs/status.md) and [roadmap](docs/roadmap.md).
 
 ukk 是一个从零打造的原生 Coding Agent 工作空间：同时运行多个 Codex、Claude Code 或其他兼容 Agent，保留可持久恢复的工作会话，通过 iPhone 扫码连接电脑，并在必要时以**悬浮小窗**查看或操控电脑屏幕。
 
@@ -55,7 +55,7 @@ flowchart TB
 
 **macOS、Windows、Linux 都是 ukk Desktop 的一等目标平台。** 同一套 Rust + GPUI 原生 UI，共用 Host 协议与 herdr-core Runtime。macOS 使用 Metal，Windows 使用 Win32/DirectWrite，Linux 使用 Wayland/X11。
 
-已加入三端构建检查，但还不能宣称三端已运行通过：当前 Unix Socket 服务于 macOS/Linux；Windows Named Pipe 服务端与客户端源码已经加入，但还需 CI、真机和安全验收。详见 [跨平台支持矩阵](docs/PLATFORM_SUPPORT.md) 和 [Windows IPC Issue #4](https://github.com/suj1e/ukk/issues/4)。
+已加入三端构建检查，但还不能宣称三端已运行通过：当前 Unix Socket 服务于 macOS/Linux；Windows Named Pipe 服务端与客户端源码已经加入，但还需 CI、真机和安全验收。详见 [跨平台支持矩阵](docs/subsystems/platform-support.md) 和 [Windows IPC Issue #4](https://github.com/suj1e/ukk/issues/4)。
 
 ## Product direction
 
@@ -81,7 +81,7 @@ cargo run -p ukk-host -- serve
 cargo run -p ukk-host -- request terminal.list
 ```
 
-See [Runtime Spike 01 — runbook and acceptance](docs/RUNTIME_SPIKE.md) for `hc` installation, live events and exact limitations.
+See [Runtime Spike 01 — runbook and acceptance](docs/spikes/runtime-spike.md) for `hc` installation, live events and exact limitations.
 
 ## GPUI Desktop Spike 02
 
@@ -94,7 +94,7 @@ The GPUI dependency is isolated from root Cargo workspace CI and pinned to a Zed
 cargo run --manifest-path apps/desktop/Cargo.toml
 ```
 
-See [Desktop Spike 02](docs/DESKTOP_SPIKE.md) for exact setup, limitations and Mac verification tasks.
+See [Desktop Spike 02](docs/spikes/desktop-spike.md) for exact setup, limitations and Mac verification tasks.
 
 ## Live Agent State — Spike 03
 
@@ -111,11 +111,11 @@ cargo run --manifest-path apps/desktop/Cargo.toml
 
 **Status:** source, mock protocol and end-to-end test code committed; compilation/CI and real Mac testing are not yet confirmed. This is a local read-only event broker, not durable Session sync or mobile remote access.
 
-See [Live Runtime Sync](docs/LIVE_EVENTS.md) for state ownership, API envelope, reconnection and acceptance checklist.
+See [Live Runtime Sync](docs/spikes/live-events.md) for state ownership, API envelope, reconnection and acceptance checklist.
 
 ## Windows Named Pipe (source)
 
-Windows 的本地 Host 接入已增加同用户 SID 限权 Named Pipe：`ukk-host serve`、`host.snapshot`、`host.wait` 使用与 macOS/Linux 相同的只读 API。请注意：**实现源码已提交，不代表 Windows 编译/安全验收已经通过**。详见 [Windows Named Pipe 设计与运行说明](docs/WINDOWS_IPC.md)。
+Windows 的本地 Host 接入已增加同用户 SID 限权 Named Pipe：`ukk-host serve`、`host.snapshot`、`host.wait` 使用与 macOS/Linux 相同的只读 API。请注意：**实现源码已提交，不代表 Windows 编译/安全验收已经通过**。详见 [Windows Named Pipe 设计与运行说明](docs/runbooks/windows-ipc.md)。
 
 ## Durable Workspace / Session / Pane — Spike 04
 
@@ -131,40 +131,44 @@ cargo run -p ukk-host -- session-create SPACE_ID "Implement sync protocol"
 cargo run -p ukk-host -- workspace-dump
 ```
 
-详见 [Workspace Persistence / SQLite 开发说明](docs/WORKSPACE_PERSISTENCE.md)。源码已提交，但三系统编译与实际 GPUI 运行尚未确认通过。
+详见 [Workspace Persistence / SQLite 开发说明](docs/spikes/workspace-persistence.md)。源码已提交，但三系统编译与实际 GPUI 运行尚未确认通过。
 
 ## Workspace 自动同步（Spike 05）
 
 Host 已增加基于 SQLite v2 变更版本的 `workspace.state` / `workspace.wait` 只读接口。GPUI 会自动观察其他窗口或 CLI 对 Space、Session、Pane 布局的修改；herdr-core Agent 事件与 Workspace 元数据分别同步，互不拥有对方的生命周期。此功能在 `feat/workspace-live-sync` 开发分支中，尚待三端 CI 与真实窗口验收。
 
-详细协议与验证步骤：[Workspace Live Sync](docs/WORKSPACE_LIVE_SYNC.md)。
+详细协议与验证步骤：[Workspace Live Sync](docs/spikes/workspace-live-sync.md)。
 
 ## Documentation
 
 | Document | Contents |
 |---|---|
-| [中文版总览](docs/OVERVIEW.zh-CN.md) | 产品方向、中文架构图、对象关系 |
-| [Product Requirements](docs/PRODUCT.md) | 完整功能矩阵、用户场景和体验原则 |
-| [Architecture](docs/ARCHITECTURE.md) | 端到端架构、组件边界和部署 |
-| [Workspace Live Sync](docs/WORKSPACE_LIVE_SYNC.md) | SQLite 跨进程版本和 GPUI 元数据自动同步 |\n| [Workspace Persistence](docs/WORKSPACE_PERSISTENCE.md) | SQLite Space/Session/AgentRun、布局版本与开发运行命令 |
-| [Domain Model](docs/DOMAIN_MODEL.md) | Spaces / Sessions / AgentRuns / Panes |
-| [Plugin System](docs/PLUGINS.md) | 插件生命周期、能力代理、UI 槽位 |
-| [Pairing](docs/PAIRING.md) | QR 扫码、设备授权与密钥 |
-| [Remote Protocol](docs/PROTOCOL.md) | Commands、Events、重连与同步 |
-| [Remote Screen](docs/REMOTE_SCREEN.md) | 悬浮屏幕、授权、WebRTC 传输 |
-| [Security](docs/SECURITY.md) | 威胁模型、权限、风险与测试 |
+| [中文版总览](docs/overview.zh-CN.md) | 产品方向、中文架构图、对象关系 |
+| [Product Requirements](docs/requirements.md) | 完整功能矩阵、用户场景和体验原则 |
+| [Architecture](docs/tech-design.md) | 端到端架构、组件边界和部署 |
+| [Workspace Live Sync](docs/spikes/workspace-live-sync.md) | SQLite 跨进程版本和 GPUI 元数据自动同步 |
+| [Workspace Persistence](docs/spikes/workspace-persistence.md) | SQLite Space/Session/AgentRun、布局版本与开发运行命令 |
+| [Domain Model](docs/subsystems/domain-model.md) | Spaces / Sessions / AgentRuns / Panes |
+| [Plugin System](docs/subsystems/plugins.md) | 插件生命周期、能力代理、UI 槽位 |
+| [Pairing](docs/subsystems/pairing.md) | QR 扫码、设备授权与密钥 |
+| [Remote Protocol](docs/subsystems/protocol.md) | Commands、Events、重连与同步 |
+| [Remote Screen](docs/subsystems/remote-screen.md) | 悬浮屏幕、授权、WebRTC 传输 |
+| [Security](docs/subsystems/security.md) | 威胁模型、权限、风险与测试 |
 | [Project Status](docs/status.md) | 已实现、CI、未完成验收与任务入口 |
 | [Roadmap](docs/roadmap.md) | 完整产品开发阶段、依赖和并行 Agent 工作队列 |
-| [Development](docs/DEVELOPMENT.md) | 预期代码目录和工程验证步骤 |
-| [Runtime Spike 01](docs/RUNTIME_SPIKE.md) | Rust Host 原型、命令、模拟测试和真实 Mac 验收项 |
-| [Windows IPC](docs/WINDOWS_IPC.md) | Windows Named Pipe、用户 ACL、安全约束、验收清单 |
-| [Platform Support](docs/PLATFORM_SUPPORT.md) | macOS / Windows / Linux 一等桌面支持、OS 特定适配及测试清单 |
-| [Desktop Spike 02](docs/DESKTOP_SPIKE.md) | GPUI 原生窗口、真实终端状态、macOS 构建验收项 |
-| [Desktop Terminal](docs/GPUI_TERMINAL.md) | 只读终端观察、直接 hc-client 边界、安全后果与验收 |
-| [Live Runtime Sync](docs/LIVE_EVENTS.md) | Host 实时订阅、事件缺口恢复、Desktop 自动刷新和测试 |
-| [Upstream References](docs/REFERENCES.md) | 官方依赖、许可和待确认事项 |
-| [ADR-0001](docs/adr/0001-platform-and-runtime.md) | GPUI + SwiftUI + herdr-core 的技术决策 |
-| [ADR-0002](docs/adr/0002-remote-control-is-plugin.md) | 远控作为会话插件的交互决策 |
+| [Development](DEVELOPMENT.md) | 本地工具链、命令、平台约束与验证规则 |
+| [Contributing](CONTRIBUTING.md) | 分支/PR 规则与停审条件 |
+| [Review](REVIEW.md) | Review 清单、证据要求与停止条件 |
+| [Lessons](LESSONS.md) | 带证据的失败教训队列 |
+| [Runtime Spike 01](docs/spikes/runtime-spike.md) | Rust Host 原型、命令、模拟测试和真实 Mac 验收项 |
+| [Windows IPC](docs/runbooks/windows-ipc.md) | Windows Named Pipe、用户 ACL、安全约束、验收清单 |
+| [Platform Support](docs/subsystems/platform-support.md) | macOS / Windows / Linux 一等桌面支持、OS 特定适配及测试清单 |
+| [Desktop Spike 02](docs/spikes/desktop-spike.md) | GPUI 原生窗口、真实终端状态、macOS 构建验收项 |
+| [Desktop Terminal](docs/subsystems/desktop-terminal.md) | 只读终端观察、直接 hc-client 边界、安全后果与验收 |
+| [Live Runtime Sync](docs/spikes/live-events.md) | Host 实时订阅、事件缺口恢复、Desktop 自动刷新和测试 |
+| [Upstream References](docs/references.md) | 官方依赖、许可和待确认事项 |
+| [ADR-0001](docs/decisions/0001-platform-and-runtime.md) | GPUI + SwiftUI + herdr-core 的技术决策 |
+| [ADR-0002](docs/decisions/0002-remote-control-is-plugin.md) | 远控作为会话插件的交互决策 |
 | [AGENTS.md](AGENTS.md) | Coding Agent 参与开发时必须遵循的约束 |
 
 ## First end-to-end goal

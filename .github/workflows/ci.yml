@@ -1,24 +1,57 @@
-name: Rust core and Host protocol (cross-platform)
+name: CI
 
 on:
   push:
     paths:
       - 'Cargo.toml'
       - 'crates/**'
-      - 'plugins/**/plugin.toml'
-      - '.github/workflows/rust-spike.yml'
+      - 'apps/desktop/**'
+      - 'apps/ios/**'
+      - 'plugins/**'
+      - 'scripts/**'
+      - 'docs/**'
+      - 'AGENTS.md'
+      - 'README.md'
+      - 'DEVELOPMENT.md'
+      - 'REVIEW.md'
+      - 'CONTRIBUTING.md'
+      - 'LESSONS.md'
+      - 'justfile'
+      - '.github/**'
   pull_request:
     paths:
       - 'Cargo.toml'
       - 'crates/**'
-      - 'plugins/**/plugin.toml'
-      - '.github/workflows/rust-spike.yml'
+      - 'apps/desktop/**'
+      - 'apps/ios/**'
+      - 'plugins/**'
+      - 'scripts/**'
+      - 'docs/**'
+      - 'AGENTS.md'
+      - 'README.md'
+      - 'DEVELOPMENT.md'
+      - 'REVIEW.md'
+      - 'CONTRIBUTING.md'
+      - 'LESSONS.md'
+      - 'justfile'
+      - '.github/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check repository documentation
+        run: |
+          python3 scripts/check_docs.py
+          python3 scripts/check_versions.py
+
   test:
     strategy:
       fail-fast: false

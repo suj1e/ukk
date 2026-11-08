@@ -71,7 +71,7 @@ crates/hc-client/
 crates/host/
   src/main.rs                read-only local Host server + CLI commands
 .github/workflows/
-  rust-spike.yml             cargo test and Clippy
+  ci.yml             cargo test and Clippy
 ```
 
 - `hc-client::call`: launches `hc connect`, sends one JSON line, validates matching request ID, forwards result or structured RPC error.
@@ -105,4 +105,4 @@ crates/host/
 - [herdr-core API docs](https://github.com/herdrdev/herdr-core/blob/master/schema/README.md)
 - [OpenRPC schema](https://github.com/herdrdev/herdr-core/blob/master/schema/hc.openrpc.json)
 
-**Important:** This bootstrap Host API is a local-only smoke-test surface. It is *not* the final versioned mobile protocol described in [PROTOCOL.md](PROTOCOL.md). Do not expose it directly to a public network.
+**Important:** This bootstrap Host API is a local-only smoke-test surface. It is *not* the final versioned mobile protocol described in [PROTOCOL.md](../subsystems/protocol.md). Do not expose it directly to a public network.

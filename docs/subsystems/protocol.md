@@ -439,8 +439,8 @@ screen media use separate channels and never enter event history.
   work; this crate defines and tests the authorization and synchronization
   contract those transports must call.
 
-See [security](SECURITY.md), [pairing](PAIRING.md),
-[live events](LIVE_EVENTS.md), [domain model](DOMAIN_MODEL.md).
+See [security](security.md), [pairing](pairing.md),
+[live events](../spikes/live-events.md), [domain model](domain-model.md).
 
 ## Contract tests
 

@@ -118,7 +118,7 @@ explicit pointer/button action and expose no keyboard input path. Keyboard
 focus still reaches the pane shell (split, tab, close, resize and copy
 actions), but no shortcut is forwarded to the PTY. A local detach closes this
 view's stream only; it never signals the terminal. See
-[GPUI_TERMINAL.md](GPUI_TERMINAL.md).
+[GPUI_TERMINAL.md](desktop-terminal.md).
 
 ## Accessibility
 

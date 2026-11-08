@@ -11,7 +11,7 @@
 - The Host persists with SQLite compare-and-swap and returns a new Workspace snapshot, which also flows to other windows via the durable `workspace.wait` subscription introduced in PR #8.
 - Concurrent layout edits can be rejected as a revision conflict; the user can reload the latest layout. No silent overwrites.
 - The previous “+ / −” resize controls remain usable as a keyboard/mouse fallback.
-- Keyboard users can focus the splitter (visible focus ring, `Splitter` role with orientation and 15–85% value) or use `Ctrl+Alt+Arrow` to resize the enclosing split without a pointer. See [Keyboard, accessibility and local focus](GPUI_KEYBOARD_A11Y.md).
+- Keyboard users can focus the splitter (visible focus ring, `Splitter` role with orientation and 15–85% value) or use `Ctrl+Alt+Arrow` to resize the enclosing split without a pointer. See [Keyboard, accessibility and local focus](../subsystems/desktop-keyboard-a11y.md).
 
 ## Structure
 
@@ -41,4 +41,4 @@ Only layout presentation changes: `Pane` is not a terminal, AgentRun or executio
 
 The CI build gate is not a replacement for launching a real window. Real-world interaction and accessibility acceptance remain required before release.
 
-See [Engineering Standards](ENGINEERING.md), [Workspace Persistence](WORKSPACE_PERSISTENCE.md), and [Workspace Live Sync](WORKSPACE_LIVE_SYNC.md).
+See [Engineering Standards](../coding-standard.md), [Workspace Persistence](workspace-persistence.md), and [Workspace Live Sync](workspace-live-sync.md).

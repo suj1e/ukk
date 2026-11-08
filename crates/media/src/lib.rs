@@ -43,7 +43,7 @@
 //! (ScreenCaptureKit, Windows Graphics Capture, PipeWire/portal), no
 //! VideoToolbox encoder, no iOS viewer, no Host RPC wiring and no physical
 //! iPhone run. This crate proves the typed signalling, grant, lease and state
-//! boundary with mock peers only; see [docs/REMOTE_SCREEN.md](../../../docs/REMOTE_SCREEN.md)
+//! boundary with mock peers only; see [docs/subsystems/remote-screen.md](../../../docs/subsystems/remote-screen.md)
 //! for the exact status table.
 
 pub mod capability;

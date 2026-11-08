@@ -1,13 +1,13 @@
 # ukk — Delivery roadmap and parallel Agent work queue
 
-> Updated 2026-11-07. Live evidence and open gaps: [status.md](status.md). This replaces the stale progress summary in the former uppercase `ROADMAP.md`; the full product vision remains in [PRODUCT.md](PRODUCT.md).
+> Updated 2026-11-07. Live evidence and open gaps: [status.md](status.md). This replaces the stale progress summary in the former uppercase `ROADMAP.md`; the full product vision remains in [PRODUCT.md](requirements.md).
 >
 > **目标：** 完整的跨设备、多 Agent 原生 Workspace；不是固定流水线，也不是单独的远控产品。Desktop = GPUI on macOS/Windows/Linux. Mobile = SwiftUI iOS/iPadOS. herdr-core owns Agent execution. Remote Screen is a permissioned floating feature *inside a Session*.
 
 ## Rules for all Agent contributors
 
 1. **Take a task ID** from this queue, work on a dedicated branch, link an existing issue or create a narrowly scoped follow-up issue as needed, and open one reviewable PR. A PR is not "done" until acceptance evidence is recorded.
-2. Read [AGENTS.md](../AGENTS.md), [ENGINEERING.md](ENGINEERING.md), [ARCHITECTURE.md](ARCHITECTURE.md), [DOMAIN_MODEL.md](DOMAIN_MODEL.md), [SECURITY.md](SECURITY.md). Keep domain/runtime/view and local/remote authority boundaries strict.
+2. Read [AGENTS.md](../AGENTS.md), [ENGINEERING.md](coding-standard.md), [ARCHITECTURE.md](tech-design.md), [DOMAIN_MODEL.md](subsystems/domain-model.md), [SECURITY.md](subsystems/security.md). Keep domain/runtime/view and local/remote authority boundaries strict.
 3. **Never stop herdr-core processes when a Pane/Tab/Session/window is closed.** Do not fabricate structured Agent events from ANSI text. No unapproved remote mutation, screen capture or input.
 4. Shared integration hot spots: `crates/host/src/rpc.rs`, `workspace_rpc.rs`, `crates/host-client/src/lib.rs`, `crates/store/src/schema.rs` and `apps/desktop/src/workspace/{mod,actions,state}.rs`. Assign one integration owner; coordinate RPC/schema contracts before concurrent edits.
 5. Verify on the **exact PR head**; root CI covers macOS/Windows/Linux Rust tests/Clippy, Desktop CI covers macOS/Windows/Linux native check/tests/Clippy. Actual GUI and real herdr-core acceptance remain separate release gates.
@@ -99,7 +99,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 ### P1 — First-party plugin API and capability broker
 
 - **Suggested ownership:** Plugin Platform Agent.
-- **Edit:** new `crates/plugin-api/`, `crates/plugin-host/`, sample plugin and [PLUGINS.md](PLUGINS.md). Keep existing GPUI/Host integration to a thin, reviewed adapter.
+- **Edit:** new `crates/plugin-api/`, `crates/plugin-host/`, sample plugin and [PLUGINS.md](subsystems/plugins.md). Keep existing GPUI/Host integration to a thin, reviewed adapter.
 - **Do:** versioned manifest, declared commands/events, narrowly scoped native UI slots (including Session tabs/overlays), user grants, lifecycle, enable/disable, isolated helper supervision, crash containment, audit. Distinguish trusted in-process contributions from untrusted helpers.
 - **Exit:** harmless sample Session action + tab/overlay contribution enabled/disabled without Host restart; permission-denial, forged command and crash tests. No privileged capture plugin before the broker exists.
 - **Dependency:** coordinate future M1 screen plugin and R2 provider adapter surfaces.
@@ -108,7 +108,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 ### S1 — Remote Host protocol, durable event sync and authorization
 
 - **Suggested ownership:** Protocol/Security Agent.
-- **Edit:** new `crates/protocol/`, Host service adapters, focused SQLite event/migration modules, [PROTOCOL.md](PROTOCOL.md)/[SECURITY.md](SECURITY.md).
+- **Edit:** new `crates/protocol/`, Host service adapters, focused SQLite event/migration modules, [PROTOCOL.md](subsystems/protocol.md)/[SECURITY.md](subsystems/security.md).
 - **Do:** versioned typed command/event envelopes, server-side scopes, device identity/grants, monotonic per-stream cursor, snapshot/replay on gaps, idempotency keys and result classification. **Never** use ephemeral `hc_seq` or Host `host_epoch` as a durable cross-device cursor. Bound payload sizes, queues and retention; forbid blind replay of approvals or pointer input.
 - **Exit:** mock two-client reconnect/revocation/duplication/dropped-ACK/out-of-order/gap tests; security review and migration strategy; local IPC remains distinct from WAN protocol.
 - **Dependency:** H1 authorization boundary; can build protocol crate and contract tests in parallel with R1/R2.
@@ -117,7 +117,7 @@ The arrows indicate **integration dependencies**, not an excuse to block indepen
 ### S2 — QR pairing, device trust, Relay integration
 
 - **Suggested ownership:** Pairing/Transport Agent.
-- **Edit:** new `crates/remote/`, pairing/transport adapters, [PAIRING.md](PAIRING.md).
+- **Edit:** new `crates/remote/`, pairing/transport adapters, [PAIRING.md](subsystems/pairing.md).
 - **Do:** short-lived QR challenge, desktop confirmation, device key storage, scoped grants, expiry/rotation/revoke and unauthenticated denial. Spike against **actual** alma-relay behavior before reuse; end-to-end encryption and device trust independent of transport. Outbound Host connection; no unapproved public inbound port.
 - **Exit:** connect iPhone test client outside LAN, resume exact Session, revoke device and prove command denial, rotate keys, handle offline/relay outage; repeatable packet/contract tests and a documented TURN/media signalling boundary.
 - **Dependency:** S1 wire/auth contract. Pairing crypto and relay compatibility spikes can be separate PRs.

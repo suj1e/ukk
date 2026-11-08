@@ -5,7 +5,7 @@ import Foundation
 /// handler exists. These declarations are the iOS-side interface contract the
 /// future notification lane must satisfy.
 ///
-/// Notification metadata leakage mitigation (docs/SECURITY.md): a push payload
+/// Notification metadata leakage mitigation (docs/subsystems/security.md): a push payload
 /// may carry only an opaque hint identifier. Message text, session titles, file
 /// names, paths, pairing codes and secrets must never appear in a payload.
 struct OpaquePushHint: Equatable, Sendable {

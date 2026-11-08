@@ -142,4 +142,4 @@ The CLI `request` currently accepts a method name but does not allow custom `hos
 - [ ] Add persisted ukk Session/AgentRun mapping with SQLite.
 - [ ] Verify observer fan-out performance and bounded resource usage.
 
-Related: [Architecture](ARCHITECTURE.md), [Desktop Spike](DESKTOP_SPIKE.md), [Protocol](PROTOCOL.md), [Roadmap](roadmap.md).
+Related: [Architecture](../tech-design.md), [Desktop Spike](desktop-spike.md), [Protocol](../subsystems/protocol.md), [Roadmap](../roadmap.md).
