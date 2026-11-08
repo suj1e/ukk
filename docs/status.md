@@ -28,14 +28,14 @@ This table records the **claim**, not a promise. `Pending evidence` means the wo
 | M3 Relay + pairing + iOS | **Local + CI:** host-confirmed pairing, encrypted command dispatch, resume and revocation work through a real relay process; the iOS simulator build and its 94 unit tests pass in CI; the app renders a real SwiftUI screen | No deployed WSS relay, no WAN proof, no physical-device pairing/camera/APNs |
 | M4 Remote Screen | **Local:** real avfoundation capture produced an offer with ICE/DTLS and H.264; stop ended capture; input gating has tests | No TURN media session, no injection into a real app, no iPhone viewer |
 | M5 Plugin safety | Manifest/grants/supervisor/framing have 93 package tests; bridge API and a Settings surface are wired | No malicious-plugin sandbox run; helpers are process-isolated, not OS-sandboxed |
-| M6 Unsigned distribution | A local macOS `.app` was built by `go tool mygo build` | No dmg/NSIS/deb artifacts from CI, no install matrix, no IPA |
+| M6 Unsigned distribution | Local `mygo build` produced a macOS `.app`, a Linux `.deb`/`.tar.gz`/PKGBUILD and a Windows `.exe`, each with its native terminal library | Release CI artifacts, NSIS installer, IPA and install/uninstall matrix remain unverified |
 
 ## Evidence register (2026-11-08)
 
 | Check | Observation | Result |
 | --- | --- | --- |
 | Format / vet / tests | `gofmt -l .`, `go vet ./...`, `go test ./...`, `go test -race ./...` in `apps/desktop` | clean; 296 tests, 18 packages; race clean |
-| Package | `go tool mygo build -platform darwin/arm64` | `ukk.app` 20.7 MB, ad-hoc signed, `libghostty-vt.dylib` bundled |
+| Package | `go tool mygo build` for darwin/arm64, linux/amd64, windows/amd64 | macOS 20.7 MB `.app`; Linux `.deb` + tar + PKGBUILD; Windows `.exe`; terminal libraries bundled |
 | Native window | packaged app launch | window renders; bridge connects |
 | Bridge lifetime | quit the app, then `/v1/command` health over its socket | `{"ok":true}`; bridge kept running |
 | Terminal | herdr-core v0.1.18 `t1z` attached with libghostty-vt | `ukk terminal smoke` rendered; survived app exits |
