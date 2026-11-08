@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- ukk: split workspace, one active pane with an automation loop. -->
+  <rect width="1024" height="1024" fill="#242730"/>
+  <rect x="150" y="180" width="330" height="664" rx="78" fill="#F8F9FB"/>
+  <rect x="530" y="180" width="344" height="312" rx="78" fill="#6E74E8"/>
+  <rect x="530" y="540" width="344" height="304" rx="78" fill="#F8F9FB"/>
+  <path d="M 748 260 A 96 96 0 1 1 656 260" fill="none" stroke="#242730" stroke-width="32" stroke-linecap="round"/>
+  <path d="M 722 222 L 784 274 L 718 314 Z" fill="#242730" stroke="#242730" stroke-width="18" stroke-linejoin="round"/>
+</svg>

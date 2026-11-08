@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Transparent canvas for macOS/Windows/Linux; the OS supplies no mask here. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#242730"/>
+  <g transform="translate(100 100) scale(0.8046875)">
+    <rect x="150" y="180" width="330" height="664" rx="78" fill="#F8F9FB"/>
+    <rect x="530" y="180" width="344" height="312" rx="78" fill="#6E74E8"/>
+    <rect x="530" y="540" width="344" height="304" rx="78" fill="#F8F9FB"/>
+    <path d="M 748 260 A 96 96 0 1 1 656 260" fill="none" stroke="#242730" stroke-width="32" stroke-linecap="round"/>
+    <path d="M 722 222 L 784 274 L 718 314 Z" fill="#242730" stroke="#242730" stroke-width="18" stroke-linejoin="round"/>
+  </g>
+</svg>

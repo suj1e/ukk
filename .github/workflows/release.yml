@@ -152,6 +152,8 @@ jobs:
           test -d "${bundle}"
           test -x "${root}/ukk-host"
           test -x "${bundle}/Contents/MacOS/ukk-desktop"
+          test -f "${bundle}/Contents/Resources/ukk.icns"
+          test "$(head -c 4 "${bundle}/Contents/Resources/ukk.icns")" = "icns"
           "${bundle}/Contents/MacOS/ukk-desktop" --version
           plutil -lint "${bundle}/Contents/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "${bundle}/Contents/Info.plist")" = "dev.ukk.desktop"
