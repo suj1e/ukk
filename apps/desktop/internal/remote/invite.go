@@ -191,8 +191,12 @@ func validateRelay(raw string) error {
 		return newError(CodeInviteInvalid, "relay required")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "wss" || u.Host == "" || u.User != nil {
+	if err != nil || u.Host == "" || u.User != nil {
 		return newError(CodeInviteInvalid, "relay must be an absolute wss URL")
+	}
+	loopback := u.Scheme == "ws" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" || u.Hostname() == "localhost")
+	if u.Scheme != "wss" && !loopback {
+		return newError(CodeInviteInvalid, "relay must use wss (plain ws is allowed only on loopback for local tests)")
 	}
 	if u.Port() == "0" {
 		return newError(CodeInviteInvalid, "relay port invalid")

@@ -76,29 +76,21 @@ func (s *Stream) Start(ctx context.Context, capture Capture, opts Options) error
 		return err
 	}
 	s.capture = capture
-	go s.pump(capture.Frames(), s.done)
+	go s.pump(capture.Frames())
 	return nil
 }
 
-func (s *Stream) pump(frames <-chan Frame, done chan struct{}) {
-	defer close(done)
-	for {
-		select {
-		case frame, ok := <-frames:
-			if !ok {
-				return
+func (s *Stream) pump(frames <-chan Frame) {
+	defer close(s.done)
+	for frame := range frames {
+		if err := s.publisher.WriteFrame(frame); err != nil {
+			s.setError(err)
+			s.mu.Lock()
+			capture := s.capture
+			s.mu.Unlock()
+			if capture != nil {
+				_ = capture.Stop()
 			}
-			if err := s.publisher.WriteFrame(frame); err != nil {
-				s.setError(err)
-				s.mu.Lock()
-				capture := s.capture
-				s.mu.Unlock()
-				if capture != nil {
-					_ = capture.Stop()
-				}
-				return
-			}
-		case <-done:
 			return
 		}
 	}

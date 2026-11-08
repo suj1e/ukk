@@ -103,4 +103,4 @@ jobs:
           fi
           kill "$pid" 2>/dev/null || true
           wait "$pid" 2>/dev/null || true
-          test -f "$UKK_DATA_DIR/workspace/workspace.json"
+          test -f "$UKK_DATA_DIR/bridge.endpoint.json"
