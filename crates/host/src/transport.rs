@@ -71,6 +71,9 @@ pub(super) fn serve() -> AppResult<()> {
          max {MAX_CONNECTIONS} clients, {MAX_REQUEST_BYTES} byte requests"
     );
     let clients = Arc::new(AtomicUsize::new(0));
+    // Registry-flagged helpers start in the background after the endpoint is
+    // bound, so a hung helper cannot delay local RPC.
+    plugins.start_enabled_plugins();
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
@@ -244,6 +247,7 @@ pub(super) fn serve_windows() -> AppResult<()> {
          rejected; max {MAX_CONNECTIONS} clients"
     );
     let clients = Arc::new(AtomicUsize::new(0));
+    plugins.start_enabled_plugins();
     loop {
         windows_pipe::accept_client(&pending)?;
         // Install the replacement instance before detaching the connected

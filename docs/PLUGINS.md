@@ -272,6 +272,14 @@ hello identity, frame parse failures) therefore cannot forge log lines, inject
 terminal escapes or grow a record without bound. Serde parse failures are
 reported by category/line/column instead of echoing the offending input.
 
+**Host wiring:** the Host installs a bounded in-memory sink (512 records; the
+oldest is evicted and counted). It records registry rejections, RPC-level
+`plugin.control` denials (new `plugin_control_denied` kind), invalid requests
+and every supervisor decision (enable/disable/invoke failure, forged command,
+crash, timeout, protocol violation). The sink is **not durable** and there is no
+audit RPC yet; `plugin.snapshot` exposes only retained/dropped counts. This does
+not make audit persistence a delivered control.
+
 `EventDropped` records are **coalesced**: one record for a plugin's first drop
 and one per further 64 drops; the authoritative total stays in
 `PluginStatus::dropped_events`. A hostile plugin can overflow its own bounded
@@ -345,16 +353,23 @@ Loading is strict and fail-closed:
   its file stem must match the manifest `entrypoint`; the manifest id must
   match the registry id;
 - on Unix neither the registry nor the listed files may be group/other
-  writable;
+  writable; the registry, manifest and helper must be owned by the Host euid,
+  and their real parent directory must be owned by that user with no
+  group/other write bits (a file or helper under `/tmp` is refused);
 - duplicate ids, manifest paths, helper paths and command ids are ambiguous
   and refuse the whole registry;
 - a bad entry installs **nothing**; the snapshot reports `registry.error`;
 - a missing registry means "no plugins", not a scan fallback.
 
-Installed entries start disabled unless `enabled` is true. `plugin.enable` and
-`plugin.disable` persist that flag by rewriting the registry atomically
-(0600 temporary file + rename), so an operator's choice survives a Host
-restart. They never restart the Host; they only start/stop the helper.
+Installation is synchronous but starts no process. Registry-flagged plugins are
+enabled after the local endpoint is accepting, on a background thread, so a
+hung helper cannot delay Host RPC; failures surface as `failed`.
+
+`plugin.enable`/`plugin.disable` persist the flag by re-reading and
+revalidating the registry first, then rewriting it atomically (0600 temporary
+file + rename). Concurrent operator additions/edits are preserved; an unsafe
+or invalid concurrent edit refuses the write. They never restart the Host;
+they only start/stop the helper.
 
 ### Capability separation
 
@@ -367,7 +382,8 @@ agent-control token.
   `UKK_PLUGIN_CONTROL_TOKEN_FILE`; Windows uses
   `%LOCALAPPDATA%\ukk\run\agent-host.plugin-control`.
 - Must be a regular, non-symlink ASCII file, at least 60 characters, mode 0600
-  on Unix.
+  on Unix. It must be owned by the Host euid and live in a directory owned by
+  that user with no group/other write bits, so `/tmp` overrides are refused.
 - `ukk-host plugin-control-enable` creates it explicitly and refuses to
   overwrite; `plugin-control-disable` removes it; `plugin-control-status`
   reports enabled/path/problem.
@@ -385,7 +401,7 @@ read the user's profile.
 
 | Method | Capability | Result |
 |---|---|---|
-| `plugin.snapshot` | none (read-only) | registry status, installed plugin states (`disabled`/`starting`/`ready`/`failed`), `session.action`/`session.tab`/`session.overlay` descriptors and command metadata. No helper output, no token, no context/settings slots |
+| `plugin.snapshot` | none (capability-free) | registry status, installed plugin states (`disabled`/`starting`/`ready`/`failed`), running helper pid, `session.action`/`session.tab`/`session.overlay` descriptors and command metadata. It starts nothing but does call `supervise()`, which may move a crashed helper to `failed`. No helper output, no token, no context/settings slots. Includes a bounded in-memory audit summary (`retained`/`dropped`, `durable: false`) |
 | `plugin.enable` | `plugin.control` | starts the helper in the same Host, returns typed state |
 | `plugin.disable` | `plugin.control` | stops the helper in the same Host, returns typed state |
 | `plugin.invoke` | `plugin.control` | dispatches one declared command with `session_id`/`args`; returns `{plugin_id, command, provenance, value}` |
@@ -484,7 +500,8 @@ Residual risks and honest gaps:
   authority for window evidence.
 - Capture/input (no such capability is implemented; `screen.*` is vocabulary
   only), OS sandboxing and entitlements.
-- Durable grant/audit persistence and multi-process host operation.
+- Durable grant/audit persistence and multi-process host operation. The Host
+  plugin audit sink is bounded and in-memory only.
 - CPU/memory quotas, helper restart budgets and crash-loop policy.
 - Signature, notarization, allowlist and update/migration for plugins.
 

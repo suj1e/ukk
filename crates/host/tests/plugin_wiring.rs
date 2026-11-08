@@ -174,6 +174,27 @@ impl HostFixture {
         }
     }
 
+    fn wait_for_plugin_state(&self, expected: &str) {
+        let client = self.client();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(snapshot) = client.plugin_snapshot() {
+                if snapshot
+                    .plugins
+                    .first()
+                    .is_some_and(|plugin| plugin.state == expected)
+                {
+                    return;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "plugin did not reach state {expected}"
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
     fn raw_request(&self, method: &str, params: Value) -> Value {
         let request = json!({
             "jsonrpc": "2.0",
@@ -236,6 +257,37 @@ fn error_kind(response: &Value) -> &str {
         .unwrap_or("")
 }
 
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    let filter = format!("PID eq {pid}");
+    std::process::Command::new("tasklist")
+        .args(["/FI", &filter, "/NH"])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
+}
+
+fn assert_process_dead(pid: u32) {
+    for _ in 0..50 {
+        if !process_alive(pid) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("helper process {pid} was not reaped");
+}
+
 fn control_secret(path: &Path) -> String {
     fs::read_to_string(path).unwrap().trim().to_owned()
 }
@@ -248,6 +300,7 @@ fn sample_plugin_enable_invoke_disable_without_host_restart() {
     let _serial = serial_guard();
     let mut fixture = HostFixture::start("e2e", true, true);
     let client = fixture.client();
+    fixture.wait_for_plugin_state("ready");
     let host_pid = fixture.child.id();
 
     let snapshot = client.plugin_snapshot().expect("snapshot");
@@ -264,6 +317,8 @@ fn sample_plugin_enable_invoke_disable_without_host_restart() {
     assert_eq!(overlay.anchor, "top-right");
     assert_eq!(overlay.max_width, 320);
     assert_eq!(overlay.max_height, 240);
+    let helper_pid = snapshot.plugins[0].helper_pid.expect("running helper pid");
+    assert!(process_alive(helper_pid), "helper should be running");
 
     let outcome = client
         .invoke_plugin(
@@ -288,6 +343,7 @@ fn sample_plugin_enable_invoke_disable_without_host_restart() {
 
     let after_disable = client.plugin_snapshot().unwrap();
     assert_eq!(after_disable.plugins[0].state, "disabled");
+    assert_process_dead(helper_pid);
     assert!(after_disable.session_actions.is_empty());
     assert!(after_disable.session_tabs.is_empty());
     assert!(after_disable.session_overlays.is_empty());
@@ -365,6 +421,7 @@ fn plugin_control_is_default_off_and_never_accepts_other_tokens() {
     let _serial = serial_guard();
     let fixture = HostFixture::start("control", true, false);
     let client = fixture.client();
+    fixture.wait_for_plugin_state("ready");
 
     let snapshot = client.plugin_snapshot().unwrap();
     assert!(!snapshot.control_enabled);
@@ -429,6 +486,7 @@ fn snapshot_shape_is_contribution_only_and_never_contains_helper_output() {
     let _serial = serial_guard();
     let fixture = HostFixture::start("snapshot", true, true);
     let client = fixture.client();
+    fixture.wait_for_plugin_state("ready");
     let secret = control_secret(&fixture.token);
 
     let snapshot = fixture.raw_request("plugin.snapshot", json!({}));
@@ -480,6 +538,7 @@ fn plugin_rpc_does_not_change_runtime_observation() {
     let _serial = serial_guard();
     let fixture = HostFixture::start("runtime", true, true);
     let client = fixture.client();
+    fixture.wait_for_plugin_state("ready");
     let before = client.host_snapshot().expect("host snapshot before");
     assert!(before.snapshot.terminals.is_empty());
     assert!(!before.core_connected);

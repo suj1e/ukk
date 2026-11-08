@@ -108,6 +108,33 @@ impl PluginControlAuth {
                     problem: Some("capability file permissions must be 0600".into()),
                 };
             }
+            if let Err(problem) = verify_same_owner(&metadata, &path) {
+                return Self {
+                    path,
+                    secret: None,
+                    problem: Some(problem),
+                };
+            }
+            match path.canonicalize() {
+                Ok(canonical) => {
+                    if let Some(parent) = canonical.parent() {
+                        if let Err(problem) = verify_private_directory(parent) {
+                            return Self {
+                                path,
+                                secret: None,
+                                problem: Some(problem),
+                            };
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Self {
+                        path,
+                        secret: None,
+                        problem: Some(format!("cannot resolve capability path: {error}")),
+                    }
+                }
+            }
         }
         let read = (|| -> io::Result<String> {
             let file = fs::File::open(&path)?;
@@ -178,9 +205,13 @@ impl PluginControlAuth {
         let _created_parent = !parent.exists();
         fs::create_dir_all(parent)?;
         #[cfg(unix)]
-        if _created_parent {
+        {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+            if _created_parent {
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+            }
+            verify_private_directory(parent)
+                .map_err(|problem| io::Error::new(io::ErrorKind::PermissionDenied, problem))?;
         }
         let secret = format!("{}:{}", new_id(), new_id());
         let mut options = fs::OpenOptions::new();
@@ -214,6 +245,48 @@ impl PluginControlAuth {
     pub fn secret(&self) -> Option<&str> {
         self.secret.as_deref()
     }
+}
+
+#[cfg(unix)]
+fn verify_same_owner(metadata: &fs::Metadata, path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let euid = unsafe { libc::geteuid() };
+    if metadata.uid() != euid {
+        return Err(format!(
+            "capability file is owned by uid {} but the Host runs as uid {euid}: {}",
+            metadata.uid(),
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// The token decides plugin mutation authority, so its directory must be
+/// owned by the Host user and not group/other writable. This also refuses a
+/// token placed directly in a shared directory such as `/tmp`.
+#[cfg(unix)]
+fn verify_private_directory(directory: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let metadata = fs::metadata(directory)
+        .map_err(|error| format!("cannot inspect capability directory: {error}"))?;
+    if !metadata.is_dir() {
+        return Err("capability parent must be a directory".into());
+    }
+    let euid = unsafe { libc::geteuid() };
+    if metadata.uid() != euid {
+        return Err(format!(
+            "capability directory is owned by uid {} but the Host runs as uid {euid}: {}",
+            metadata.uid(),
+            directory.display()
+        ));
+    }
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(format!(
+            "capability directory must not be group/other writable: {}",
+            directory.display()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

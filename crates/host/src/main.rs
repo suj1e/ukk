@@ -9,6 +9,7 @@ mod local_auth;
 mod local_fs;
 #[cfg(unix)]
 mod peer;
+mod plugin_audit;
 mod plugin_control;
 mod plugin_service;
 mod rpc;

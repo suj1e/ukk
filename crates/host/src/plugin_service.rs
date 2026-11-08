@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
@@ -30,11 +31,12 @@ use serde_json::{json, Value};
 use ukk_domain::new_id;
 use ukk_plugin_api::{ClientPlatform, PluginId, ValidatedManifest};
 use ukk_plugin_host::{
-    redact, CommandDescriptor, ContributionSnapshot, HelperCommand, HostConfig, HostError,
-    InMemoryGrantStore, InvokeOutcome, InvokeRequest, NullAuditSink, PluginHost, PluginInstall,
-    PluginState, PluginStatus, ViewDescriptor,
+    redact, AuditKind, AuditOutcome, AuditRecord, AuditSink, CommandDescriptor,
+    ContributionSnapshot, HelperCommand, HostConfig, HostError, InMemoryGrantStore, InvokeOutcome,
+    InvokeRequest, PluginHost, PluginInstall, PluginState, PluginStatus, ViewDescriptor,
 };
 
+use crate::plugin_audit::BoundedAuditSink;
 use crate::plugin_control::PluginControlAuth;
 
 /// One registry file. `version` is exact; adding fields needs a new schema.
@@ -52,12 +54,16 @@ pub(crate) struct PluginService {
 
 struct ServiceInner {
     host: PluginHost,
+    audit: Arc<BoundedAuditSink>,
     registry_path: PathBuf,
     control_path: PathBuf,
     registry: Mutex<RegistryState>,
     /// Serializes enable/disable with their registry rewrite so the persisted
     /// flag cannot interleave with a concurrent transition.
     operations: Mutex<()>,
+    /// Registry-flagged plugins are enabled once, on a background thread, so a
+    /// hung helper cannot delay the Host accept loop.
+    startup_started: AtomicBool,
 }
 
 #[derive(Default)]
@@ -120,6 +126,7 @@ impl RegistryError {
 
 /// A typed RPC failure. `rpc_code` is a JSON-RPC server code; `kind` is the
 /// stable capability/lifecycle reason the Desktop can render.
+#[derive(Debug)]
 pub(crate) struct PluginRpcError {
     pub(crate) rpc_code: i32,
     pub(crate) kind: &'static str,
@@ -191,11 +198,15 @@ impl PluginService {
     }
 
     /// Load one explicit registry. A missing file yields an empty service.
+    /// Installation is synchronous (no process starts); registry-flagged
+    /// plugins are enabled later by [`Self::start_enabled_plugins`] on a
+    /// background thread so a hung helper cannot delay the accept loop.
     pub(crate) fn load(registry_path: PathBuf, control_path: PathBuf) -> Self {
+        let audit = Arc::new(BoundedAuditSink::default());
         let host = PluginHost::new(
             HostConfig::default(),
             Arc::new(InMemoryGrantStore::new()),
-            Arc::new(NullAuditSink),
+            audit.clone(),
         );
         let mut state = RegistryState::default();
         match load_registry(&registry_path) {
@@ -217,38 +228,75 @@ impl PluginService {
                                 )
                             })
                             .collect();
-                        for entry in loaded.iter().filter(|entry| entry.enabled) {
-                            if let Err(error) = host.enable(&entry.id) {
-                                // Runtime start-up failure is not a registry
-                                // error: the plugin stays installed as failed
-                                // and the snapshot reports it.
-                                eprintln!(
-                                    "ukk Host plugin `{}` failed to enable: {}",
-                                    entry.id,
-                                    error.code()
-                                );
-                            }
-                        }
                     }
                     Err(error) => {
                         state.loaded = false;
                         state.error = Some(error.render());
+                        audit.record(&AuditRecord::new(
+                            None,
+                            AuditKind::ManifestRejected,
+                            AuditOutcome::Denied,
+                            error.render(),
+                        ));
                     }
                 }
             }
             Err(error) => {
                 state.error = Some(error.render());
+                audit.record(&AuditRecord::new(
+                    None,
+                    AuditKind::ManifestRejected,
+                    AuditOutcome::Denied,
+                    error.render(),
+                ));
             }
         }
         Self {
             inner: Arc::new(ServiceInner {
                 host,
+                audit,
                 registry_path,
                 control_path,
                 registry: Mutex::new(state),
                 operations: Mutex::new(()),
+                startup_started: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Start registry-flagged plugins exactly once. The caller invokes this
+    /// after the local endpoint is accepting connections; failures stay
+    /// visible as `failed` in the snapshot and never block RPC.
+    pub(crate) fn start_enabled_plugins(&self) {
+        if self.inner.startup_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let ids: Vec<PluginId> = {
+            let registry = self.registry();
+            registry
+                .entries
+                .iter()
+                .filter(|(_, entry)| entry.enabled)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        if ids.is_empty() {
+            return;
+        }
+        let service = self.clone();
+        std::thread::spawn(move || {
+            for id in ids {
+                if let Err(error) = service.inner.host.enable(&id) {
+                    // Start-up failure is runtime state, not a registry error;
+                    // supervision/snapshot expose it as `failed`.
+                    eprintln!(
+                        "ukk Host plugin `{}` failed to enable: {}",
+                        id,
+                        error.code()
+                    );
+                }
+            }
+        });
     }
 
     pub(crate) fn control_auth(&self) -> PluginControlAuth {
@@ -262,14 +310,28 @@ impl PluginService {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Read-only snapshot. No capability is required and helper output is
-    /// never included: only life-cycle state and UI descriptors.
+    pub(crate) fn record(
+        &self,
+        plugin_id: Option<&str>,
+        kind: AuditKind,
+        outcome: AuditOutcome,
+        detail: impl Into<String>,
+    ) {
+        self.inner
+            .audit
+            .record(&AuditRecord::new(plugin_id, kind, outcome, detail));
+    }
+
+    /// Read-only in the capability sense. It requires no token and starts no
+    /// plugin, but it does call `supervise()` (inspect child processes) so a
+    /// crashed helper is reported as `failed`. Helper output is never included.
     pub(crate) fn snapshot(&self) -> Value {
         // Reflect unexpected helper exits before reporting state. This only
         // inspects child processes; it starts nothing.
         let _ = self.inner.host.supervise();
         let control = self.control_auth();
         let registry = self.registry();
+        let (audit_retained, audit_dropped) = self.inner.audit.summary();
         let mut plugins = Vec::new();
         for id in self.inner.host.installed() {
             let Some(status) = self.inner.host.status(&id) else {
@@ -289,6 +351,7 @@ impl PluginService {
                     .get(&id)
                     .map(|entry| entry.enabled)
                     .unwrap_or(false),
+                "helper_pid": self.inner.host.helper_pid(&id),
                 "command_count": status.command_count,
                 "view_count": status.view_count,
                 "queued_events": status.queued_events,
@@ -306,6 +369,11 @@ impl PluginService {
                 "loaded": registry.loaded,
                 "present": registry.present,
                 "error": registry.error.as_deref().map(redact),
+            },
+            "audit": {
+                "retained": audit_retained,
+                "dropped": audit_dropped,
+                "durable": false,
             },
             "plugins": plugins,
             "contributions": contributions_json(&contributions),
@@ -368,6 +436,12 @@ impl PluginService {
     fn require_registry_entry(&self, id: &PluginId) -> Result<(), PluginRpcError> {
         let registry = self.registry();
         if let Some(error) = registry.error.as_deref() {
+            self.record(
+                Some(id.as_str()),
+                AuditKind::ManifestRejected,
+                AuditOutcome::Denied,
+                format!("registry unavailable: {error}"),
+            );
             return Err(PluginRpcError::new(
                 -32066,
                 "registry_error",
@@ -375,6 +449,12 @@ impl PluginService {
             ));
         }
         if !registry.entries.contains_key(id) {
+            self.record(
+                Some(id.as_str()),
+                AuditKind::CommandDenied,
+                AuditOutcome::Denied,
+                "plugin is not in the explicit registry",
+            );
             return Err(plugin_error(HostError::UnknownPlugin {
                 plugin_id: id.to_string(),
             }));
@@ -397,48 +477,59 @@ impl PluginService {
         })
     }
 
-    /// Rewrite the registry atomically with one changed enabled flag. The
-    /// in-memory state is only advanced after the on-disk write succeeds.
+    /// Rewrite the registry atomically with one changed enabled flag. The file
+    /// is re-read and revalidated first, so a concurrent operator edit is
+    /// preserved instead of being overwritten with stale startup state. The
+    /// in-memory flag is only advanced after the on-disk write succeeds.
     fn persist_enabled(&self, id: &PluginId, enabled: bool) -> Result<(), RegistryError> {
         let mut registry = self.registry();
         if let Some(error) = registry.error.as_deref() {
             return Err(RegistryError::new("registry_unavailable", error));
         }
-        let Some(entry) = registry.entries.get(id) else {
+        if !registry.entries.contains_key(id) {
             return Err(RegistryError::new(
                 "unknown_plugin",
                 format!("plugin `{id}` is not in the registry"),
             ));
-        };
-        let manifest = entry.manifest.clone();
-        let helper = entry.helper.clone();
-        let mut entries = registry
-            .entries
+        }
+        // Re-read with the same validation as startup. If another process
+        // added, removed or made an entry unsafe, refuse the rewrite.
+        let (_, current) = load_registry(&self.inner.registry_path)?;
+        if !current.iter().any(|entry| &entry.id == id) {
+            return Err(RegistryError::new(
+                "unknown_plugin",
+                format!("plugin `{id}` is no longer in the registry"),
+            ));
+        }
+        let mut entries = current
             .iter()
-            .map(|(plugin_id, entry)| {
-                let plugin_enabled = if plugin_id == id {
+            .map(|entry| RegistryEntry {
+                id: entry.id.as_str().to_owned(),
+                manifest: entry.manifest_path.clone(),
+                helper: entry.helper_path.clone(),
+                enabled: if &entry.id == id {
                     enabled
                 } else {
                     entry.enabled
-                };
-                RegistryEntry {
-                    id: plugin_id.as_str().to_owned(),
-                    manifest: entry.manifest.clone(),
-                    helper: entry.helper.clone(),
-                    enabled: plugin_enabled,
-                }
+                },
             })
             .collect::<Vec<_>>();
         // `BTreeMap` iteration is already sorted, but sort explicitly so the
         // file format is stable even if the implementation changes.
         entries.sort_by(|left, right| left.id.cmp(&right.id));
         write_registry(&self.inner.registry_path, &entries)?;
-        let entry = registry.entries.get_mut(id).ok_or_else(|| {
-            RegistryError::new("unknown_plugin", format!("plugin `{id}` disappeared"))
-        })?;
-        entry.enabled = enabled;
-        entry.manifest = manifest;
-        entry.helper = helper;
+        // Keep installed entries' cached flags and paths aligned with the
+        // re-read file; newly added entries are installed only on restart.
+        for (plugin_id, state) in registry.entries.iter_mut() {
+            if let Some(current) = current.iter().find(|entry| &entry.id == plugin_id) {
+                state.enabled = current.enabled;
+                state.manifest = current.manifest_path.clone();
+                state.helper = current.helper_path.clone();
+            }
+        }
+        if let Some(entry) = registry.entries.get_mut(id) {
+            entry.enabled = enabled;
+        }
         Ok(())
     }
 }
@@ -462,8 +553,9 @@ pub(crate) fn dispatch(
     }
 
     let control = service.control_auth();
+    let hint = params.get("plugin_id").and_then(Value::as_str);
     if !control.is_enabled() {
-        return Err(match control.problem() {
+        let error = match control.problem() {
             Some(problem) => PluginRpcError::new(
                 -32063,
                 "plugin_control_insecure",
@@ -474,11 +566,27 @@ pub(crate) fn dispatch(
                 "plugin_control_disabled",
                 "plugin-control capability is disabled; create its separate token file first",
             ),
-        });
+        };
+        service.record(
+            hint,
+            AuditKind::PluginControlDenied,
+            AuditOutcome::Denied,
+            format!(
+                "method={method} kind={} (capability unavailable)",
+                error.kind
+            ),
+        );
+        return Err(error);
     }
     // Deliberately only `control`. `auth` (workspace metadata) and any
     // agent-control value are never accepted for plugin control.
     if !control.authorized(params.get("control").and_then(Value::as_str)) {
+        service.record(
+            hint,
+            AuditKind::PluginControlDenied,
+            AuditOutcome::Denied,
+            format!("method={method} kind=plugin_control_unauthorized"),
+        );
         return Err(PluginRpcError::new(
             -32062,
             "plugin_control_unauthorized",
@@ -486,7 +594,18 @@ pub(crate) fn dispatch(
         ));
     }
 
-    let plugin_id = parse_plugin_id(params)?;
+    let plugin_id = match parse_plugin_id(params) {
+        Ok(plugin_id) => plugin_id,
+        Err(error) => {
+            service.record(
+                hint,
+                AuditKind::CommandDenied,
+                AuditOutcome::Denied,
+                format!("method={method} kind=invalid_params"),
+            );
+            return Err(error);
+        }
+    };
     match method {
         "plugin.enable" => service.enable(&plugin_id),
         "plugin.disable" => service.disable(&plugin_id),
@@ -824,12 +943,83 @@ fn inspect_regular_file(
             ));
         }
     }
-    path.canonicalize().map(Some).map_err(|error| {
+    let canonical = path.canonicalize().map_err(|error| {
         RegistryError::new(
             "registry_unreadable",
             format!("cannot resolve {label} {}: {error}", path.display()),
         )
-    })
+    })?;
+    #[cfg(unix)]
+    verify_same_owner_and_private_parent(&canonical, &metadata, label)?;
+    Ok(Some(canonical))
+}
+
+/// Require the file and its real parent directory to belong to the Host user,
+/// and the parent to have no group/other write bits. Without this, a registry
+/// or helper under `/tmp` could be swapped by another local user between Host
+/// starts even though the file itself is not group-writable.
+#[cfg(unix)]
+fn verify_same_owner_and_private_parent(
+    canonical: &Path,
+    metadata: &fs::Metadata,
+    label: &str,
+) -> Result<(), RegistryError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let euid = unsafe { libc::geteuid() };
+    if metadata.uid() != euid {
+        return Err(RegistryError::new(
+            "registry_insecure",
+            format!(
+                "{label} is owned by uid {} but the Host runs as uid {euid}: {}",
+                metadata.uid(),
+                canonical.display()
+            ),
+        ));
+    }
+    let parent = canonical.parent().ok_or_else(|| {
+        RegistryError::new(
+            "registry_insecure",
+            format!("{label} has no parent directory: {}", canonical.display()),
+        )
+    })?;
+    let parent_metadata = fs::metadata(parent).map_err(|error| {
+        RegistryError::new(
+            "registry_unreadable",
+            format!(
+                "cannot inspect {label} parent {}: {error}",
+                parent.display()
+            ),
+        )
+    })?;
+    if !parent_metadata.is_dir() {
+        return Err(RegistryError::new(
+            "registry_insecure",
+            format!("{label} parent is not a directory: {}", parent.display()),
+        ));
+    }
+    if parent_metadata.uid() != euid {
+        return Err(RegistryError::new(
+            "registry_insecure",
+            format!(
+                "{label} parent is owned by uid {} but the Host runs as uid {euid}: {}",
+                parent_metadata.uid(),
+                parent.display()
+            ),
+        ));
+    }
+    let mode = parent_metadata.permissions().mode();
+    if mode & 0o022 != 0 {
+        return Err(RegistryError::new(
+            "registry_insecure",
+            format!(
+                "{label} parent must not be group/other writable (mode {:o}): {}",
+                mode & 0o777,
+                parent.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn write_registry(path: &Path, entries: &[RegistryEntry]) -> Result<(), RegistryError> {
@@ -972,6 +1162,51 @@ mod tests {
         let path = write_registry_file(&root, &registry_json(entries));
         let service = PluginService::load(path.clone(), root.join("plugin-control"));
         (service, root)
+    }
+
+    fn token_file(root: &Path, insecure: bool) -> (PathBuf, String) {
+        let path = root.join("plugin-control-token");
+        let secret = format!("{}:{}", new_id(), new_id());
+        fs::write(&path, format!("{secret}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = if insecure { 0o644 } else { 0o600 };
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let _ = insecure;
+        (path, secret)
+    }
+
+    #[cfg(unix)]
+    fn process_alive(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    fn process_alive(pid: u32) -> bool {
+        let filter = format!("PID eq {pid}");
+        std::process::Command::new("tasklist")
+            .args(["/FI", &filter, "/NH"])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+            .unwrap_or(false)
+    }
+
+    fn assert_process_dead(pid: u32) {
+        for _ in 0..50 {
+            if !process_alive(pid) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("helper process {pid} was not reaped");
     }
 
     #[test]
@@ -1124,8 +1359,143 @@ mod tests {
     #[test]
     fn snapshot_never_contains_helper_output() {
         let (service, _root) = service_for(&[sample_entry()]);
+        let id = PluginId::parse("dev.ukk.sample.session-action").unwrap();
+        service.enable(&id).expect("enable sample helper");
+        let outcome = service
+            .invoke(
+                id,
+                "sample.session.ping".into(),
+                Some("session-1".into()),
+                Value::Null,
+            )
+            .expect("invoke sample command");
+        assert_eq!(outcome.value["message"], "pong");
         let text = service.snapshot().to_string();
-        assert!(!text.contains("pong"));
+        assert!(
+            !text.contains("pong"),
+            "helper output must not enter snapshot"
+        );
         assert!(!text.contains("capabilities_used"));
+        assert!(service.snapshot()["plugins"][0]["helper_pid"].is_u64());
+        drop(service);
+    }
+
+    #[test]
+    fn malformed_registry_fails_closed_with_registry_error() {
+        let root = scratch("malformed-registry");
+        let path = write_registry_file(&root, r#"{"version":1,"plugins":["#);
+        let (token, secret) = token_file(&root, false);
+        let service = PluginService::load(path, token);
+        let error = dispatch(
+            "plugin.enable",
+            &json!({"plugin_id": "dev.ukk.sample.session-action", "control": secret}),
+            &service,
+        )
+        .unwrap_err();
+        assert_eq!(error.rpc_code, -32066);
+        assert_eq!(error.kind, "registry_error");
+        assert!(service
+            .inner
+            .audit
+            .records()
+            .iter()
+            .any(|record| record.kind == AuditKind::ManifestRejected
+                && record.outcome == AuditOutcome::Denied));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn insecure_token_path_is_reported_and_audited() {
+        let root = scratch("insecure-token-rpc");
+        let path = write_registry_file(&root, &registry_json(&[sample_entry()]));
+        let (token, secret) = token_file(&root, true);
+        let service = PluginService::load(path, token);
+        assert!(!service.snapshot()["control_enabled"].as_bool().unwrap());
+        let error = dispatch(
+            "plugin.enable",
+            &json!({"plugin_id": "dev.ukk.sample.session-action", "control": secret}),
+            &service,
+        )
+        .unwrap_err();
+        assert_eq!(error.rpc_code, -32063);
+        assert_eq!(error.kind, "plugin_control_insecure");
+        assert!(service
+            .inner
+            .audit
+            .records()
+            .iter()
+            .any(|record| record.kind == AuditKind::PluginControlDenied
+                && record.outcome == AuditOutcome::Denied));
+    }
+
+    #[test]
+    fn dropping_the_service_reaps_the_helper() {
+        let (service, _root) = service_for(&[sample_entry()]);
+        let id = PluginId::parse("dev.ukk.sample.session-action").unwrap();
+        service.enable(&id).expect("enable sample helper");
+        let pid = service
+            .inner
+            .host
+            .helper_pid(&id)
+            .expect("running helper pid");
+        assert!(process_alive(pid), "helper {pid} should be running");
+        drop(service);
+        assert_process_dead(pid);
+    }
+
+    #[test]
+    fn registry_rewrite_preserves_concurrent_entries() {
+        let root = scratch("concurrent-registry");
+        let sample = sample_entry();
+        let path = write_registry_file(&root, &registry_json(std::slice::from_ref(&sample)));
+        let service = PluginService::load(path.clone(), root.join("plugin-control"));
+
+        // Another operator adds a second entry while the Host is running.
+        let other_helper = std::env::current_exe().unwrap().canonicalize().unwrap();
+        let stem = other_helper
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap()
+            .to_owned();
+        let other_manifest = root.join("other-plugin.toml");
+        fs::write(
+            &other_manifest,
+            format!(
+                r#"manifest_version = 1
+id = "dev.ukk.other.plugin"
+name = "Other plugin"
+version = "0.1.0"
+api = ">=0.1,<0.2"
+trust = "first-party"
+entrypoint = "{stem}"
+"#
+            ),
+        )
+        .unwrap();
+        let other = RegistryEntry {
+            id: "dev.ukk.other.plugin".into(),
+            manifest: other_manifest.canonicalize().unwrap(),
+            helper: other_helper,
+            enabled: false,
+        };
+        fs::write(&path, registry_json(&[sample.clone(), other])).unwrap();
+
+        service
+            .persist_enabled(
+                &PluginId::parse("dev.ukk.sample.session-action").unwrap(),
+                true,
+            )
+            .expect("persist enabled flag");
+        let written: RegistryFile =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written.plugins.len(), 2);
+        assert!(written
+            .plugins
+            .iter()
+            .any(|entry| entry.id == "dev.ukk.other.plugin"));
+        assert!(written
+            .plugins
+            .iter()
+            .any(|entry| entry.id == sample.id && entry.enabled));
     }
 }

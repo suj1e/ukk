@@ -371,6 +371,8 @@ pub struct PluginStatusView {
     pub state: String,
     pub installed: bool,
     pub enabled_by_registry: bool,
+    /// OS process id while a helper is running; `None` for in-process plugins.
+    pub helper_pid: Option<u32>,
     pub command_count: usize,
     pub view_count: usize,
     pub queued_events: usize,
@@ -459,6 +461,10 @@ fn parse_plugin_status(row: &Value) -> Result<PluginStatusView, HostError> {
             .get("enabled_by_registry")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        helper_pid: row
+            .get("helper_pid")
+            .and_then(Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok()),
         command_count: row
             .get("command_count")
             .and_then(Value::as_u64)

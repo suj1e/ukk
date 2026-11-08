@@ -736,6 +736,7 @@ mod tests {
                 state: "ready".into(),
                 installed: true,
                 enabled_by_registry: true,
+                helper_pid: Some(4242),
                 command_count: 1,
                 view_count: 3,
                 queued_events: 0,
