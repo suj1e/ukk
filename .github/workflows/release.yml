@@ -76,6 +76,12 @@ jobs:
           lipo -create "$RUNNER_TEMP/ukk-input-arm64" "$RUNNER_TEMP/ukk-input-x86_64" -output apps/desktop/resources/darwin/ukk-input
           chmod +x apps/desktop/resources/darwin/ukk-input
 
+      - name: Prefetch pinned terminal library
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/prefetch_native.py --target '${{ matrix.target }}'
+
       - name: Package
         working-directory: apps/desktop
         shell: bash
