@@ -115,6 +115,10 @@ generated `project.pbxproj` to match the desktop version.
 | Linux | `.deb` and `.tar.gz` plus the loose binary and `.desktop` entry | Desktop, app metadata; `bin/ukk-bridge` and `bin/ukk-relay` |
 | iOS | `ukk-unsigned.ipa` + `ukk-unsigned.ipa.sha256` | Device build of `UkkCompanion.app` with no signature |
 
+The iOS job runs `apps/ios/scripts/fetch-webrtc.sh` (checksum-pinned,
+retrying) before generating the project, because the LiveKit WebRTC xcframework
+is not committed.
+
 These files are uploaded as GitHub Actions artifacts with a 14-day retention.
 They are development artifacts, not a download page. Anything published later
 must repeat the labels and checks below.

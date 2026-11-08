@@ -47,7 +47,7 @@ the connection is connecting, degraded, offline, suspended or revoked.
   - `remote.status` loads devices, grants and expiries; `remote.revoke` revokes.
     Revoking this device ends the connection and requires re-pairing.
 - **Remote Screen** (`Screen/`)
-  - LiveKitWebRTC `150.7871.05` via SPM. The Host's `screen.start` offer and
+  - LiveKitWebRTC `150.7871.05` via the local Swift package, fetched by `scripts/fetch-webrtc.sh` and checksum-verified (not committed). The Host's `screen.start` offer and
     ICE (STUN/TURN) configuration feed an `LKRTC*` peer connection; the answer
     returns through `screen.answer`; the video track renders in
     `LKRTCMTLVideoView` inside the Session tile, with expand/collapse and
