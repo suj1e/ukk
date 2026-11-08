@@ -25,11 +25,11 @@ fn revision_conflict(error: &HostError) -> bool {
 }
 
 impl Workspace {
-    fn mutate(
+    pub(super) fn mutate(
         &mut self,
         method: &'static str,
         params: Value,
-        select_created_session: bool,
+        intent: MutationIntent,
         cx: &mut Context<Self>,
     ) {
         if self.mutation_busy {
@@ -59,14 +59,43 @@ impl Workspace {
                         view.in_flight_action = None;
                         view.in_flight_session = None;
                         view.conflict = None;
-                        if select_created_session {
-                            view.selected_session =
-                                value.get("id").and_then(Value::as_str).map(str::to_owned);
-                            view.selected = None;
-                            view.focus_touched = true;
-                            view.local_focus
-                                .set_selected_session(view.selected_session.as_deref());
-                            view.persist_local_focus(cx);
+                        match intent {
+                            MutationIntent::CreatedSession => {
+                                view.selected_session =
+                                    value.get("id").and_then(Value::as_str).map(str::to_owned);
+                                view.selected = None;
+                                view.focus_touched = true;
+                                view.local_focus
+                                    .set_selected_session(view.selected_session.as_deref());
+                                view.persist_local_focus(cx);
+                            }
+                            MutationIntent::CreatedSpace => {
+                                match value.get("id").and_then(Value::as_str) {
+                                    Some(id) => {
+                                        view.selected_space = Some(id.to_owned());
+                                        view.selected = None;
+                                        // A new Space has no Session yet; focus it
+                                        // explicitly instead of guessing one.
+                                        view.selected_session = None;
+                                        view.focus_touched = true;
+                                        view.local_focus.set_selected_session(None);
+                                        view.persist_local_focus(cx);
+                                    }
+                                    None => {
+                                        view.mutation_error = Some(
+                                            "Host did not return the Space identity.".into(),
+                                        )
+                                    }
+                                }
+                                view.space_editor.close();
+                            }
+                            MutationIntent::RenamedSpace => {
+                                // Rename never changes the selected Space or
+                                // Session; the refreshed snapshot carries the
+                                // new title.
+                                view.space_editor.close();
+                            }
+                            MutationIntent::None => {}
                         }
                         if let Some(Ok(update)) = fresh {
                             view.apply_workspace_update(update, cx);
@@ -80,7 +109,17 @@ impl Workspace {
                     Err(error) => {
                         view.pending_tab_focus = None;
                         view.pending_pane_focus = None;
-                        if revision_conflict(&error) {
+                        if matches!(
+                            intent,
+                            MutationIntent::CreatedSpace | MutationIntent::RenamedSpace
+                        ) {
+                            // Space metadata has no revision CAS. Surface the
+                            // Host message inside the form and keep the form
+                            // open; never offer the pane-layout retry path.
+                            view.in_flight_action = None;
+                            view.in_flight_session = None;
+                            view.space_editor.error = Some(spaces::space_error_text(&error));
+                        } else if revision_conflict(&error) {
                             let action = view.in_flight_action.take();
                             let session_id = view.in_flight_session.take();
                             view.conflict = Some(ConflictNotice {
@@ -112,7 +151,7 @@ impl Workspace {
             .or_else(|| self.domain.spaces.first().map(|s| s.id.clone()));
         let Some(space_id) = space_id else {
             self.mutation_error =
-                Some("No Space yet. Create one with ukk-host space-create first.".into());
+                Some("No Space yet. Use + New Space in the sidebar to create one.".into());
             cx.notify();
             return;
         };
@@ -129,7 +168,7 @@ impl Workspace {
                 "space_id":space_id,
                 "title":format!("New Session {}", count + 1)
             }),
-            true,
+            MutationIntent::CreatedSession,
             cx,
         );
     }
@@ -220,7 +259,7 @@ impl Workspace {
         };
         self.in_flight_action = Some(retry_action);
         self.in_flight_session = Some(session_id);
-        self.mutate(method, params, false, cx);
+        self.mutate(method, params, MutationIntent::None, cx);
     }
 
     /// Explicit user retry after a stale CAS rejection: reload the authoritative

@@ -147,6 +147,35 @@ time.sleep(3)
     assert_eq!(repeated["id"], created["id"]);
     let fresh = client.workspace_snapshot().unwrap();
     assert_eq!(fresh.sessions.len(), 2);
+
+    // Space creation and rename are metadata-only and idempotent over the same
+    // authenticated IPC. They must not create Sessions, AgentRuns or terminals.
+    let space_request = new_id();
+    let space_params = json!({
+        "request_id":space_request,
+        "title":"Desktop Space",
+        "project_root":"/src/desktop-space"
+    });
+    let space = client
+        .local_workspace_mutation("workspace.space.create", space_params.clone())
+        .expect("create a Space over authenticated Host IPC");
+    assert_eq!(space["id"], space_request);
+    let repeated_space = client
+        .local_workspace_mutation("workspace.space.create", space_params)
+        .expect("a retried Space creation must be idempotent");
+    assert_eq!(repeated_space, space);
+    let renamed = client
+        .local_workspace_mutation(
+            "workspace.space.rename",
+            json!({"space_id":space_request,"title":"Desktop Space renamed"}),
+        )
+        .expect("rename the Space over authenticated Host IPC");
+    assert_eq!(renamed["title"], "Desktop Space renamed");
+    let after_spaces = client.workspace_snapshot().unwrap();
+    assert_eq!(after_spaces.spaces.len(), 3);
+    assert_eq!(after_spaces.sessions.len(), 2);
+    assert!(after_spaces.agent_runs.is_empty());
+
     let root = fresh
         .layouts
         .iter()

@@ -28,7 +28,9 @@ pub(super) fn handle_request_with_plugins(
             "jsonrpc":"2.0","id":id,
             "result":{"status":"ok","protocol":"ukk-local-spike-2","agent_runtime_read_only":false,"agent_runtime_control":"separate-capability-opt-in","plugin_control":"separate-capability-opt-in","workspace_edits":"local-capability-only","omp_rpc":omp_service::status()}
         }),
-        method @ ("workspace.session.create"
+        method @ ("workspace.space.create"
+        | "workspace.space.rename"
+        | "workspace.session.create"
         | "workspace.pane.split"
         | "workspace.pane.close"
         | "workspace.pane.resize"
@@ -306,6 +308,54 @@ mod tests {
             handle_request(&with_bad_token, &broker, &auth)["error"]["code"],
             -32030
         );
+    }
+
+    #[test]
+    fn space_mutations_require_workspace_capability_and_never_expose_runtime_fields() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        for (method, params) in [
+            (
+                "workspace.space.create",
+                json!({"request_id":"00000000-0000-4000-8000-000000000000",
+                       "title":"ukk","project_root":"/work"}),
+            ),
+            (
+                "workspace.space.rename",
+                json!({"space_id":"space-1","title":"ukk"}),
+            ),
+        ] {
+            let request = json!({
+                "jsonrpc":"2.0","id":52,"method":method,"params":params.clone()
+            });
+            assert_eq!(
+                handle_request(&request, &broker, &auth)["error"]["code"],
+                -32030
+            );
+            let mut with_control = request.clone();
+            with_control["params"]["control"] = json!("agent-control-token");
+            with_control["params"]["intent"] = json!("user");
+            assert_eq!(
+                handle_request(&with_control, &broker, &auth)["error"]["code"],
+                -32030
+            );
+            let mut with_runtime = request;
+            with_runtime["params"]["terminal"] = json!("t1");
+            with_runtime["params"]["core_id"] = json!("core");
+            assert_eq!(
+                handle_request(&with_runtime, &broker, &auth)["error"]["code"],
+                -32030
+            );
+        }
+        let agent = handle_request(
+            &json!({
+                "jsonrpc":"2.0","id":53,"method":"workspace.agent.create",
+                "params":{"auth":auth.test_token()}
+            }),
+            &broker,
+            &auth,
+        );
+        assert_eq!(agent["error"]["code"], -32601);
     }
 
     #[test]
