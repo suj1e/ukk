@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -33,12 +34,13 @@ type State struct {
 	ActionErr string
 	Stopping  bool
 	Expanded  map[string]bool
+	FullText  map[string]bool
 	List      ui.ListState
 }
 
 // New returns an empty conversation state.
 func New(sessionID string) *State {
-	return &State{SessionID: sessionID, Expanded: map[string]bool{}}
+	return &State{SessionID: sessionID, Expanded: map[string]bool{}, FullText: map[string]bool{}}
 }
 
 type rowKind int
@@ -185,10 +187,45 @@ func message(c *ui.Context, st *State, m agents.Message) {
 					}
 				},
 			}
-			if m.Final {
-				markdown.View(c, m.Text, opts)
-			} else {
-				markdown.Stream(c, m.Text, opts)
+			text := m.Text
+			limit := 64 << 10
+			if st.FullText[m.ID] {
+				limit = 2 << 20
+			}
+			truncated := len(text) > limit
+			if truncated {
+				text = text[:limit]
+				if index := strings.LastIndexByte(text, '\n'); index > limit/2 {
+					text = text[:index]
+				} else {
+					for len(text) > 0 && !utf8.ValidString(text) {
+						text = text[:len(text)-1]
+					}
+				}
+			}
+			for text != "" {
+				part := text
+				if len(part) > 64<<10 {
+					cut := 64 << 10
+					if index := strings.LastIndexByte(part[:cut], '\n'); index > cut/2 {
+						cut = index
+					}
+					part = text[:cut]
+				}
+				text = text[len(part):]
+				if m.Final || text != "" {
+					markdown.View(c, part, opts)
+				} else {
+					markdown.Stream(c, part, opts)
+				}
+			}
+			if truncated {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					kit.Meta(c, fmt.Sprintf("Showing %d KiB of %d KiB.", limit>>10, len(m.Text)>>10))
+					if !st.FullText[m.ID] {
+						ui.Button(c, "Show more").OnClick(func() { st.FullText[m.ID] = true })
+					}
+				})
 			}
 		})
 	}
