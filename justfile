@@ -25,6 +25,11 @@ docs:
     python3 scripts/check_docs.py
     python3 scripts/check_versions.py
 
+# Prove archive layout, Info.plist, checksum coverage and determinism with
+# fake binaries; runs on macOS, Linux and Windows without extra dependencies.
+package-test:
+    python3 scripts/test_package_release.py
+
 desktop-check:
     cargo fmt --manifest-path apps/desktop/Cargo.toml --all -- --check
     # Local check uses the runtime-shader escape hatch when the Metal Toolchain
@@ -35,7 +40,7 @@ desktop-check:
 desktop-test:
     cargo test --manifest-path apps/desktop/Cargo.toml --features gpui_platform/runtime_shaders
 
-check: docs fmt-check test clippy desktop-check
+check: docs package-test fmt-check test clippy desktop-check
 
 host:
     cargo run -p ukk-host -- serve
