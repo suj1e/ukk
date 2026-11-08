@@ -1,5 +1,7 @@
 # ukk — Delivery roadmap and parallel Agent work queue
 
+> **v1 completion goal:** [docs/goals/v1-complete.md](goals/v1-complete.md). This roadmap is the execution queue; the goal defines the final unsigned artifacts and acceptance.
+
 > Updated 2026-11-08. Live evidence and open gaps: [status.md](status.md). This replaces the stale progress summary in the former uppercase `ROADMAP.md`; the full product vision remains in [PRODUCT.md](requirements.md).
 >
 > **目标：** 完整的跨设备、多 Agent 原生 Workspace；不是固定流水线，也不是单独的远控产品。Desktop = GPUI on macOS/Windows/Linux. Mobile = SwiftUI iOS/iPadOS. herdr-core owns Agent execution. Remote Screen is a permissioned floating feature *inside a Session*.
