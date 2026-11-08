@@ -333,6 +333,7 @@ impl Workspace {
                     )),
             );
         if let Some(root) = root {
+            view = view.child(self.session_plugin_section(&session.id, cx));
             view = view.child(
                 div()
                     .flex()
@@ -342,6 +343,7 @@ impl Workspace {
                     .child(self.session_pane(root, cx)),
             );
         } else {
+            view = view.child(self.session_plugin_section(&session.id, cx));
             view = view.child(
                 div()
                     .p_6()

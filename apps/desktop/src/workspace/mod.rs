@@ -17,6 +17,7 @@ mod keymap;
 mod navigation;
 mod pane_focus;
 mod panes;
+mod plugins;
 mod render;
 mod repository;
 mod repository_load;
@@ -147,6 +148,15 @@ pub(crate) struct Workspace {
     workspace_sync_error: Option<String>,
     /// Read-only Files/Diff/Activity inspection for the selected Session.
     repository: repository::RepositorySurfaces,
+    /// Host plugin broker projection. This contains descriptors only, never
+    /// helper output or a capability token.
+    plugin_snapshot: ukk_host_client::PluginSnapshot,
+    plugin_snapshot_error: Option<String>,
+    plugin_refreshing: bool,
+    plugin_busy: bool,
+    plugin_notice: Option<plugins::PluginNotice>,
+    /// Selected `session.tab` view id. Selection is local and never invokes.
+    plugin_active_tab: Option<String>,
 }
 
 impl Workspace {
@@ -189,9 +199,16 @@ impl Workspace {
             workspace_revision: -1,
             workspace_sync_error: None,
             repository: repository::RepositorySurfaces::default(),
+            plugin_snapshot: ukk_host_client::PluginSnapshot::default(),
+            plugin_snapshot_error: None,
+            plugin_refreshing: false,
+            plugin_busy: false,
+            plugin_notice: None,
+            plugin_active_tab: None,
         };
         view.watch_updates(cx);
         view.watch_workspace(cx);
+        view.watch_plugins(cx);
         view.refresh(cx);
         view.load_local_focus(cx);
         view

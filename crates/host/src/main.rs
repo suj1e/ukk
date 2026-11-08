@@ -9,6 +9,9 @@ mod local_auth;
 mod local_fs;
 #[cfg(unix)]
 mod peer;
+mod plugin_audit;
+mod plugin_control;
+mod plugin_service;
 mod rpc;
 mod runtime;
 mod runtime_api;
@@ -19,7 +22,8 @@ mod workspace_watch;
 
 use broker::Broker;
 use local_auth::LocalAuth;
-use rpc::handle_request;
+use plugin_service::PluginService;
+use rpc::handle_request_with_plugins;
 use serde_json::{json, Value};
 #[cfg(unix)]
 use std::os::unix::{

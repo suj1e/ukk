@@ -43,7 +43,7 @@ There is **no TCP listener and no TCP fallback**.
 | Windows peer identity | Server verifies the client process token SID; client verifies the server process token SID. Both compare against the current user. Client opens with IDENTIFICATION-only QoS. |
 | Deadlines/cancellation | Unix read/write timeouts; Windows overlapped I/O with bounded waits and `CancelIoEx`. A silent or non-reading peer cannot pin a worker. The framed `hc connect` handshake and frame writes also have bounded deadlines and kill/reap the client child on expiry. |
 | Resource bounds | 32 concurrent clients, 256 requests per connection, 64 KiB request, 4 MiB reply, 60s idle read, 10s write. Excess clients get a bounded error and are closed. |
-| Capability separation | Local mutation token authorizes workspace metadata only. Agent mutation, terminal input and screen control require the separate, default-off `agent-control` capability described below; the workspace token never authorizes them. |
+| Capability separation | Local mutation token authorizes workspace metadata only. Agent mutation, terminal input and screen control require the separate, default-off `agent-control` capability described below; the workspace token never authorizes them. Plugin enable/disable/invoke require a third, separate default-off `plugin.control` token. |
 
 ### Security consequences and residual risks
 
@@ -256,6 +256,88 @@ Closing a Pane/Tab/Session/window, detaching a framed view or calling
 `runtime.detach` is local and performs **zero** runtime calls. There is no
 code path from view close to `terminal.kill` or `terminal.rm`.
 
+
+## Plugin broker and `plugin.control`
+
+The Host owns one plugin supervisor (`crates/host/src/plugin_service.rs`). It
+loads plugins only from an explicit registry file and never scans arbitrary
+directories:
+
+- default `~/.ukk/plugins/registry.json`, override `UKK_PLUGIN_REGISTRY`;
+- each entry carries a plugin id, absolute manifest path, absolute helper path
+  and the startup `enabled` flag;
+- the registry, manifest and helper must be regular non-symlink files; on Unix
+  group/other write bits are refused, the files must be owned by the Host euid,
+  and their real parent directories must be owned by that user with no
+  group/other write bits (a path under `/tmp` is refused, and the helper must
+  be executable);
+- the manifest must validate, its id must equal the registry id, its
+  `entrypoint` must equal the helper file stem, and duplicate ids/paths/command
+  ids refuse the whole registry (fail closed);
+- a missing registry means no plugins, never a discovery fallback.
+
+Installation starts no process. Registry-flagged plugins are enabled on a
+background thread only after the local endpoint is bound, so a hung helper
+cannot delay Host RPC. `plugin.enable`/`disable` re-read and revalidate the
+registry before an atomic rewrite, preserving concurrent operator edits and
+refusing an unsafe concurrent edit.
+
+The Host installs a bounded in-memory audit sink (512 records) and records
+registry rejections, RPC-level `plugin.control` denials, invalid requests and
+supervisor decisions (including crashes/timeouts). It is **not durable** and
+has no audit RPC; this is not a substitute for durable audit persistence.
+
+A helper is a subprocess with the Host user's full OS identity. This is process
+separation, cleared environment, bounded framing, deadlines and kill-on-disable
+— **not an OS sandbox**. Third-party helpers have not been exercised through
+this wiring; only the first-party sample is verified.
+
+`plugin.control` is a third local capability, separate from both the workspace
+metadata token and `agent-control`:
+
+- Default path `~/.ukk/run/agent-host.plugin-control` (next to the Host socket
+  with extension `.plugin-control`), or `UKK_PLUGIN_CONTROL_TOKEN_FILE`;
+  Windows uses `%LOCALAPPDATA%\ukk\run\agent-host.plugin-control`.
+- Regular non-symlink ASCII file, at least 60 characters, mode 0600 on Unix.
+  Malformed or insecure files leave control disabled with a typed reason. On
+  Unix the file must be owned by the Host euid and its real parent directory
+  must also be euid-owned with no group/other write bits, so `/tmp` overrides
+  are refused.
+- `ukk-host plugin-control-enable` provisions it explicitly and refuses to
+  overwrite; `plugin-control-disable` removes it; `plugin-control-status`
+  reports state without the secret.
+- The Host reloads it on every mutating request, so removal revokes plugin
+  control immediately without a Host restart.
+- `plugin.enable`, `plugin.disable` and `plugin.invoke` read only the distinct
+  `control` field. The workspace `auth` field and agent-control values are
+  never accepted. `plugin.snapshot` is read-only and capability-free.
+- Enabling/disabling rewrites only the registry's `enabled` flag atomically
+  (0600 temp + rename). It never restarts the Host, and it never sends an
+  Agent/terminal stop signal; the plugin service has no runtime handle.
+
+Local-only threat model: the capability is same-user, same-host defense in
+depth. It is not remote authentication and does not protect against a process
+that can already read the user's profile. A malicious same-user process can
+read the token and the registry, so this is not a sandbox between local
+applications.
+
+## Security test evidence (plugin wiring)
+
+| Invariant | Test |
+|---|---|
+| Registry rejects unknown fields, wrong version, relative paths, symlinks, writable files, duplicate ids and id/helper mismatches | `crates/host/src/plugin_service.rs` unit tests |
+| Default-off control; provisioned token needed; workspace/agent-shaped tokens rejected in both `auth` and `control` | `plugin_control_is_default_off_and_never_accepts_other_tokens` |
+| Sample helper installs, enables, invokes, disables and re-enables without a Host restart; disable reaps the helper (OS liveness) | `sample_plugin_enable_invoke_disable_without_host_restart` (`crates/host/tests/plugin_wiring.rs`) |
+| Snapshot is contribution-only and never contains helper output or the token; helper pid is reported | `snapshot_never_contains_helper_output`, `snapshot_shape_is_contribution_only_and_never_contains_helper_output` |
+| Malformed registry fails closed with `-32066`; insecure token path with `-32063`, both audited | `malformed_registry_fails_closed_with_registry_error`, `insecure_token_path_is_reported_and_audited` |
+| Registry rewrite preserves a concurrent operator entry | `registry_rewrite_preserves_concurrent_entries` |
+| Dropping the service reaps the helper and a bounded audit sink evicts oldest records | `dropping_the_service_reaps_the_helper`, `plugin_audit` tests |
+| Plugin work does not alter the Host runtime/terminal observation | `plugin_rpc_does_not_change_runtime_observation` |
+| CLI provisions/revokes the separate token with 0600 permissions | `plugin_control_cli_provisions_and_revokes_the_separate_token` |
+
+**NOT VERIFIED:** third-party helper behaviour, Desktop real-window acceptance
+on each OS, OS sandboxing/entitlements, capture/input, and durable
+grant/audit persistence.
 
 ## Credential management
 

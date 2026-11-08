@@ -333,14 +333,252 @@ impl WorkspaceUpdate {
     }
 }
 
+/// One read-only UI descriptor contributed by an enabled plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginView {
+    pub plugin_id: String,
+    pub view_id: String,
+    pub slot: String,
+    pub title: String,
+    pub command: Option<String>,
+    pub overlay: Option<PluginOverlay>,
+}
+
+/// Declared overlay bounds. A renderer must still clamp this to its Session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginOverlay {
+    pub anchor: String,
+    pub max_width: u32,
+    pub max_height: u32,
+}
+
+/// One declared command, for menus and capability-lock rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCommand {
+    pub plugin_id: String,
+    pub command_id: String,
+    pub title: String,
+    pub scope: String,
+    pub requires: Vec<String>,
+}
+
+/// Life-cycle status of one installed plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginStatusView {
+    pub plugin_id: String,
+    pub trust: String,
+    /// `disabled`, `starting`, `ready` or `failed`.
+    pub state: String,
+    pub installed: bool,
+    pub enabled_by_registry: bool,
+    /// OS process id while a helper is running; `None` for in-process plugins.
+    pub helper_pid: Option<u32>,
+    pub command_count: usize,
+    pub view_count: usize,
+    pub queued_events: usize,
+    pub dropped_events: u64,
+    pub failure: Option<String>,
+}
+
+/// Read-only projection of the Host plugin service. Contains no helper output.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginSnapshot {
+    pub capability: String,
+    pub control_enabled: bool,
+    pub control_problem: Option<String>,
+    pub registry_path: String,
+    pub registry_loaded: bool,
+    pub registry_present: bool,
+    pub registry_error: Option<String>,
+    pub plugins: Vec<PluginStatusView>,
+    pub session_actions: Vec<PluginView>,
+    pub session_tabs: Vec<PluginView>,
+    pub session_overlays: Vec<PluginView>,
+    pub commands: Vec<PluginCommand>,
+}
+
+impl PluginSnapshot {
+    pub fn from_result(value: &Value) -> Result<Self, HostError> {
+        let registry = value
+            .get("registry")
+            .ok_or_else(|| HostError::Protocol("plugin snapshot missing registry".into()))?;
+        let contributions = value
+            .get("contributions")
+            .ok_or_else(|| HostError::Protocol("plugin snapshot missing contributions".into()))?;
+        Ok(Self {
+            capability: optional_str(value, "capability").unwrap_or_default(),
+            control_enabled: value
+                .get("control_enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    HostError::Protocol("plugin snapshot missing control_enabled".into())
+                })?,
+            control_problem: optional_str(value, "control_problem"),
+            registry_path: optional_str(registry, "path").unwrap_or_default(),
+            registry_loaded: registry
+                .get("loaded")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    HostError::Protocol("plugin snapshot missing registry.loaded".into())
+                })?,
+            registry_present: registry
+                .get("present")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            registry_error: optional_str(registry, "error"),
+            plugins: array(required_field(value, "plugins")?)
+                .iter()
+                .map(parse_plugin_status)
+                .collect::<Result<_, _>>()?,
+            session_actions: parse_views(contributions, "session_actions")?,
+            session_tabs: parse_views(contributions, "session_tabs")?,
+            session_overlays: parse_views(contributions, "session_overlays")?,
+            commands: parse_commands(contributions)?,
+        })
+    }
+}
+
+fn required_field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, HostError> {
+    value
+        .get(key)
+        .ok_or_else(|| HostError::Protocol(format!("plugin snapshot missing {key}")))
+}
+
+fn array(value: &Value) -> &[Value] {
+    value.as_array().map(Vec::as_slice).unwrap_or(&[])
+}
+
+fn parse_plugin_status(row: &Value) -> Result<PluginStatusView, HostError> {
+    Ok(PluginStatusView {
+        plugin_id: required_str(row, "plugin_id")?.to_owned(),
+        trust: required_str(row, "trust")?.to_owned(),
+        state: required_str(row, "state")?.to_owned(),
+        installed: row
+            .get("installed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        enabled_by_registry: row
+            .get("enabled_by_registry")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        helper_pid: row
+            .get("helper_pid")
+            .and_then(Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok()),
+        command_count: row
+            .get("command_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        view_count: row.get("view_count").and_then(Value::as_u64).unwrap_or(0) as usize,
+        queued_events: row
+            .get("queued_events")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        dropped_events: row
+            .get("dropped_events")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        failure: optional_str(row, "failure"),
+    })
+}
+
+fn parse_views(section: &Value, key: &str) -> Result<Vec<PluginView>, HostError> {
+    array(required_field(section, key)?)
+        .iter()
+        .map(|row| {
+            let overlay = match row.get("overlay") {
+                Some(Value::Null) | None => None,
+                Some(overlay) => Some(PluginOverlay {
+                    anchor: optional_str(overlay, "anchor").unwrap_or_default(),
+                    max_width: overlay
+                        .get("max_width")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as u32,
+                    max_height: overlay
+                        .get("max_height")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as u32,
+                }),
+            };
+            Ok(PluginView {
+                plugin_id: required_str(row, "plugin_id")?.to_owned(),
+                view_id: required_str(row, "view_id")?.to_owned(),
+                slot: required_str(row, "slot")?.to_owned(),
+                title: optional_str(row, "title").unwrap_or_default(),
+                command: optional_str(row, "command"),
+                overlay,
+            })
+        })
+        .collect()
+}
+
+fn parse_commands(section: &Value) -> Result<Vec<PluginCommand>, HostError> {
+    array(required_field(section, "commands")?)
+        .iter()
+        .map(|row| {
+            Ok(PluginCommand {
+                plugin_id: required_str(row, "plugin_id")?.to_owned(),
+                command_id: required_str(row, "command_id")?.to_owned(),
+                title: optional_str(row, "title").unwrap_or_default(),
+                scope: optional_str(row, "scope").unwrap_or_default(),
+                requires: row
+                    .get("requires")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// Successful plugin command result. `value` is helper-authored and must be
+/// rendered as untrusted text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginInvokeOutcome {
+    pub plugin_id: String,
+    pub command: String,
+    pub provenance: String,
+    pub value: Value,
+}
+
+impl PluginInvokeOutcome {
+    pub fn from_result(value: &Value) -> Result<Self, HostError> {
+        Ok(Self {
+            plugin_id: required_str(value, "plugin_id")?.to_owned(),
+            command: required_str(value, "command")?.to_owned(),
+            provenance: required_str(value, "provenance")?.to_owned(),
+            value: value.get("value").cloned().unwrap_or(Value::Null),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HostClient {
     path: PathBuf,
+    /// Explicit plugin-control token path for tests or embedded callers. When
+    /// absent the platform default (or its env override) is used.
+    plugin_control_path: Option<PathBuf>,
 }
 
 impl HostClient {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            plugin_control_path: None,
+        }
+    }
+
+    /// Override where this client reads the separate `plugin.control` token.
+    /// The token itself is still read only when an invoke is attempted.
+    pub fn with_plugin_control_token_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.plugin_control_path = Some(path.into());
+        self
     }
 
     #[cfg(windows)]
@@ -394,6 +632,110 @@ impl HostClient {
             ));
         }
         Ok(token.to_owned())
+    }
+
+    /// `plugin.control` token path. This is separate from both the workspace
+    /// metadata token and the agent-control token.
+    pub fn plugin_control_token_path(&self) -> PathBuf {
+        if let Some(path) = &self.plugin_control_path {
+            return path.clone();
+        }
+        if let Some(path) = env::var_os("UKK_PLUGIN_CONTROL_TOKEN_FILE") {
+            return PathBuf::from(path);
+        }
+        #[cfg(unix)]
+        {
+            self.path.with_extension("plugin-control")
+        }
+        #[cfg(windows)]
+        {
+            env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("C:\\nonexistent\\ukk"))
+                .join("ukk")
+                .join("run")
+                .join("agent-host.plugin-control")
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            PathBuf::from("ukk-plugin-control-token-unsupported-platform")
+        }
+    }
+
+    /// Read the plugin-control token at call time. The value is never printed,
+    /// stored in a snapshot or included in an error.
+    fn plugin_control_token(&self) -> Result<String, HostError> {
+        let path = self.plugin_control_token_path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            HostError::Protocol(format!(
+                "plugin control capability is unavailable at {}: {error}",
+                path.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(HostError::Protocol(
+                "plugin control capability must not be a symlink".into(),
+            ));
+        }
+        if !metadata.file_type().is_file() {
+            return Err(HostError::Protocol(
+                "plugin control capability must be a regular file".into(),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err(HostError::Protocol(
+                    "plugin control capability permissions must be 0600".into(),
+                ));
+            }
+        }
+        let token = fs::read_to_string(&path).map_err(|error| {
+            HostError::Protocol(format!(
+                "cannot read plugin control capability at {}: {error}",
+                path.display()
+            ))
+        })?;
+        let token = token.trim();
+        if token.len() < 60 || !token.is_ascii() {
+            return Err(HostError::Protocol(
+                "plugin control capability is too short or not ASCII".into(),
+            ));
+        }
+        Ok(token.to_owned())
+    }
+
+    /// Read-only plugin status and contributions. Never requires a capability.
+    pub fn plugin_snapshot_json(&self) -> Result<Value, HostError> {
+        self.request("plugin.snapshot")
+    }
+
+    pub fn plugin_snapshot(&self) -> Result<PluginSnapshot, HostError> {
+        PluginSnapshot::from_result(&self.plugin_snapshot_json()?)
+    }
+
+    /// Invoke one declared plugin command. The control token is read only here,
+    /// at the moment of an explicit user action, and never included in errors.
+    pub fn invoke_plugin(
+        &self,
+        plugin_id: &str,
+        command: &str,
+        session_id: Option<&str>,
+        args: Value,
+    ) -> Result<PluginInvokeOutcome, HostError> {
+        let token = self.plugin_control_token()?;
+        let mut params = json!({
+            "plugin_id": plugin_id,
+            "command": command,
+            "args": args,
+            "control": token,
+        });
+        if let Some(session_id) = session_id {
+            params["session_id"] = json!(session_id);
+        }
+        let value = self.request_with("plugin.invoke", params, Duration::from_secs(10))?;
+        PluginInvokeOutcome::from_result(&value)
     }
 
     /// Local desktop actions never touch PTY lifecycle or Agent approvals.
@@ -707,6 +1049,102 @@ mod tests {
             "revision":1,"snapshot":null
         }))
         .is_err());
+    }
+
+    #[test]
+    fn parses_plugin_snapshot_and_contributions() {
+        let payload = json!({
+            "capability": "separate-plugin-control",
+            "control_enabled": true,
+            "control_problem": null,
+            "registry": {
+                "path": "/home/user/.ukk/plugins/registry.json",
+                "loaded": true,
+                "present": true,
+                "error": null
+            },
+            "plugins": [{
+                "plugin_id": "dev.ukk.sample.session-action",
+                "trust": "first-party",
+                "state": "ready",
+                "installed": true,
+                "enabled_by_registry": true,
+                "command_count": 1,
+                "view_count": 3,
+                "queued_events": 0,
+                "dropped_events": 0,
+                "failure": null
+            }],
+            "contributions": {
+                "session_actions": [{
+                    "plugin_id": "dev.ukk.sample.session-action",
+                    "view_id": "sample.session.action",
+                    "slot": "session.action",
+                    "title": "Sample action",
+                    "command": "sample.session.ping",
+                    "overlay": null
+                }],
+                "session_tabs": [{
+                    "plugin_id": "dev.ukk.sample.session-action",
+                    "view_id": "sample.session.tab",
+                    "slot": "session.tab",
+                    "title": "Sample",
+                    "command": "sample.session.ping",
+                    "overlay": null
+                }],
+                "session_overlays": [{
+                    "plugin_id": "dev.ukk.sample.session-action",
+                    "view_id": "sample.session.overlay",
+                    "slot": "session.overlay",
+                    "title": "Sample overlay",
+                    "command": "sample.session.ping",
+                    "overlay": {"anchor": "top-right", "max_width": 320, "max_height": 240}
+                }],
+                "commands": [{
+                    "plugin_id": "dev.ukk.sample.session-action",
+                    "command_id": "sample.session.ping",
+                    "title": "Sample: ping this session",
+                    "scope": "session",
+                    "requires": []
+                }]
+            }
+        });
+        let snapshot = PluginSnapshot::from_result(&payload).unwrap();
+        assert!(snapshot.control_enabled);
+        assert!(snapshot.registry_loaded);
+        assert_eq!(snapshot.plugins.len(), 1);
+        assert_eq!(snapshot.plugins[0].state, "ready");
+        assert_eq!(snapshot.session_actions.len(), 1);
+        assert_eq!(snapshot.session_tabs.len(), 1);
+        assert_eq!(snapshot.session_overlays.len(), 1);
+        assert_eq!(
+            snapshot.session_overlays[0]
+                .overlay
+                .as_ref()
+                .unwrap()
+                .anchor,
+            "top-right"
+        );
+        assert_eq!(snapshot.commands.len(), 1);
+    }
+
+    #[test]
+    fn rejects_plugin_snapshot_without_required_fields() {
+        assert!(PluginSnapshot::from_result(&json!({})).is_err());
+        assert!(PluginSnapshot::from_result(&json!({
+            "control_enabled": true,
+            "registry": {"loaded": true},
+            "plugins": []
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn plugin_control_token_reader_never_accepts_missing_or_insecure_files() {
+        let client = HostClient::new("/nonexistent/ukk-test.sock")
+            .with_plugin_control_token_path("/nonexistent/ukk-plugin-control");
+        let error = client.plugin_control_token().unwrap_err();
+        assert!(error.to_string().contains("unavailable"));
     }
 
     #[test]
