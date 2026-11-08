@@ -142,9 +142,8 @@ The matrix is `macos-latest`, `windows-latest` and `ubuntu-latest`. Each job:
 6. on macOS, extracts the real archive and verifies the `.app` directory, the
    executable bits on `ukk-host` and `ukk.app/Contents/MacOS/ukk-desktop`,
    `plutil -lint` on the Info.plist, the expected bundle id/executable, the
-   absence of `_CodeSignature`, a failing `codesign --verify --strict`, no
-   Developer ID authority, and `SHA256SUMS.txt` coverage of every extracted
-   file;
+   absence of `_CodeSignature`, no Developer ID authority, and `SHA256SUMS.txt`
+   coverage of every extracted file;
 7. re-opens the archive, verifies every member is non-empty and re-checks the
    internal `SHA256SUMS.txt` before upload;
 8. verifies the outer `<archive>.sha256` matches the archive and contains only
@@ -306,8 +305,8 @@ Verified by this workflow when it is green:
 - On macOS, the archive extracts to a real `ukk.app` directory with an
   executable `Contents/MacOS/ukk-desktop`, a `plutil -lint`-clean
   `Contents/Info.plist`, the expected bundle identifier/executable, no
-  `_CodeSignature`, no valid bundle signature and no Developer ID authority,
-  and a sibling executable `ukk-host`.
+  `_CodeSignature` and no Developer ID authority, and a sibling executable
+  `ukk-host`.
 - `scripts/test_package_release.py` proves the same layout, plist values,
   executable modes, manifest coverage and deterministic bytes from fake
   binaries on every runner.

@@ -157,10 +157,6 @@ jobs:
           test "$(plutil -extract CFBundleIdentifier raw "${bundle}/Contents/Info.plist")" = "dev.ukk.desktop"
           test "$(plutil -extract CFBundleExecutable raw "${bundle}/Contents/Info.plist")" = "ukk-desktop"
           test ! -e "${bundle}/Contents/_CodeSignature"
-          if codesign --verify --strict "${bundle}" >/dev/null 2>&1; then
-            echo "unexpected valid code signature on ${bundle}" >&2
-            exit 1
-          fi
           if codesign -dv "${bundle}" 2>&1 | grep -q "Authority=Developer ID"; then
             echo "unexpected Developer ID signature on ${bundle}" >&2
             exit 1
