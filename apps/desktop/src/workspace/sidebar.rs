@@ -9,9 +9,14 @@ impl Workspace {
     ) -> impl IntoElement {
         let id = space.id.clone();
         let title = space.title.clone();
+        let rename_id = id.clone();
+        let rename_title = title.clone();
         let active = self.selected_space.as_deref() == Some(id.as_str());
         div()
             .id(format!("space-{id}"))
+            .flex()
+            .items_center()
+            .gap_2()
             .px_3()
             .py_2()
             .rounded_lg()
@@ -43,7 +48,36 @@ impl Workspace {
                     }
                 }
             }))
-            .child(div().text_sm().text_color(rgb(INK)).child(title))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_sm()
+                    .text_color(rgb(INK))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .id(format!("rename-space-{rename_id}"))
+                    .px_1()
+                    .rounded_md()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(0xe9ebf7)))
+                    .role(Role::Button)
+                    .aria_label(format!("Rename Space {rename_title}"))
+                    .focusable()
+                    .focus_visible(|style| style.border_color(rgb(ACCENT)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_rename_space(rename_id.clone(), cx);
+                        if this.space_editor.is_open() {
+                            window.focus(&this.space_title_focus, cx);
+                        }
+                    }))
+                    .child("✎"),
+            )
     }
 
     pub(super) fn session_row(
@@ -235,11 +269,65 @@ impl Workspace {
             )
             .child(
                 div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_1()
                     .mt_4()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(rgb(MUTED))
-                    .child("PROJECT SPACES"),
+                    .mb_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(MUTED))
+                            .child("PROJECT SPACES"),
+                    )
+                    .child(
+                        div()
+                            .id("new-space")
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(0x00000000))
+                            .bg(rgb(SURFACE))
+                            .text_xs()
+                            .text_color(rgb(ACCENT))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(0xe9ebf7)))
+                            .role(Role::Button)
+                            .aria_label("Create a new Space")
+                            .focusable()
+                            .focus_visible(|style| style.border_color(rgb(ACCENT)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_new_space(cx);
+                                if this.space_editor.is_open() {
+                                    window.focus(&this.space_title_focus, cx);
+                                }
+                            }))
+                            .child("+ New Space"),
+                    ),
+            )
+            .when(self.space_editor.is_open(), |element| {
+                element.child(self.space_form(cx))
+            })
+            .when(
+                spaces.is_empty() && !self.space_editor.is_open(),
+                |element| {
+                    element.child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .rounded_lg()
+                            .bg(rgb(SURFACE))
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(
+                                "No Spaces yet. Create one to group Sessions and project roots.",
+                            ),
+                    )
+                },
             )
             .children(spaces.iter().map(|space| self.space_row(space, cx)))
             .child(

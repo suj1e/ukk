@@ -442,7 +442,8 @@ Lifecycle (explicit; `serve` never installs anything):
   status               Service, endpoint, permission and stale-socket diagnostics
   cleanup              Remove a stale Unix socket only after proving no live Host
 Local-only RPC metadata editing:
-  workspace.session.create; workspace.pane.split/close/resize
+  workspace.space.create/rename; workspace.session.create
+  workspace.pane.split/close/resize
   Requires rotated per-Host capability; never enables Agent commands.
 Runtime control (separate capability file, disabled until created):
   runtime.observe/attach/send/interrupt/stop/detach/archive-finished

@@ -883,17 +883,7 @@ impl HostClient {
         method: &str,
         mut params: Value,
     ) -> Result<Value, HostError> {
-        if !matches!(
-            method,
-            "workspace.session.create"
-                | "workspace.pane.split"
-                | "workspace.pane.close"
-                | "workspace.pane.resize"
-                | "workspace.tab.add"
-                | "workspace.tab.close"
-                | "workspace.tab.reorder"
-                | "workspace.tab.move"
-        ) {
+        if !is_allowed_local_workspace_mutation(method) {
             return Err(HostError::Protocol(
                 "method is not an allowed local workspace mutation".into(),
             ));
@@ -1047,6 +1037,25 @@ impl HostClient {
     }
 }
 
+/// Metadata methods the Desktop may invoke with the rotated workspace
+/// capability. Agent/terminal lifecycle, approval and plugin control are
+/// deliberately absent; adding one here would widen the local surface.
+fn is_allowed_local_workspace_mutation(method: &str) -> bool {
+    matches!(
+        method,
+        "workspace.space.create"
+            | "workspace.space.rename"
+            | "workspace.session.create"
+            | "workspace.pane.split"
+            | "workspace.pane.close"
+            | "workspace.pane.resize"
+            | "workspace.tab.add"
+            | "workspace.tab.close"
+            | "workspace.tab.reorder"
+            | "workspace.tab.move"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1165,6 +1174,35 @@ mod tests {
             client.local_workspace_mutation("agent.approval.respond", json!({})),
             Err(HostError::Protocol(_))
         ));
+    }
+
+    #[test]
+    fn local_mutation_allowlist_accepts_space_metadata_only() {
+        for method in [
+            "workspace.space.create",
+            "workspace.space.rename",
+            "workspace.session.create",
+            "workspace.pane.split",
+            "workspace.pane.close",
+            "workspace.pane.resize",
+            "workspace.tab.add",
+            "workspace.tab.close",
+            "workspace.tab.reorder",
+            "workspace.tab.move",
+        ] {
+            assert!(is_allowed_local_workspace_mutation(method), "{method}");
+        }
+        for method in [
+            "terminal.kill",
+            "terminal.send",
+            "runtime.stop",
+            "agent.approval.respond",
+            "workspace.agent.create",
+            "workspace.space.delete",
+            "plugin.invoke",
+        ] {
+            assert!(!is_allowed_local_workspace_mutation(method), "{method}");
+        }
     }
 
     #[test]

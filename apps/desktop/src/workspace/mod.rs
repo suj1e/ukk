@@ -25,6 +25,7 @@ mod repository_load;
 mod repository_view;
 mod resize;
 mod sidebar;
+mod spaces;
 mod splits;
 mod state;
 mod tabs;
@@ -70,6 +71,16 @@ struct ConflictNotice {
     /// Session the failed intent belonged to. Retry must never translate the
     /// same IDs into a different Session's layout.
     session_id: Option<String>,
+}
+
+/// What a successful mutation should change in local presentation state.
+/// IDs still come from the Host response, never from optimistic guessing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MutationIntent {
+    None,
+    CreatedSession,
+    CreatedSpace,
+    RenamedSpace,
 }
 
 #[derive(Clone)]
@@ -166,6 +177,10 @@ pub(crate) struct Workspace {
     /// domain schema migration in this slice.
     omp: omp::OmpPanel,
     omp_input_focus: gpui::FocusHandle,
+    /// Explicit Space creation/rename form. Text is local until submit.
+    space_editor: spaces::SpaceEditor,
+    space_title_focus: gpui::FocusHandle,
+    space_root_focus: gpui::FocusHandle,
 }
 
 impl Workspace {
@@ -217,6 +232,9 @@ impl Workspace {
             plugin_active_tab: None,
             omp: omp::OmpPanel::default(),
             omp_input_focus: cx.focus_handle(),
+            space_editor: spaces::SpaceEditor::default(),
+            space_title_focus: cx.focus_handle(),
+            space_root_focus: cx.focus_handle(),
         };
         view.watch_updates(cx);
         view.watch_workspace(cx);

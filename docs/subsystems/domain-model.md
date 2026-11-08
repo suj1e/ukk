@@ -91,6 +91,47 @@ Host owns durable Session and Space metadata; herdr-core owns actual terminal pr
 
 One agent can appear in multiple read-only panes and clients. Sending input, approval or screen control requires an explicitly authorized controller. Prefer short leases with expiry and visible takeover confirmation. Use idempotency keys for commands and optimistic revision checks for shared mutable metadata.
 
+## Space creation and rename
+
+Space metadata has one explicit creation/rename path on Desktop, Store and
+local RPC. None of it starts, signals, attaches or approves an Agent, and none
+of it can be reached with the agent-control or plugin-control capability.
+
+```text
+Desktop form (title, project root) → HostClient.local_workspace_mutation
+    → workspace.space.create / workspace.space.rename
+    → rotated workspace capability allowlist
+    → Store::create_space_with_id / Store::rename_space
+    → SQLite spaces row (no Session, AgentRun, layout or terminal write)
+```
+
+- `Store::create_space(title, project_root)` remains the convenience path for
+  CLI/tests and delegates to `create_space_with_id` with a fresh UUID.
+- `Store::create_space_with_id(request_id, title, project_root)` is idempotent:
+  the same `request_id` with the same inputs returns the existing Space;
+  the same `request_id` with different inputs is a conflict and never creates
+  a second Space. `request_id` must be a UUID.
+- `Store::rename_space(space_id, title)` updates only the title. An unknown
+  Space is `NotFound`; an empty or oversized title is `Invalid`.
+- Both titles and project roots are trimmed and bounded to 1–200 characters.
+  The Desktop mirrors the bound for input, but the Store is authoritative.
+- RPC `workspace.space.create` takes `{request_id, title, project_root}` and
+  `workspace.space.rename` takes `{space_id, title}`. They are members of the
+  same local mutation allowlist as `workspace.session.*` and `workspace.pane.*`.
+  A reused `request_id` with different details returns the conflict code with
+  Space-specific wording, never the pane-layout reload message.
+- The Desktop sidebar exposes `+ New Space` and a per-Space rename control.
+  Enter submits and Escape cancels the form; the form shows busy, validation,
+  error and conflict states, and accessibility labels name each field and
+  action. Creating a Space selects it and clears any Session selection because
+  the new Space has no Session yet.
+
+Test evidence lives in `crates/store/src/records.rs`,
+`crates/host/src/workspace_rpc.rs`, `crates/host/src/rpc.rs`,
+`crates/host-client/src/lib.rs`, `crates/host/tests/live_broker.rs` and
+`apps/desktop/src/workspace/spaces.rs`. Real-window keyboard/screen-reader
+acceptance of the Space form is **NOT VERIFIED**.
+
 ## Event envelope (proposed)
 
 ```json

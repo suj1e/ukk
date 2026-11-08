@@ -55,6 +55,13 @@ Panes are traversed in visual depth-first order. The same order is used when a
 Tab is moved to an adjacent Pane. Split resize is clamped to the domain's
 15%–85% range in 5% steps, and writes only once per key press.
 
+The explicit Space form (`apps/desktop/src/workspace/spaces.rs`) is a local
+text field with `Enter` to submit and `Escape` to cancel. `Tab` and the
+registered shortcuts keep their normal focus/navigation behaviour; modifier
+combinations are never inserted into the field. Submitting calls the same
+capability-gated `workspace.space.create` / `workspace.space.rename` path as
+the pointer button, so the keyboard cannot widen the authorization surface.
+
 ## Focus persistence and reconciliation
 
 `apps/desktop/src/workspace/focus_store.rs` owns a versioned schema:

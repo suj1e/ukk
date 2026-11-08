@@ -23,18 +23,89 @@ fn nonempty(value: &str, field: &str) -> Result<String> {
 
 impl Store {
     pub fn create_space(&mut self, title: &str, project_root: &str) -> Result<Space> {
+        self.create_space_with_id(&new_id(), title, project_root)
+    }
+
+    /// Idempotent Space creation across retries and Host restarts. The client
+    /// chooses the UUID once per deliberate action and REUSES it when retrying;
+    /// repeating it with different inputs is rejected as a conflict rather
+    /// than creating a second Space. This operation never starts a process.
+    pub fn create_space_with_id(
+        &mut self,
+        id: &str,
+        title: &str,
+        project_root: &str,
+    ) -> Result<Space> {
         let title = nonempty(title, "Space title")?;
         let project_root = nonempty(project_root, "project root")?;
+        let id = uuid::Uuid::parse_str(id)
+            .map_err(|_| StoreError::Invalid("request_id must be a UUID".into()))?
+            .to_string();
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let previous = tx
+            .query_row(
+                "SELECT id,title,project_root,created_ms FROM spaces WHERE id=?1",
+                params![id],
+                |row| {
+                    Ok(Space {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        project_root: row.get(2)?,
+                        created_ms: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        if let Some(existing) = previous {
+            if existing.title == title && existing.project_root == project_root {
+                return Ok(existing);
+            }
+            return Err(StoreError::Conflict);
+        }
         let space = Space {
-            id: new_id(),
+            id,
             title,
             project_root,
             created_ms: now_ms(),
         };
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO spaces(id,title,project_root,created_ms) VALUES(?1,?2,?3,?4)",
             params![space.id, space.title, space.project_root, space.created_ms],
         )?;
+        tx.commit()?;
+        Ok(space)
+    }
+
+    /// Renames a Space. Only durable product metadata changes; Sessions,
+    /// AgentRun bindings and herdr-core terminals keep their lifetimes.
+    pub fn rename_space(&mut self, space_id: &str, title: &str) -> Result<Space> {
+        let title = nonempty(title, "Space title")?;
+        let space_id = nonempty(space_id, "Space ID")?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let updated = tx.execute(
+            "UPDATE spaces SET title=?2 WHERE id=?1",
+            params![space_id, title],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::NotFound(format!("space {space_id}")));
+        }
+        let space = tx.query_row(
+            "SELECT id,title,project_root,created_ms FROM spaces WHERE id=?1",
+            params![space_id],
+            |row| {
+                Ok(Space {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    project_root: row.get(2)?,
+                    created_ms: row.get(3)?,
+                })
+            },
+        )?;
+        tx.commit()?;
         Ok(space)
     }
 
@@ -236,5 +307,107 @@ impl Store {
         }
         // Intentionally no interaction with herdr-core terminals.
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::fs;
+
+    #[test]
+    fn space_creation_is_idempotent_and_rejects_reused_id_with_new_inputs() {
+        let mut store = Store::open_memory().unwrap();
+        let id = new_id();
+        let created = store.create_space_with_id(&id, "  ukk  ", "/work").unwrap();
+        assert_eq!(created.id, id);
+        assert_eq!(created.title, "ukk");
+        let repeated = store.create_space_with_id(&id, "ukk", "/work").unwrap();
+        assert_eq!(repeated, created);
+        assert_eq!(store.snapshot().unwrap().spaces.len(), 1);
+        assert_eq!(
+            store
+                .create_space_with_id(&id, "Other", "/work")
+                .unwrap_err()
+                .to_string(),
+            StoreError::Conflict.to_string()
+        );
+        assert_eq!(store.snapshot().unwrap().spaces[0], created);
+    }
+
+    #[test]
+    fn space_creation_and_rename_validate_bounds_and_identity() {
+        let mut store = Store::open_memory().unwrap();
+        for (title, root) in [("", "/work"), ("   ", "/work"), ("ukk", "")] {
+            assert!(matches!(
+                store.create_space(title, root),
+                Err(StoreError::Invalid(_))
+            ));
+        }
+        let oversized = "x".repeat(201);
+        assert!(matches!(
+            store.create_space(&oversized, "/work"),
+            Err(StoreError::Invalid(_))
+        ));
+        let exact = "x".repeat(200);
+        let created = store.create_space(&exact, "/work").unwrap();
+        assert_eq!(created.title, exact);
+        assert!(matches!(
+            store.rename_space(&created.id, &oversized),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            store.rename_space(&created.id, "  "),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            store.create_space_with_id("not-a-uuid", "ukk", "/work"),
+            Err(StoreError::Invalid(_))
+        ));
+        assert_eq!(store.snapshot().unwrap().spaces.len(), 1);
+    }
+
+    #[test]
+    fn rename_space_rejects_missing_space_and_persists_across_reopen() {
+        let dir = env::temp_dir().join(format!("ukk-store-space-{}", new_id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("workspace.db");
+        let space_id = new_id();
+        {
+            let mut store = Store::open(&path).unwrap();
+            store
+                .create_space_with_id(&space_id, "Original", "/work")
+                .unwrap();
+            let renamed = store.rename_space(&space_id, " Renamed ").unwrap();
+            assert_eq!(renamed.title, "Renamed");
+            let again = store.rename_space(&space_id, "Renamed").unwrap();
+            assert_eq!(again, renamed);
+            assert!(matches!(
+                store.rename_space(&new_id(), "Missing"),
+                Err(StoreError::NotFound(_))
+            ));
+        }
+        {
+            let store = Store::open(&path).unwrap();
+            let spaces = store.snapshot().unwrap().spaces;
+            assert_eq!(spaces.len(), 1);
+            assert_eq!(spaces[0].id, space_id);
+            assert_eq!(spaces[0].title, "Renamed");
+            assert_eq!(spaces[0].project_root, "/work");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn space_mutations_never_create_sessions_or_agent_runs() {
+        let mut store = Store::open_memory().unwrap();
+        let space = store.create_space("ukk", "/work").unwrap();
+        store.rename_space(&space.id, "ukk renamed").unwrap();
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(snapshot.spaces.len(), 1);
+        assert!(snapshot.sessions.is_empty());
+        assert!(snapshot.agent_runs.is_empty());
+        assert!(snapshot.layouts.is_empty());
     }
 }

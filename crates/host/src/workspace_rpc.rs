@@ -48,6 +48,19 @@ fn str_arg<'a>(params: &'a Value, key: &str) -> Result<&'a str, RpcError> {
         .ok_or_else(|| RpcError::invalid(key))
 }
 
+/// A duplicate `request_id` with different Space inputs is a genuine conflict,
+/// not a layout revision mismatch, so it must not be reported with the layout
+/// reload wording (the Desktop relies on that wording for pane retries).
+fn space_mutation_error(error: StoreError) -> RpcError {
+    match error {
+        StoreError::Conflict => RpcError {
+            code: -32031,
+            message: "request_id was already used with different Space details".into(),
+        },
+        other => other.into(),
+    }
+}
+
 fn revision_arg(params: &Value) -> Result<i64, RpcError> {
     params
         .get("expected_revision")
@@ -72,6 +85,28 @@ pub(crate) fn dispatch(method: &str, params: &Value) -> Result<Value, RpcError> 
 
 fn dispatch_with(store: &mut Store, method: &str, params: &Value) -> Result<Value, RpcError> {
     match method {
+        "workspace.space.create" => {
+            let space = store
+                .create_space_with_id(
+                    str_arg(params, "request_id")?,
+                    str_arg(params, "title")?,
+                    str_arg(params, "project_root")?,
+                )
+                .map_err(space_mutation_error)?;
+            serde_json::to_value(space).map_err(|e| RpcError {
+                code: -32032,
+                message: e.to_string(),
+            })
+        }
+        "workspace.space.rename" => {
+            let space = store
+                .rename_space(str_arg(params, "space_id")?, str_arg(params, "title")?)
+                .map_err(space_mutation_error)?;
+            serde_json::to_value(space).map_err(|e| RpcError {
+                code: -32032,
+                message: e.to_string(),
+            })
+        }
         "workspace.session.create" => {
             let session = store.create_session_with_id(
                 str_arg(params, "space_id")?,
@@ -237,6 +272,75 @@ impl From<ukk_domain::LayoutError> for RpcError {
 mod tests {
     use super::*;
     use ukk_domain::{new_id, PaneNode};
+
+    #[test]
+    fn space_create_is_idempotent_validated_and_conflict_typed() {
+        let mut store = Store::open_memory().unwrap();
+        let request_id = new_id();
+        let create = |store: &mut Store, id: &str, title: &str, root: &str| {
+            dispatch_with(
+                store,
+                "workspace.space.create",
+                &json!({"request_id":id,"title":title,"project_root":root}),
+            )
+        };
+        let created = create(&mut store, &request_id, "ukk", "/work").unwrap();
+        assert_eq!(created["id"], request_id);
+        assert_eq!(created["title"], "ukk");
+        assert_eq!(created["project_root"], "/work");
+        let repeated = create(&mut store, &request_id, "ukk", "/work").unwrap();
+        assert_eq!(repeated, created);
+        assert_eq!(store.snapshot().unwrap().spaces.len(), 1);
+
+        let conflict = create(&mut store, &request_id, "Renamed", "/work").unwrap_err();
+        assert_eq!(conflict.code, -32031);
+        assert!(conflict.message.contains("request_id"));
+
+        for params in [
+            json!({"request_id":new_id(),"title":"   ","project_root":"/work"}),
+            json!({"request_id":new_id(),"title":"x".repeat(201),"project_root":"/work"}),
+            json!({"request_id":new_id(),"title":"ukk","project_root":""}),
+            json!({"request_id":"not-a-uuid","title":"ukk","project_root":"/work"}),
+        ] {
+            let error = dispatch_with(&mut store, "workspace.space.create", &params).unwrap_err();
+            assert_eq!(error.code, -32602, "{error:?}");
+        }
+        assert_eq!(store.snapshot().unwrap().spaces.len(), 1);
+    }
+
+    #[test]
+    fn space_rename_updates_only_space_metadata_and_rejects_missing_space() {
+        let mut store = Store::open_memory().unwrap();
+        let space = store.create_space("Before", "/work").unwrap();
+        let renamed = dispatch_with(
+            &mut store,
+            "workspace.space.rename",
+            &json!({"space_id":space.id,"title":" After "}),
+        )
+        .unwrap();
+        assert_eq!(renamed["id"], space.id);
+        assert_eq!(renamed["title"], "After");
+        assert_eq!(renamed["project_root"], "/work");
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(snapshot.spaces[0].title, "After");
+        assert!(snapshot.sessions.is_empty());
+        assert!(snapshot.agent_runs.is_empty());
+
+        let missing = dispatch_with(
+            &mut store,
+            "workspace.space.rename",
+            &json!({"space_id":new_id(),"title":"After"}),
+        )
+        .unwrap_err();
+        assert_eq!(missing.code, -32034);
+        let invalid = dispatch_with(
+            &mut store,
+            "workspace.space.rename",
+            &json!({"space_id":space.id,"title":"x".repeat(201)}),
+        )
+        .unwrap_err();
+        assert_eq!(invalid.code, -32602);
+    }
 
     #[test]
     fn local_workflow_creates_then_splits_resizes_and_closes() {
