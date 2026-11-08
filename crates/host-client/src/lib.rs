@@ -1313,11 +1313,21 @@ mod tests {
                 client.agent_control_token_path(),
                 std::path::PathBuf::from("/tmp/ukk-omp-test.agent-control")
             );
-            assert_ne!(
-                client.agent_control_token_path(),
-                client.mutation_token_path()
+        }
+        #[cfg(windows)]
+        {
+            assert!(
+                client
+                    .agent_control_token_path()
+                    .ends_with("agent-host.agent-control"),
+                "{:?}",
+                client.agent_control_token_path()
             );
         }
+        assert_ne!(
+            client.agent_control_token_path(),
+            client.mutation_token_path()
+        );
     }
 
     #[test]

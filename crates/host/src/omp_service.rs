@@ -858,7 +858,13 @@ mod tests {
         let mut prompt = mutation("s1");
         prompt["message"] = json!("Reply with exactly: OMP-OK");
         let snapshot = service.prompt(&prompt, &auth()).unwrap();
-        assert_eq!(snapshot["turn"]["state"], "running");
+        // The mock may stream the whole turn before the prompt call returns;
+        // either way it must be an active or already-complete turn, never idle.
+        let state = snapshot["turn"]["state"].as_str().unwrap_or_default();
+        assert!(
+            matches!(state, "running" | "complete"),
+            "unexpected turn state {state}: {snapshot}"
+        );
         assert!(snapshot["timeline"]
             .as_array()
             .unwrap()
@@ -880,6 +886,24 @@ mod tests {
         assert!(audit
             .iter()
             .any(|entry| entry.action == "omp.prompt" && entry.outcome == "ok"));
+    }
+
+    #[test]
+    fn prompt_reports_a_running_turn_before_completion() {
+        // The `commands` mock acknowledges prompts and never emits agent
+        // lifecycle events, so the turn is deterministically still running.
+        let service = OmpService::with_config(mock_config("commands"));
+        service.start(&mutation("s1"), &auth()).unwrap();
+        let mut prompt = mutation("s1");
+        prompt["message"] = json!("hold the turn open");
+        let snapshot = service.prompt(&prompt, &auth()).unwrap();
+        assert_eq!(snapshot["turn"]["state"], "running");
+        assert_eq!(snapshot["turn"]["agent_invoked"], Value::Null);
+        assert!(snapshot["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["kind"] == "user"));
     }
 
     #[test]
