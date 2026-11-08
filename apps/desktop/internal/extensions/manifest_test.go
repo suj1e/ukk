@@ -440,7 +440,7 @@ func TestValidateManifestRejectsTrailingData(t *testing.T) {
 }
 
 func TestLoadManifestReadsBoundFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testDir(t)
 	path := filepath.Join(dir, "plugin.json")
 	data, err := json.Marshal(baseManifest())
 	if err != nil {

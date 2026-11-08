@@ -38,7 +38,7 @@ func startRequest(t *testing.T, id, scenario, pidFile string) StartRequest {
 	if pidFile != "" {
 		env[helperPIDFile] = pidFile
 	}
-	return StartRequest{SessionID: id, Cwd: t.TempDir(), Env: env}
+	return StartRequest{SessionID: id, Cwd: testDir(t), Env: env}
 }
 
 func startSession(t *testing.T, runtime *OMP, id, scenario, pidFile string) Snapshot {
@@ -489,7 +489,7 @@ func TestChildExitSurfacesFailed(t *testing.T) {
 
 func TestMalformedFrameKillsAndReapsChild(t *testing.T) {
 	runtime := testRuntime(t, nil)
-	pidFile := filepath.Join(t.TempDir(), "pids")
+	pidFile := filepath.Join(testDir(t), "pids")
 	startSession(t, runtime, "s1", "malformed", pidFile)
 	events := runtime.Events("s1")
 
@@ -520,7 +520,7 @@ func TestMalformedFrameKillsAndReapsChild(t *testing.T) {
 
 func TestStderrFailureKillsAndReapsChild(t *testing.T) {
 	runtime := testRuntime(t, nil)
-	pidFile := filepath.Join(t.TempDir(), "pids")
+	pidFile := filepath.Join(testDir(t), "pids")
 	startSession(t, runtime, "s1", "stderr-flood", pidFile)
 	_ = runtime.Prompt(context.Background(), "s1", "flood")
 
@@ -592,7 +592,7 @@ func TestCloseStopsAllSessions(t *testing.T) {
 
 func TestStartupTimeoutKillsChild(t *testing.T) {
 	runtime := testRuntime(t, func(cfg *Config) { cfg.StartupTimeout = 300 * time.Millisecond })
-	pidFile := filepath.Join(t.TempDir(), "pids")
+	pidFile := filepath.Join(testDir(t), "pids")
 	_, err := runtime.Start(context.Background(), startRequest(t, "s1", "noready", pidFile))
 	if CodeOf(err) != CodeTimeout {
 		t.Fatalf("Start error = %v, want timeout", err)
@@ -657,7 +657,7 @@ func TestBridgeDisconnectDoesNotStopChild(t *testing.T) {
 
 func TestStartIsIdempotent(t *testing.T) {
 	runtime := testRuntime(t, nil)
-	pidFile := filepath.Join(t.TempDir(), "pids")
+	pidFile := filepath.Join(testDir(t), "pids")
 	first := startSession(t, runtime, "s1", "hold", pidFile)
 	second := startSession(t, runtime, "s1", "hold", pidFile)
 	if first.ProviderSessionID != second.ProviderSessionID {
@@ -783,7 +783,7 @@ func TestLiveOMP(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	snapshot, err := runtime.Start(ctx, StartRequest{SessionID: "live", Cwd: t.TempDir()})
+	snapshot, err := runtime.Start(ctx, StartRequest{SessionID: "live", Cwd: testDir(t)})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

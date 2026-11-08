@@ -293,6 +293,9 @@ func (r *Repo) cleanRel(rel string) (string, error) {
 	if rel == "" {
 		return "", fmt.Errorf("%w: empty path", ErrOutsideRoot)
 	}
+	if strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "\\") || filepath.VolumeName(rel) != "" {
+		return "", ErrOutsideRoot
+	}
 	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || filepath.IsAbs(clean) {
 		return "", ErrOutsideRoot

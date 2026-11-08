@@ -117,7 +117,7 @@ func TestGrantLiveExpiryAndScopeMatching(t *testing.T) {
 }
 
 func TestGrantPersistenceAndRevocation(t *testing.T) {
-	dir := t.TempDir()
+	dir := testDir(t)
 	path := filepath.Join(dir, "grants.json")
 	store, err := OpenGrantStore(path)
 	if err != nil {
@@ -169,7 +169,7 @@ func TestGrantStoreRejectsInsecurePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits are not meaningful on Windows")
 	}
-	dir := t.TempDir()
+	dir := testDir(t)
 	path := filepath.Join(dir, "grants.json")
 	store, err := OpenGrantStore(path)
 	if err != nil {
@@ -212,7 +212,7 @@ func TestGrantStoreRevokeAll(t *testing.T) {
 }
 
 func TestGrantStoreRejectsUnknownVersion(t *testing.T) {
-	dir := t.TempDir()
+	dir := testDir(t)
 	path := filepath.Join(dir, "grants.json")
 	if err := os.WriteFile(path, []byte(`{"version":2,"grants":[]}`), 0o600); err != nil {
 		t.Fatal(err)

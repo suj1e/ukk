@@ -124,7 +124,7 @@ func TestValidateStartRequest(t *testing.T) {
 	if err := validateStartRequest(StartRequest{}); CodeOf(err) != CodeInvalidArgument {
 		t.Fatalf("empty id error = %v", err)
 	}
-	dir := t.TempDir()
+	dir := testDir(t)
 	if err := validateStartRequest(StartRequest{SessionID: "s", Cwd: dir}); err != nil {
 		t.Fatalf("valid request: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestEventHistoryIsBounded(t *testing.T) {
 }
 
 func TestPIDFileParsingHelper(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pids")
+	path := filepath.Join(testDir(t), "pids")
 	if err := os.WriteFile(path, []byte("12\n34\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}

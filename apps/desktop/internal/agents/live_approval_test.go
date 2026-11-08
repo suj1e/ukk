@@ -28,7 +28,7 @@ func TestLiveOMPApproval(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if _, err := runtime.Start(ctx, StartRequest{SessionID: "live-approval", Cwd: t.TempDir()}); err != nil {
+	if _, err := runtime.Start(ctx, StartRequest{SessionID: "live-approval", Cwd: testDir(t)}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	events := runtime.Events("live-approval")

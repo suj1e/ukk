@@ -103,7 +103,7 @@ func helperInstallOptions(mode string) InstallOptions {
 // binary named like the manifest entrypoint, then installs it.
 func installHelperPlugin(t *testing.T, sup *Supervisor, mode, scope string, required, requires []string) (string, string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testDir(t)
 	name := helperProgramName()
 	copyTestExecutable(t, filepath.Join(dir, name))
 	writeManifestFile(t, dir, helperManifestDoc(supervisorTestID, name, scope, required, requires))
@@ -357,7 +357,7 @@ func TestUninstallRemovesPluginAndGrants(t *testing.T) {
 
 func TestInstallRejectsEntrypointMismatch(t *testing.T) {
 	sup := NewSupervisor(Config{})
-	dir := t.TempDir()
+	dir := testDir(t)
 	copyTestExecutable(t, filepath.Join(dir, helperProgramName()))
 	writeManifestFile(t, dir, helperManifestDoc(supervisorTestID, "other-helper", CommandScopeGlobal, nil, nil))
 	if _, err := sup.InstallDir(dir, InstallOptions{}); !IsCode(err, CodeInvalidHelper) {
