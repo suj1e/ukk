@@ -308,6 +308,20 @@ class ValidationTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 packaging.verify_archive(archive, root, {"README.md": b"readme\n"})
 
+    def test_verify_macos_bundle_rejects_bad_executable(self) -> None:
+        plist = plistlib.loads(packaging.info_plist("1.0.0"))
+        plist["CFBundleExecutable"] = "not-ukk-desktop"
+        files = {
+            packaging.MACOS_BUNDLE_INFO_PLIST: plistlib.dumps(plist),
+            packaging.MACOS_BUNDLE_BINARY: b"binary\n",
+        }
+        with self.assertRaises(ValueError):
+            packaging.verify_macos_bundle(files, "1.0.0")
+        del files[packaging.MACOS_BUNDLE_BINARY]
+        files[packaging.MACOS_BUNDLE_INFO_PLIST] = packaging.info_plist("1.0.0")
+        with self.assertRaises(ValueError):
+            packaging.verify_macos_bundle(files, "1.0.0")
+
     def test_missing_binary_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
