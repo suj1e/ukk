@@ -41,8 +41,10 @@ ukk-<version>-macos-<arch>/
 ├── ukk.app/
 │   └── Contents/
 │       ├── Info.plist
-│       └── MacOS/
-│           └── ukk-desktop
+│       ├── MacOS/
+│       │   └── ukk-desktop
+│       └── Resources/
+│           └── ukk.icns
 └── ukk-host
 ```
 
@@ -67,6 +69,7 @@ fixed key order; the bytes are identical for the same version input:
 
 | Key | Value |
 |---|---|
+| `CFBundleIconFile` | `ukk.icns` |
 | `CFBundleIdentifier` | `dev.ukk.desktop` |
 | `CFBundleName` | `ukk` |
 | `CFBundleDisplayName` | `ukk` |
@@ -86,6 +89,8 @@ keys, and the archive contains no `_CodeSignature` directory: the app bundle is
 ad-hoc signature; that is not a Developer ID or bundle signature, is not bound
 to the Info.plist, and does not satisfy Gatekeeper. A strict bundle signature
 check fails and `spctl` rejects the bundle.
+
+The icon source and generation notes live in [assets/icon/README.md](../assets/icon/README.md).
 
 `VERSION.txt` records the embedded version, source commit, Rust target triple,
 OS, architecture and both binary names. On macOS it additionally records

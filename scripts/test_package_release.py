@@ -34,6 +34,8 @@ def build_repo(tmp: Path, os_name: str) -> tuple[Path, Path, Path]:
     build.mkdir(parents=True, exist_ok=True)
     (repo / "README.md").write_bytes(b"# ukk\n")
     (repo / "LICENSE").write_bytes(b"license text\n")
+    (repo / "assets/icon").mkdir(parents=True, exist_ok=True)
+    (repo / "assets/icon/ukk.icns").write_bytes(b"icns-fake-icon")
     suffix = packaging.OS_BINARY_SUFFIX[os_name]
     host = build / f"ukk-host{suffix}"
     desktop = build / f"ukk-desktop{suffix}"
@@ -101,6 +103,7 @@ class MacosBundleTest(unittest.TestCase):
                 "VERSION.txt",
                 "ukk-host",
                 packaging.MACOS_BUNDLE_INFO_PLIST,
+                packaging.MACOS_BUNDLE_ICON,
                 packaging.MACOS_BUNDLE_BINARY,
             }
             self.assertEqual(set(members), expected)
@@ -114,11 +117,12 @@ class MacosBundleTest(unittest.TestCase):
             self.assertEqual(info["CFBundleName"], "ukk")
             self.assertEqual(info["CFBundleDisplayName"], "ukk")
             self.assertEqual(info["CFBundleExecutable"], "ukk-desktop")
+            self.assertEqual(info["CFBundleIconFile"], "ukk.icns")
             self.assertEqual(info["CFBundlePackageType"], "APPL")
             self.assertEqual(info["CFBundleShortVersionString"], "0.1.0")
             self.assertEqual(info["CFBundleVersion"], "0.1.0")
             self.assertIs(info["NSHighResolutionCapable"], True)
-            self.assertNotIn("CFBundleIconFile", info)
+            self.assertEqual(info["CFBundleIconFile"], "ukk.icns")
             self.assertFalse(
                 [key for key in info if "Sign" in key or "Entitlement" in key]
             )
@@ -158,6 +162,7 @@ class MacosBundleTest(unittest.TestCase):
                 }
             self.assertEqual(modes[packaging.MACOS_BUNDLE_BINARY], 0o755)
             self.assertEqual(modes[packaging.MACOS_BUNDLE_INFO_PLIST], 0o644)
+            self.assertEqual(modes[packaging.MACOS_BUNDLE_ICON], 0o644)
             self.assertEqual(modes["ukk-host"], 0o755)
             self.assertEqual(modes["README.md"], 0o644)
 

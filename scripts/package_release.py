@@ -62,6 +62,8 @@ MACOS_BUNDLE_ID = "dev.ukk.desktop"
 MACOS_BUNDLE_DISPLAY_NAME = "ukk"
 MACOS_BUNDLE_EXECUTABLE = "ukk-desktop"
 MACOS_BUNDLE_INFO_PLIST = f"{MACOS_BUNDLE_NAME}/Contents/Info.plist"
+MACOS_BUNDLE_ICON = f"{MACOS_BUNDLE_NAME}/Contents/Resources/ukk.icns"
+MACOS_ICON_SOURCE = "assets/icon/ukk.icns"
 MACOS_BUNDLE_BINARY = (
     f"{MACOS_BUNDLE_NAME}/Contents/MacOS/{MACOS_BUNDLE_EXECUTABLE}"
 )
@@ -96,6 +98,7 @@ def info_plist(version: str) -> bytes:
     entries: list[tuple[str, str | bool]] = [
         ("CFBundleDisplayName", MACOS_BUNDLE_DISPLAY_NAME),
         ("CFBundleExecutable", MACOS_BUNDLE_EXECUTABLE),
+        ("CFBundleIconFile", "ukk.icns"),
         ("CFBundleIdentifier", MACOS_BUNDLE_ID),
         ("CFBundleInfoDictionaryVersion", "6.0"),
         ("CFBundleName", MACOS_BUNDLE_DISPLAY_NAME),
@@ -240,6 +243,7 @@ def verify_macos_bundle(files: dict[str, bytes], version: str) -> None:
     expected = {
         "CFBundleDisplayName": MACOS_BUNDLE_DISPLAY_NAME,
         "CFBundleExecutable": MACOS_BUNDLE_EXECUTABLE,
+        "CFBundleIconFile": "ukk.icns",
         "CFBundleIdentifier": MACOS_BUNDLE_ID,
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": MACOS_BUNDLE_DISPLAY_NAME,
@@ -256,6 +260,11 @@ def verify_macos_bundle(files: dict[str, bytes], version: str) -> None:
         raise ValueError(f"macOS bundle is missing its executable {executable}")
     if not files[executable]:
         raise ValueError(f"macOS bundle executable {executable} is empty")
+    icon = files.get(MACOS_BUNDLE_ICON)
+    if not icon:
+        raise ValueError(f"macOS bundle is missing its icon {MACOS_BUNDLE_ICON}")
+    if not icon.startswith(b"icns"):
+        raise ValueError(f"macOS bundle icon {MACOS_BUNDLE_ICON} is not an icns file")
     for name in files:
         if "/_CodeSignature/" in f"/{name}" or name.endswith(".dsig"):
             raise ValueError("unsigned macOS archive must not contain code signatures")
@@ -360,7 +369,11 @@ def main(argv: list[str]) -> int:
     }
     desktop_data = desktop_bin.read_bytes()
     if os_name == "macos":
+        icon_source = repo / MACOS_ICON_SOURCE
+        if not icon_source.is_file() or icon_source.stat().st_size == 0:
+            raise SystemExit(f"package_release.py: missing icon {icon_source}")
         staged_binaries[MACOS_BUNDLE_BINARY] = desktop_data
+        staged_binaries[MACOS_BUNDLE_ICON] = icon_source.read_bytes()
         staged_binaries[MACOS_BUNDLE_INFO_PLIST] = info_plist(version)
     else:
         staged_binaries[desktop_name] = desktop_data
@@ -387,6 +400,7 @@ def main(argv: list[str]) -> int:
             [
                 f"desktop_bundle={MACOS_BUNDLE_NAME}",
                 f"desktop_bundle_path={MACOS_BUNDLE_BINARY}",
+                f"desktop_bundle_icon={MACOS_BUNDLE_ICON}",
                 f"bundle_id={MACOS_BUNDLE_ID}",
                 f"bundle_version={bundle_version(version)}",
             ]
