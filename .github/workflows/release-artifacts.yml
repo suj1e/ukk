@@ -125,6 +125,28 @@ jobs:
             --commit "${UKK_BUILD_COMMIT}" \
             --out-dir dist
 
+      - name: Verify outer checksum format
+        shell: bash
+        run: |
+          set -euo pipefail
+          python=python3
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            python=python
+          fi
+          "${python}" - <<'PY'
+          import hashlib, pathlib
+          archives = [p for p in pathlib.Path("dist").iterdir() if not p.name.endswith(".sha256")]
+          assert len(archives) == 1, archives
+          archive = archives[0]
+          raw = archive.with_name(archive.name + ".sha256").read_bytes()
+          assert b"\r" not in raw, "checksum file must use LF line endings"
+          digest, name = raw.decode("utf-8").rstrip("\n").split("  ")
+          assert name == archive.name, (name, archive.name)
+          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert digest == actual, (digest, actual)
+          print(f"outer checksum OK: {archive.name} {actual}")
+          PY
+
       - name: Upload unsigned release archive
         uses: actions/upload-artifact@v4
         with:
