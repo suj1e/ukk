@@ -13,6 +13,9 @@ on:
       - main
     tags:
       - 'v*'
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
   pull_request:
     paths:
       - '.github/workflows/release-artifacts.yml'
