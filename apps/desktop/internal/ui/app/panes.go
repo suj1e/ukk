@@ -116,7 +116,7 @@ func (a *App) renderConversation(c *ui.Context, p *pane) {
 		return
 	}
 	state := a.conversationFor(a.sessionID)
-	if state.Snapshot.Provider == "" && !state.Loading {
+	if state.Snapshot.Provider == "" && !state.Loading && state.ActionErr == "" {
 		a.loadAgentSnapshot(state)
 	}
 	conversation.View(c, state, conversation.Actions{
@@ -167,7 +167,7 @@ func (a *App) renderTerminal(c *ui.Context, leaf *domain.PaneNode, p *pane) {
 		} else if !a.termLibReady {
 			kit.Banner(c, "warn", "Loading the terminal engine…", "")
 		}
-		if a.hc == nil {
+		if a.hc == nil && !a.termLoading && !a.termTried && a.hcErr == "" {
 			a.refreshTerminals()
 		}
 		if a.hc != nil && a.termLibReady {
@@ -195,6 +195,7 @@ func (a *App) renderTerminal(c *ui.Context, leaf *domain.PaneNode, p *pane) {
 	}
 	if a.hc == nil {
 		if ui.PrimaryButton(c, "Connect to herdr-core").Clicked() {
+			a.termTried = false
 			a.refreshTerminals()
 		}
 		kit.Meta(c, "Connecting reads the terminal list; it never starts or stops a program.")

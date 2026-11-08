@@ -58,6 +58,7 @@ type App struct {
 	terminals   []hc.Terminal
 	termAt      time.Time
 	termLoading bool
+	termTried   bool
 
 	newSpace   formState
 	newSession formState
@@ -411,6 +412,7 @@ func (a *App) applyAgentEvent(event bridge.Event) {
 	state := a.conversationFor(event.SessionID)
 	state.Snapshot = toAgentSnapshot(*event.Agent)
 	state.Loading = false
+	state.ActionErr = ""
 	if event.Type == bridge.EventError {
 		state.ActionErr = event.Error
 	}
@@ -544,6 +546,7 @@ func (a *App) refreshTerminals() {
 		return
 	}
 	a.termLoading = true
+	a.termTried = true
 	client := a.hc
 	go func() {
 		ctx, cancel := context.WithTimeout(a.bridgeCtx, 20*time.Second)
