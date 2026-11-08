@@ -149,6 +149,11 @@ enum HandshakeCrypto {
         return withUnsafeBytes(of: &big) { Data($0) }
     }
 
+    static func bigEndian(_ value: UInt32) -> Data {
+        var big = value.bigEndian
+        return withUnsafeBytes(of: &big) { Data($0) }
+    }
+
     /// Prefix a client can sign before the Host ephemeral exists.
     static func pairingClientPrefix(
         invite: PairingInvite,
@@ -670,7 +675,7 @@ final class SecureChannel: @unchecked Sendable {
 
         var header = Data()
         header.append(Self.version)
-        header.append(contentsOf: HandshakeCrypto.bigEndian(UInt64(stream)))
+        header.append(contentsOf: HandshakeCrypto.bigEndian(UInt32(stream)))
         header.append(contentsOf: HandshakeCrypto.bigEndian(counter))
 
         let nonce = try ChaChaPoly.Nonce(data: Data(header.suffix(8)) + Data(header[1..<5]))
@@ -699,7 +704,7 @@ final class SecureChannel: @unchecked Sendable {
             throw SecureChannelError.envelopeTooLarge
         }
 
-        let nonce = try ChaChaPoly.Nonce(data: HandshakeCrypto.bigEndian(counter) + HandshakeCrypto.bigEndian(UInt64(stream)))
+        let nonce = try ChaChaPoly.Nonce(data: HandshakeCrypto.bigEndian(counter) + HandshakeCrypto.bigEndian(UInt32(stream)))
         let box = try ChaChaPoly.SealedBox(nonce: nonce, ciphertext: Data(ciphertext), tag: Data(tag))
         let plaintext: Data
         do {

@@ -110,8 +110,11 @@ final class RemoteAPITests: XCTestCase {
             XCTAssertEqual(error as? RemoteAPIError, .timeout)
         }
 
-        let pending = Task { try await api.request(.health, timeout: 10) }
-        await api.close(error: .transport("closed"))
+        let sent = expectation(description: "pending request sent")
+        let closeAPI = RemoteAPI(sender: { _ in sent.fulfill() }, onEvent: { _ in })
+        let pending = Task { try await closeAPI.request(.health, timeout: 10) }
+        await fulfillment(of: [sent], timeout: 1)
+        await closeAPI.close(error: .transport("closed"))
         do {
             _ = try await pending.value
             XCTFail("expected close error")

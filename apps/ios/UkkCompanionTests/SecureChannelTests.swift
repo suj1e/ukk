@@ -190,7 +190,7 @@ final class SecureChannelTests: XCTestCase {
             clientX: clientX,
             ephClient: clientEph
         )
-        try HandshakeCrypto.verify(signature, message: prefix, publicKey: hostSigning.publicKey.rawRepresentation)
+        try HandshakeCrypto.verify(signature, message: prefix, publicKey: device.edPublic)
 
         let ephHost = Curve25519.KeyAgreement.PrivateKey()
         let ns = try HandshakeCrypto.randomBytes(32)
@@ -303,7 +303,7 @@ final class SecureChannelTests: XCTestCase {
             ephClient: clientEph,
             nonce: nc
         )
-        try HandshakeCrypto.verify(signature, message: message, publicKey: hostSigning.publicKey.rawRepresentation)
+        try HandshakeCrypto.verify(signature, message: message, publicKey: device.edPublic)
 
         let ephHost = Curve25519.KeyAgreement.PrivateKey()
         let ns = try HandshakeCrypto.randomBytes(32)
