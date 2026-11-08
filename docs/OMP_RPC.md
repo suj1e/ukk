@@ -51,13 +51,15 @@
   in audit entries, snapshots or errors.
 - Missing or insecure (symlink/non-0600/short) token files are reported as a
   visible error; there is no silent fallback or implicit escalation.
-- `request_id` is an idempotency key for `omp.prompt`/`omp.abort`/`omp.stop`.
-  A repeated completed id returns the current snapshot without executing again
-  (up to 128 ids are retained); a duplicate still in flight returns the current
-  snapshot. An explicit `success:false` rejection releases the id so it can be
-  retried; a timeout/transport failure keeps it reserved because omp may have
-  accepted the command. The prompt gate atomically transitions Idle/Complete →
-  Running under one lock, so two concurrent prompts cannot both write.
+- `request_id` is the idempotency key for `omp.prompt`. A repeated completed id
+  returns the current snapshot without executing again (up to 128 ids are
+  retained); a duplicate still in flight returns the current snapshot. An
+  explicit `success:false` rejection releases the id so it can be retried; a
+  timeout/transport failure keeps it reserved because omp may have accepted the
+  command. `omp.abort` and `omp.stop` are state-checked and naturally
+  idempotent at the process/turn level. The prompt gate atomically transitions
+  Idle/Complete → Running under one lock, so two concurrent prompts cannot both
+  write.
 
 Enable control explicitly:
 
