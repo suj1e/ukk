@@ -1,6 +1,6 @@
 # ukk — Implementation status
 
-> **Snapshot:** 2026-11-08, approximately 11:40 UTC. Baseline is `main` at `65d72db` (all current code PRs merged: Q0, H1, D2, R2, P1 wiring, I1, S1 protocol+persistence+local stream, D3 read-only surfaces+terminal observation, S2 pairing+relay, R1, M1 capture+media contract, omp RPC structured Agent, continuous unsigned packaging, release packaging and backup/restore; no open PRs). This is a source/CI inventory, **not** a claim of on-device acceptance.
+> **Snapshot:** 2026-11-08, approximately 13:00 UTC. Baseline is `main` at `0eaf127` (all current code PRs merged: Q0, H1, D2, R2, P1 wiring, I1, S1 protocol+persistence+local stream, D3 read-only surfaces+terminal observation, S2 pairing+relay, R1, M1 capture+media contract, omp RPC structured Agent, continuous unsigned packaging, routed docs/quality gates, release packaging and backup/restore; no open PRs). This is a source/CI inventory, **not** a claim of on-device acceptance.
 >
 > **中文速览：** GPUI 多窗口/持久化布局和 omp 结构化会话已有；三平台 CI 与未签名包已产出。真机三平台交互验收、WAN/iPhone 配对、屏幕远控、签名/安装器仍未完成。见 [可认领任务与依赖](roadmap.md)。
 
@@ -48,6 +48,7 @@ Canonical constraints: [AGENTS.md](../AGENTS.md), [Product](requirements.md), [A
 | Plugin Host/Desktop wiring | Explicit registry, separate default-off `plugin.control`, `plugin.snapshot/enable/disable/invoke` RPC, bounded audit, sample Session action/tab/overlay rendered Desktop-side — [PR #37](https://github.com/suj1e/ukk/pull/37) | Host e2e with real sample helper + three-OS CI; security review fixed startup blocking, audit wiring, uid/private-parent checks and registry races. No third-party sandbox; real-window acceptance **NOT VERIFIED** |
 | GPUI native launch smoke | `.github/workflows/desktop-launch-smoke.yml` + bounded X11/CoreGraphics harness — [PR #22](https://github.com/suj1e/ukk/pull/22) | macOS and Linux CI prove a real mapped/owned window and Host survival; Windows interactive desktop NOT VERIFIED |
 | Code organization | Small entrypoints; Desktop `workspace/*`, Host transport/RPC/broker, Domain and SQLite modules — [PR #7](https://github.com/suj1e/ukk/pull/7) | Three-OS CI for that PR; process and UI runtime acceptance pending |
+| Repository routing / gates | Root `AGENTS.md` (42 lines, route-only), `LESSONS.md`, `REVIEW.md`, `CONTRIBUTING.md`, `DEVELOPMENT.md`, `justfile`; `docs/{requirements,tech-design,coding-standard,release}` plus decisions/subsystems/runbooks/spikes; issue/PR templates; `ci.yml` / `release.yml` — [PR #48](https://github.com/suj1e/ukk/pull/48) | Main CI `docs` job green; `check_docs.py` validates 174 relative links and required structure; `check_versions.py` validates 14 packages. No product behavior changed |
 
 The Host has a **narrow local capability-protected mutation allowlist** for Session creation and Pane/Tab layout edits. This is *not* general Agent command authorization, remote device trust, or a complete identity/security review. Some older docs/issues describe these implemented pieces as pending; this status supersedes outdated progress claims, not their remaining acceptance requirements.
 
