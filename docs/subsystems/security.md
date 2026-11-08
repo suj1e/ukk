@@ -240,11 +240,14 @@ most 256 completed ids and fails closed when that bound is reached instead of
 silently evicting an id that might still be retried. `intent: "user"` is a UI
 convention asserted by the caller, not cryptographic proof; the capability is
 the actual control boundary. The Host verifies the binding's `core_id`
-against the connected herdr-core identity before acting. Successful and
-denied control attempts are written to a JSONL audit file
-(`UKK_AGENT_CONTROL_AUDIT`, default beside the token) containing the request
-id, action, core id, terminal address, intent and outcome — never the token or
-terminal contents.
+against the connected herdr-core identity before acting. Successful control
+attempts and denials that reach preflight (missing/disabled/insecure
+capability, unauthorized `control`, missing user intent, invalid line) are
+written to a JSONL audit file (`UKK_AGENT_CONTROL_AUDIT`, default beside the
+token) containing the request id, action, core id, terminal address, intent
+and outcome — never the token or terminal contents. A malformed request that
+cannot supply a request id or binding is rejected before an audit record
+exists.
 
 Local-only threat model: the capability is same-user, same-host defense in
 depth, not remote authentication and not a boundary against a process that can
@@ -269,7 +272,8 @@ boundary has the following consequences:
 - The observer request fixes `observe:true`, sends no input, does not resize
   after the initial `cols`/`rows`, and has no call path to interrupt, stop,
   kill, archive or input. The client refuses those calls for observers before
-  writing a frame.
+  writing a frame. Explicit one-line input is a separate Host-gated path; see
+  below.
 - Dropping the attachment/connection only closes this view's stream and reaps
   the local `hc connect` helper. Terminal and Agent lifetime remain owned by
   herdr-core. See [GPUI_TERMINAL.md](desktop-terminal.md).
@@ -284,7 +288,56 @@ boundary has the following consequences:
   relies on framed CREDIT backpressure. Diagnostics never include terminal
   contents.
 
+### Desktop one-line terminal input
 
+The Session Terminal pane may offer one explicit line of input. This does not
+turn the observe stream into a writer and does not add terminal emulation:
+
+- The composer exists only for an `AgentRun { core_id, terminal_address }`
+  binding with a live observe stream. The unbound terminal detail card stays
+  read-only.
+- A send is only triggered by an explicit Send click or Enter in that field.
+  Nothing is sent on load, selection, Tab switch, attach, reattach or per
+  keystroke. There is no keystroke streaming, resize, interrupt, stop, kill or
+  detach path in the composer.
+- `HostClient::runtime_send_with_request_id` reads the separate, default-off
+  agent-control token **at call time**. The workspace metadata token and the
+  plugin-control token are never accepted or substituted. Every call carries
+  `intent: "user"`, the exact `core_id` + `terminal_address` binding and a
+  `request_id`.
+- The request id is stable for one unchanged draft: a retry after a lost reply
+  reuses it so the Host dedupes (`replayed`) or reports "in flight" instead of
+  executing the line twice. The idempotency cache is in memory and is lost on
+  Host restart. Editing the draft, or a binding change, mints a new id.
+- The line is one bounded printable line (8 KiB maximum); newlines, tabs,
+  other control characters and bidi overrides are rejected by the Desktop,
+  `ukk-host-client` and the Host preflight. The Host also validates the
+  address; malformed text never reaches herdr-core.
+- The attached feed must match **both** the terminal address and the binding's
+  `core_id`, and must still be live at send time. A same-address rebind to
+  another core is treated as stale. Drafts are keyed by pane + core + address,
+  so text typed for one terminal is not reused after a rebind.
+- The Host preflights the capability, checks the binding against the connected
+  core identity, applies in-process idempotency by `request_id`, and writes an
+  audit entry (request id, action, core id, terminal address, intent, outcome).
+  Successful attempts and every preflight denial — missing/disabled/insecure
+  capability, unauthorized `control` value, missing user intent, invalid line
+  — are audited before any `hc connect` spawn. Neither the token nor the
+  submitted text is audited. Parse failures that never produce a valid
+  `request_id`/binding are rejected before an audit record exists.
+- Failures are truthful: the draft is kept and the error is shown; the Desktop
+  never retries automatically. The field is cleared only after a verified Host
+  success. A Host-reported `replayed` outcome is labelled instead of hidden.
+- The capability state shown in the pane comes from read-only
+  `runtime.status`. When it is disabled or the Host is offline, the input field
+  is absent and the reason is displayed; there is no optimistic fallback.
+
+Residual risk: this is still a same-user local boundary. A process that can
+read the user's profile can read the agent-control token, and `intent: "user"`
+is a caller assertion rather than cryptographic proof. The Host capability is
+the control boundary, not the Desktop label. Full terminal emulation, resize
+and keystroke streaming are unsupported; real GUI line-send acceptance on
+macOS/Windows/Linux is **NOT VERIFIED** in this slice.
 
 ## omp RPC session surface
 

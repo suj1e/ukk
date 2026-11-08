@@ -63,6 +63,70 @@ impl From<serde_json::Error> for HostError {
     }
 }
 
+/// Longest single line the client submits to `runtime.send`. Terminal input is
+/// an explicit one-line action, not a keystroke stream or paste channel.
+pub const MAX_RUNTIME_SEND_BYTES: usize = 8 * 1024;
+
+/// Reject a binding the Host would reject anyway, before reading a capability
+/// file or opening a socket. The Host remains authoritative for the full
+/// `terminal_address` grammar.
+fn validate_runtime_binding(core_id: &str, terminal_address: &str) -> Result<(), HostError> {
+    if core_id.is_empty()
+        || core_id.len() > 128
+        || !core_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(HostError::Protocol(
+            "core_id must be 1-128 ASCII letters, digits, '-', '_' or '.'".into(),
+        ));
+    }
+    if terminal_address.trim().is_empty() {
+        return Err(HostError::Protocol(
+            "terminal address must not be empty".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// One line means exactly one line: no newlines, tabs, other control
+/// characters or bidi overrides, bounded bytes. The Host and herdr-core still
+/// validate the address and text on their side.
+fn validate_runtime_line(line: &str) -> Result<(), HostError> {
+    if line.trim().is_empty() {
+        return Err(HostError::Protocol(
+            "terminal input line must not be empty".into(),
+        ));
+    }
+    if line.len() > MAX_RUNTIME_SEND_BYTES {
+        return Err(HostError::Protocol(format!(
+            "terminal input line exceeds {MAX_RUNTIME_SEND_BYTES} bytes"
+        )));
+    }
+    if line
+        .chars()
+        .any(|character| character.is_control() || is_bidi_format(character))
+    {
+        return Err(HostError::Protocol(
+            "terminal input must be one line without control or bidi formatting characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_bidi_format(character: char) -> bool {
+    matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+fn validate_runtime_request_id(request_id: &str) -> Result<(), HostError> {
+    if request_id.trim().is_empty() || request_id.len() > 128 {
+        return Err(HostError::Protocol(
+            "request_id must be 1-128 characters".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Read a same-user capability file at call time. The token is never logged,
 /// stored in a snapshot or included in an error. `label` names the capability
 /// in diagnostics only.
@@ -603,12 +667,72 @@ impl PluginInvokeOutcome {
     }
 }
 
+/// Successful explicit `runtime.send`. `replayed` is the Host's idempotency
+/// outcome for one `request_id`; the client never retries silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSendOutcome {
+    pub core_id: String,
+    pub terminal: String,
+    pub turn: u64,
+    pub status: Option<String>,
+    pub started: Option<bool>,
+    pub replayed: bool,
+}
+
+impl RuntimeSendOutcome {
+    fn from_result(value: &Value, core_id: &str, terminal: &str) -> Result<Self, HostError> {
+        let turn = value.get("turn").and_then(Value::as_u64).ok_or_else(|| {
+            HostError::Protocol("runtime.send reply is missing the terminal turn".into())
+        })?;
+        Ok(Self {
+            core_id: core_id.to_owned(),
+            terminal: terminal.to_owned(),
+            turn,
+            status: optional_str(value, "status"),
+            started: value.get("started").and_then(Value::as_bool),
+            replayed: value
+                .get("replayed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+}
+
+/// Read-only `runtime.status` capability state. It never contains the token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCapabilityStatus {
+    pub enabled: bool,
+    pub capability: String,
+    pub problem: Option<String>,
+}
+
+impl RuntimeCapabilityStatus {
+    fn from_result(value: &Value) -> Result<Self, HostError> {
+        let enabled = value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| HostError::Protocol("runtime.status is missing enabled".into()))?;
+        let capability = value
+            .get("capability")
+            .and_then(Value::as_str)
+            .ok_or_else(|| HostError::Protocol("runtime.status is missing capability".into()))?;
+        Ok(Self {
+            enabled,
+            capability: capability.to_owned(),
+            problem: optional_str(value, "problem"),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HostClient {
     path: PathBuf,
     /// Explicit plugin-control token path for tests or embedded callers. When
     /// absent the platform default (or its env override) is used.
     plugin_control_path: Option<PathBuf>,
+    /// Explicit agent-control token path for tests or embedded callers. When
+    /// absent the platform default (or its env override) is used.
+    agent_control_path: Option<PathBuf>,
 }
 
 impl HostClient {
@@ -616,6 +740,7 @@ impl HostClient {
         Self {
             path: path.into(),
             plugin_control_path: None,
+            agent_control_path: None,
         }
     }
 
@@ -623,6 +748,14 @@ impl HostClient {
     /// The token itself is still read only when an invoke is attempted.
     pub fn with_plugin_control_token_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.plugin_control_path = Some(path.into());
+        self
+    }
+
+    /// Override where this client reads the separate `agent-control` token.
+    /// The token itself is still read only when an explicit `runtime.send`
+    /// (or omp mutation) is attempted.
+    pub fn with_agent_control_token_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.agent_control_path = Some(path.into());
         self
     }
 
@@ -717,6 +850,9 @@ impl HostClient {
     /// by the operator (`ukk-host --provision-agent-control` or equivalent),
     /// never by the Desktop.
     pub fn agent_control_token_path(&self) -> PathBuf {
+        if let Some(path) = &self.agent_control_path {
+            return path.clone();
+        }
         if let Some(path) = env::var_os("UKK_AGENT_CONTROL_TOKEN_FILE") {
             return PathBuf::from(path);
         }
@@ -743,6 +879,63 @@ impl HostClient {
     /// action. It is never stored or sent anywhere except the local Host.
     fn agent_control_token(&self) -> Result<String, HostError> {
         read_capability(&self.agent_control_token_path(), "agent control")
+    }
+
+    /// Read-only capability state for `runtime.*`. No token is read or sent;
+    /// callers use it to show whether the explicit input surface is available.
+    pub fn runtime_status(&self) -> Result<RuntimeCapabilityStatus, HostError> {
+        RuntimeCapabilityStatus::from_result(&self.request("runtime.status")?)
+    }
+
+    /// One explicit line for the terminal bound to `core_id` +
+    /// `terminal_address`.
+    ///
+    /// The separate agent-control token is read **at call time**, never the
+    /// workspace token. This convenience wrapper mints a fresh `request_id`
+    /// for a new draft. Retrying the *same unchanged draft* must use
+    /// [`Self::runtime_send_with_request_id`] so the Host can dedupe a reply
+    /// lost to a timeout instead of executing the line twice.
+    pub fn runtime_send(
+        &self,
+        core_id: &str,
+        terminal_address: &str,
+        line: &str,
+    ) -> Result<RuntimeSendOutcome, HostError> {
+        self.runtime_send_with_request_id(&ukk_domain::new_id(), core_id, terminal_address, line)
+    }
+
+    /// One explicit line with a caller-owned idempotency key.
+    ///
+    /// Reuse `request_id` only for the same unchanged draft and binding; a new
+    /// line, terminal or core needs a new id. A Host-reported `replayed`
+    /// outcome means the original request already executed and this attempt
+    /// did not send again.
+    pub fn runtime_send_with_request_id(
+        &self,
+        request_id: &str,
+        core_id: &str,
+        terminal_address: &str,
+        line: &str,
+    ) -> Result<RuntimeSendOutcome, HostError> {
+        // Validate the shape before touching the capability file or opening a
+        // connection, so a malformed line cannot look like a denial.
+        validate_runtime_binding(core_id, terminal_address)?;
+        validate_runtime_line(line)?;
+        validate_runtime_request_id(request_id)?;
+        let token = self.agent_control_token()?;
+        let value = self.request_with(
+            "runtime.send",
+            json!({
+                "core_id": core_id,
+                "terminal": terminal_address,
+                "text": line,
+                "request_id": request_id,
+                "intent": "user",
+                "control": token
+            }),
+            Duration::from_secs(20),
+        )?;
+        RuntimeSendOutcome::from_result(&value, core_id, terminal_address)
     }
 
     /// Read-only omp conversation snapshot. It never mutates or stops the
@@ -1323,6 +1516,73 @@ mod tests {
     }
 
     #[test]
+    fn runtime_send_line_validation_is_one_line_and_bounded() {
+        assert!(validate_runtime_line("cargo test").is_ok());
+        assert!(validate_runtime_line("echo 'quoted'").is_ok());
+        for invalid in ["", "   ", "a\nb", "a\rb", "a\tb", "bell\u{7}", "x\u{202e}y"] {
+            assert!(
+                matches!(validate_runtime_line(invalid), Err(HostError::Protocol(_))),
+                "{invalid:?} must be rejected"
+            );
+        }
+        let long = "x".repeat(MAX_RUNTIME_SEND_BYTES + 1);
+        assert!(validate_runtime_line(&long).is_err());
+        assert!(validate_runtime_line(&"x".repeat(MAX_RUNTIME_SEND_BYTES)).is_ok());
+    }
+
+    #[test]
+    fn runtime_send_binding_validation_matches_the_host_rules() {
+        assert!(validate_runtime_binding("core-1", "t7").is_ok());
+        for invalid_core in ["", "core/1", "core 1", &"c".repeat(129)] {
+            assert!(validate_runtime_binding(invalid_core, "t7").is_err());
+        }
+        assert!(validate_runtime_binding("core-1", "  ").is_err());
+    }
+
+    #[test]
+    fn runtime_send_request_id_validation_is_bounded() {
+        assert!(validate_runtime_request_id("stable-draft-id").is_ok());
+        assert!(validate_runtime_request_id("  ").is_err());
+        assert!(validate_runtime_request_id(&"r".repeat(129)).is_err());
+        assert!(validate_runtime_request_id(&"r".repeat(128)).is_ok());
+    }
+
+    #[test]
+    fn runtime_send_outcome_requires_a_turn_and_surfaces_replay() {
+        let outcome = RuntimeSendOutcome::from_result(
+            &json!({"turn": 9, "status": "working", "started": true, "replayed": true}),
+            "core-1",
+            "t7",
+        )
+        .unwrap();
+        assert_eq!(outcome.turn, 9);
+        assert_eq!(outcome.status.as_deref(), Some("working"));
+        assert_eq!(outcome.started, Some(true));
+        assert!(outcome.replayed);
+        assert_eq!(outcome.core_id, "core-1");
+        assert_eq!(outcome.terminal, "t7");
+        assert!(RuntimeSendOutcome::from_result(&json!({}), "core-1", "t7").is_err());
+    }
+
+    #[test]
+    fn runtime_capability_status_requires_enabled_and_capability() {
+        let status = RuntimeCapabilityStatus::from_result(&json!({
+            "enabled": false,
+            "capability": "separate-agent-control",
+            "problem": "agent-control token is missing"
+        }))
+        .unwrap();
+        assert!(!status.enabled);
+        assert_eq!(status.capability, "separate-agent-control");
+        assert_eq!(
+            status.problem.as_deref(),
+            Some("agent-control token is missing")
+        );
+        assert!(RuntimeCapabilityStatus::from_result(&json!({"capability": "x"})).is_err());
+        assert!(RuntimeCapabilityStatus::from_result(&json!({"enabled": true})).is_err());
+    }
+
+    #[test]
     fn parses_the_omp_snapshot_contract() {
         let value = json!({
             "session_id": "s1",
@@ -1383,6 +1643,24 @@ mod tests {
         assert_ne!(
             client.agent_control_token_path(),
             client.mutation_token_path()
+        );
+    }
+
+    #[test]
+    fn explicit_agent_control_override_stays_separate_from_the_workspace_token() {
+        let client = HostClient::new("/tmp/ukk-send-test.sock")
+            .with_agent_control_token_path("/tmp/explicit.agent-control");
+        assert_eq!(
+            client.agent_control_token_path(),
+            std::path::PathBuf::from("/tmp/explicit.agent-control")
+        );
+        assert_ne!(
+            client.agent_control_token_path(),
+            client.mutation_token_path()
+        );
+        assert_ne!(
+            client.agent_control_token_path(),
+            client.plugin_control_token_path()
         );
     }
 

@@ -30,6 +30,39 @@ use ukk_hc_client::{
 };
 
 const MAX_CACHED_REQUESTS: usize = 256;
+/// Keep in sync with `ukk_host_client::MAX_RUNTIME_SEND_BYTES`. The Host
+/// enforces the same one-line rule as the Desktop client instead of trusting
+/// the caller.
+pub const MAX_SEND_LINE_BYTES: usize = ukk_host_client::MAX_RUNTIME_SEND_BYTES;
+
+/// Terminal input is exactly one bounded, printable line. This rejects the
+/// multi-line/paste shape and control or bidi overrides before any backend
+/// call, so `runtime.send` cannot become a paste or escape channel.
+fn validate_send_line(text: &str) -> Result<(), RuntimeError> {
+    if text.trim().is_empty() {
+        return Err(RuntimeError::InvalidParams(
+            "terminal input line must not be empty".into(),
+        ));
+    }
+    if text.len() > MAX_SEND_LINE_BYTES {
+        return Err(RuntimeError::InvalidParams(format!(
+            "terminal input line exceeds {MAX_SEND_LINE_BYTES} bytes"
+        )));
+    }
+    if text
+        .chars()
+        .any(|character| character.is_control() || is_bidi_format(character))
+    {
+        return Err(RuntimeError::InvalidParams(
+            "terminal input must be one line without control or bidi formatting characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_bidi_format(character: char) -> bool {
+    matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunBinding {
@@ -528,6 +561,9 @@ impl RuntimeService {
         if call.action.requires_user_intent() && call.intent != Intent::User {
             return Err(RuntimeError::IntentRequired);
         }
+        if let RuntimeAction::SendInput { text } = &call.action {
+            validate_send_line(text)?;
+        }
         Ok(())
     }
 
@@ -692,26 +728,44 @@ impl RuntimeService {
     }
 
     fn audit(&self, call: &RuntimeCall, outcome: &str) -> Result<(), RuntimeError> {
-        if !call.action.requires_control() {
-            return Ok(());
-        }
-        let entry = AuditEntry {
-            at_ms: now_ms(),
-            request_id: call.request_id.clone(),
-            action: call.action.name().to_owned(),
-            core_id: call.binding.core_id.clone(),
-            terminal: call.binding.terminal.to_string(),
-            intent: call.intent.as_str().to_owned(),
-            outcome: outcome.to_owned(),
-        };
-        self.audit.record(entry).map_err(|error| {
-            RuntimeError::Audit(format!("agent-control audit write failed: {error}"))
-        })
+        audit_call(&self.audit, call, outcome)
     }
 
     fn deny(&self, call: &RuntimeCall, reason: &str) -> Result<(), RuntimeError> {
         self.audit(call, &format!("denied:{reason}"))
     }
+}
+
+/// Writes one control attempt to the audit sink. Callers that deny before a
+/// `RuntimeService` (and therefore before `hc connect`) exists use
+/// [`audit_denial`] with the same entry shape.
+fn audit_call(audit: &AuditLog, call: &RuntimeCall, outcome: &str) -> Result<(), RuntimeError> {
+    if !call.action.requires_control() {
+        return Ok(());
+    }
+    let entry = AuditEntry {
+        at_ms: now_ms(),
+        request_id: call.request_id.clone(),
+        action: call.action.name().to_owned(),
+        core_id: call.binding.core_id.clone(),
+        terminal: call.binding.terminal.to_string(),
+        intent: call.intent.as_str().to_owned(),
+        outcome: outcome.to_owned(),
+    };
+    audit
+        .record(entry)
+        .map_err(|error| RuntimeError::Audit(format!("agent-control audit write failed: {error}")))
+}
+
+/// Records a denial discovered by [`RuntimeService::preflight`]. The RPC
+/// dispatcher must call this before returning so a disabled, missing,
+/// insecure or unauthorized capability attempt is still audited.
+pub fn audit_denial(
+    audit: &AuditLog,
+    call: &RuntimeCall,
+    error: &RuntimeError,
+) -> Result<(), RuntimeError> {
+    audit_call(audit, call, &format!("denied:{}", denial_reason(error)))
 }
 
 fn denial_reason(error: &RuntimeError) -> &'static str {
@@ -954,6 +1008,60 @@ mod tests {
             .unwrap();
         assert!(matches!(execution.outcome, RuntimeOutcome::Removed(_)));
         assert_eq!(calls.lock().unwrap().clone(), vec!["get:t7", "remove:t7"]);
+    }
+
+    #[test]
+    fn send_rejects_multiline_control_bidi_and_oversized_text_before_the_backend() {
+        let (mut service, calls) = service(AgentControlAuth::test(CONTROL));
+        let oversized = "x".repeat(MAX_SEND_LINE_BYTES + 1);
+        for text in [
+            "one\ntwo",
+            "one\rtwo",
+            "tab\there",
+            "bell\u{7}",
+            "spoof\u{202e}txt",
+            oversized.as_str(),
+        ] {
+            let error = service
+                .execute(call(
+                    RuntimeAction::SendInput {
+                        text: text.to_owned(),
+                    },
+                    Intent::User,
+                    Some(CONTROL),
+                ))
+                .unwrap_err();
+            assert!(
+                matches!(error, RuntimeError::InvalidParams(_)),
+                "{text:?} -> {error:?}"
+            );
+        }
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "invalid text must not reach the backend"
+        );
+        assert!(service.audit_entries().iter().any(|entry| {
+            entry.action == "runtime.send" && entry.outcome == "denied:invalid_params"
+        }));
+    }
+
+    #[test]
+    fn workspace_shaped_control_is_rejected_for_send_and_audited() {
+        let (mut service, calls) = service(AgentControlAuth::test(CONTROL));
+        let error = service
+            .execute(call(
+                RuntimeAction::SendInput {
+                    text: "echo hi".into(),
+                },
+                Intent::User,
+                Some("workspace-metadata-token-that-must-never-control-runtime"),
+            ))
+            .unwrap_err();
+        assert_eq!(error, RuntimeError::Unauthorized);
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(service.audit_entries().iter().any(|entry| {
+            entry.action == "runtime.send" && entry.outcome == "denied:unauthorized"
+        }));
     }
 
     #[test]
