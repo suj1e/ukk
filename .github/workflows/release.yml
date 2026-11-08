@@ -130,6 +130,10 @@ jobs:
           root = pathlib.Path('.')
           lines = []
           for path in sorted(p for p in root.rglob('*') if p.is_file()):
+              # MyGo's internal manifest is hidden and excluded from uploaded
+              # artifacts; checksumming it would make the downloaded set fail.
+              if path.name == '.mygo-files':
+                  continue
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
               lines.append(f"{digest}  {path.as_posix()}")
           pathlib.Path('SHA256SUMS.txt').write_text("\n".join(lines) + "\n", encoding='utf-8', newline='\n')
