@@ -14,8 +14,13 @@ The packaging contract is [docs/release.md](../release.md).
    shasum -a 256 -c dist/*/*.sha256
    tar -xzf dist/*macos*/*.tar.gz
    ./ukk-*/ukk-host --version
-   ./ukk-*/ukk-desktop --version
+   ./ukk-*/ukk.app/Contents/MacOS/ukk-desktop --version
+   plutil -lint ./ukk-*/ukk.app/Contents/Info.plist
    ```
+
+   The macOS `.app` is unsigned and not notarized. Extract and run the bundle
+   executable from the terminal; do not treat a Gatekeeper block as packaging
+   evidence.
 
 4. Record the run URL, commit, archive hashes and OS versions in the PR or
    [release.md](../release.md). Do not claim signing, notarization or

@@ -57,7 +57,7 @@ token live beside the default data directory. Never commit them.
 | `just desktop-check` | Desktop format + check |
 | `just docs` | markdown link/structure/AGENTS-length check |
 | `just check` | all required local gates |
-| `just package` | unsigned local macOS archive (set version/arch as needed) |
+| `just package` | unsigned local archive (macOS stages `ukk.app`; set version/arch as needed) |
 
 ## Platform notes
 

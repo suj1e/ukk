@@ -16,7 +16,8 @@ It never creates a GitHub Release and never uploads to an external service.
 ## What is in an archive
 
 Every archive has a single top-level directory named
-`ukk-<version>-<os>-<arch>`:
+`ukk-<version>-<os>-<arch>`. Linux and Windows keep both executables at the
+archive root:
 
 ```text
 ukk-<version>-<os>-<arch>/
@@ -28,17 +29,73 @@ ukk-<version>-<os>-<arch>/
 └── ukk-desktop       # ukk-desktop.exe on Windows
 ```
 
+macOS stages the GPUI Desktop client as an unsigned `.app` bundle and keeps the
+Host as a sibling executable:
+
+```text
+ukk-<version>-macos-<arch>/
+├── LICENSE
+├── README.md
+├── SHA256SUMS.txt
+├── VERSION.txt
+├── ukk.app/
+│   └── Contents/
+│       ├── Info.plist
+│       └── MacOS/
+│           └── ukk-desktop
+└── ukk-host
+```
+
+The Host stays outside the bundle on purpose. It is a background service/CLI
+(`ukk-host serve`, `status`, `cleanup`, current-user service commands), not a
+GUI application; nesting it under `ukk.app/Contents/MacOS` would hide the
+documented `./ukk-host` entry point and conflate the Desktop app's lifetime
+with the Host's. The bundle therefore owns only the Desktop executable, and
+closing the app still does not stop the Host or any Agent. The Host is not
+duplicated inside the bundle.
+
 | OS | Archive | Executables |
 |---|---|---|
-| macOS | `ukk-<version>-macos-<arch>.tar.gz` | `ukk-host`, `ukk-desktop` |
+| macOS | `ukk-<version>-macos-<arch>.tar.gz` | `ukk-host`, `ukk.app/Contents/MacOS/ukk-desktop` |
 | Linux | `ukk-<version>-linux-<arch>.tar.gz` | `ukk-host`, `ukk-desktop` |
 | Windows | `ukk-<version>-windows-<arch>.zip` | `ukk-host.exe`, `ukk-desktop.exe` |
 
+### macOS `Info.plist`
+
+`scripts/package_release.py` generates `ukk.app/Contents/Info.plist` from a
+fixed key order; the bytes are identical for the same version input:
+
+| Key | Value |
+|---|---|
+| `CFBundleIdentifier` | `dev.ukk.desktop` |
+| `CFBundleName` | `ukk` |
+| `CFBundleDisplayName` | `ukk` |
+| `CFBundleExecutable` | `ukk-desktop` |
+| `CFBundlePackageType` | `APPL` |
+| `CFBundleInfoDictionaryVersion` | `6.0` |
+| `CFBundleShortVersionString` | numeric release prefix, e.g. `1.2.3` |
+| `CFBundleVersion` | same numeric value |
+| `NSHighResolutionCapable` | `true` |
+
+Apple expects the two bundle version keys to be period-separated integers, so
+a tag version `1.2.3` passes through unchanged while a development version
+`0.1.0-dev.abc1234` becomes `0.1.0`. The full version, commit and target stay in
+`VERSION.txt`. The plist contains no signing, notarization, entitlement or icon
+keys, and the archive contains no `_CodeSignature` directory: the app bundle is
+**unsigned**. On arm64 macOS the linker gives every Mach-O executable an
+ad-hoc signature; that is not a Developer ID or bundle signature, is not bound
+to the Info.plist, and does not satisfy Gatekeeper. A strict bundle signature
+check fails and `spctl` rejects the bundle.
+
 `VERSION.txt` records the embedded version, source commit, Rust target triple,
-OS, architecture and both binary names. `SHA256SUMS.txt` covers every file in
-the archive except itself, in standard `<sha256>  <file>` form. The workflow
-also writes `<archive>.sha256` next to each archive so the downloaded file can
-be checked before extraction.
+OS, architecture and both binary names. On macOS it additionally records
+`desktop_bundle=ukk.app`, `desktop_bundle_path`, `bundle_id` and
+`bundle_version`.
+
+`SHA256SUMS.txt` covers every file in the archive except itself, in standard
+`<sha256>  <file>` form, including nested bundle paths such as
+`ukk.app/Contents/Info.plist`. The workflow also writes `<archive>.sha256` next
+to each archive so the downloaded file can be checked before extraction.
 
 ## Build identity and `--version`
 
@@ -75,20 +132,31 @@ The matrix is `macos-latest`, `windows-latest` and `ubuntu-latest`. Each job:
 
 1. installs Rust stable and, on Linux, the GPUI build dependencies (the same
    list used by `desktop-cross-platform.yml`);
-2. builds `ukk-host` and `ukk-desktop` in release mode;
-3. runs both `--version` commands and fails if they exit non-zero;
-4. packages the archive with `scripts/package_release.py`;
-5. re-opens the archive, verifies every member is non-empty and re-checks the
+2. runs `scripts/test_package_release.py`, which builds macOS, Linux and
+   Windows archives from fake binaries and proves the `.app` layout, plist
+   values, executable modes, manifest coverage, determinism and rejected
+   tampering without needing a real build;
+3. builds `ukk-host` and `ukk-desktop` in release mode;
+4. runs both `--version` commands and fails if they exit non-zero;
+5. packages the archive with `scripts/package_release.py`;
+6. on macOS, extracts the real archive and verifies the `.app` directory, the
+   executable bits on `ukk-host` and `ukk.app/Contents/MacOS/ukk-desktop`,
+   `plutil -lint` on the Info.plist, the expected bundle id/executable, the
+   absence of `_CodeSignature`, no Developer ID authority, and `SHA256SUMS.txt`
+   coverage of every extracted file;
+7. re-opens the archive, verifies every member is non-empty and re-checks the
    internal `SHA256SUMS.txt` before upload;
-6. verifies the outer `<archive>.sha256` matches the archive and contains only
+8. verifies the outer `<archive>.sha256` matches the archive and contains only
    LF line endings (a Windows CRLF regression is rejected);
-7. uploads the archive and `.sha256` file as a workflow artifact and writes a
+9. uploads the archive and `.sha256` file as a workflow artifact and writes a
    run summary with both hashes.
 
 `scripts/package_release.py` uses only the Python standard library and works on
 all three runners. Archive metadata is fixed (sorted entries, tar mtime from
-`SOURCE_DATE_EPOCH` or 0, zip timestamps 1980-01-01), so packaging the same
-binaries and identity twice produces the same archive bytes.
+`SOURCE_DATE_EPOCH` or 0, zip timestamps 1980-01-01, fixed Info.plist key
+order), so packaging the same binaries and identity twice produces the same
+archive bytes. Nested paths are validated and duplicate archive or manifest
+entries are rejected.
 
 ## Build locally
 
@@ -134,7 +202,10 @@ python3 scripts/package_release.py \
 ```
 
 The script rejects missing/empty binaries, unexpected binary names, unsafe
-version strings and incomplete archives.
+version strings, unsafe archive paths, duplicate members and incomplete
+archives. On macOS it also verifies the generated plist and bundle executable
+before writing the archive. Run the packaging self-test with
+`python3 scripts/test_package_release.py` (or `just package-test`).
 
 ## Verify a downloaded archive
 
@@ -145,7 +216,15 @@ shasum -a 256 -c ukk-<version>-macos-<arch>.tar.gz.sha256
 tar -xzf ukk-<version>-macos-<arch>.tar.gz
 cd ukk-<version>-macos-<arch>
 shasum -a 256 -c SHA256SUMS.txt
+plutil -lint ukk.app/Contents/Info.plist
+./ukk-host --version
+./ukk.app/Contents/MacOS/ukk-desktop --version
 ```
+
+The archive is unsigned and not notarized. Gatekeeper may block launching
+`ukk.app` through Finder on a downloaded copy; running the bundle executable
+from the terminal exercises the same binary. Do not remove quarantine or
+disable Gatekeeper as part of this workflow's evidence.
 
 Linux:
 
@@ -170,8 +249,9 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 ## Run and recover the Host
 
 `ukk-host` is the local Agent Host; `ukk-desktop` is the GPUI client that reads
-it. Neither binary replaces `herdr-core` or `hc`: install those separately and
-make `hc` available on `PATH` or via `UKK_HC_BIN`.
+it. On macOS the client lives at `ukk.app/Contents/MacOS/ukk-desktop`. Neither
+binary replaces `herdr-core` or `hc`: install those separately and make `hc`
+available on `PATH` or via `UKK_HC_BIN`.
 
 ```bash
 # Foreground Host on a private Unix socket (macOS/Linux) or Named Pipe (Windows)
@@ -221,15 +301,29 @@ Verified by this workflow when it is green:
 - Both binaries run their `--version` path and report the embedded version,
   commit and target.
 - Each archive is non-empty, contains the expected file set, and its internal
-  `SHA256SUMS.txt` matches the archived bytes.
+  `SHA256SUMS.txt` matches the archived bytes and covers every file.
+- On macOS, the archive extracts to a real `ukk.app` directory with an
+  executable `Contents/MacOS/ukk-desktop`, a `plutil -lint`-clean
+  `Contents/Info.plist`, the expected bundle identifier/executable, no
+  `_CodeSignature` and no Developer ID authority, and a sibling executable
+  `ukk-host`.
+- `scripts/test_package_release.py` proves the same layout, plist values,
+  executable modes, manifest coverage and deterministic bytes from fake
+  binaries on every runner.
 - Artifacts are uploaded only to the workflow run's artifact storage.
 
 Explicitly **NOT guaranteed / NOT VERIFIED**:
 
-- **No code signing.** macOS Gatekeeper and Windows SmartScreen will warn.
+- **No code signing.** There is no Developer ID signature, bundle signature or
+  notarization. On arm64 macOS the toolchain's ad-hoc linker signature on the
+  Mach-O remains, but Gatekeeper still blocks or warns; Windows SmartScreen
+  will warn.
 - **No notarization.** macOS artifacts are not notarized or stapled.
+- **No app icon or `PkgInfo`.** The bundle uses only the generated
+  `Info.plist`; it has no `.icns`, no custom document types and no URL schemes.
 - **No installer.** There is no `.dmg`, `.pkg`, `.msi`, `.deb`, `.rpm`,
-  AppImage or setup wizard.
+  AppImage or setup wizard. `ukk.app` is an unpacked app bundle inside the
+  archive, not an installed application.
 - **No auto-updater.** Nothing checks for or downloads updates.
 - **No Windows service registration.** The Windows Host uses a current-user
   Scheduled Task when explicitly installed; this workflow does not install or
@@ -251,11 +345,11 @@ Explicitly **NOT guaranteed / NOT VERIFIED**:
 
 ## Support matrix
 
-| OS | CI runner | Rust target built by CI | Archive | Signing |
-|---|---|---|---|---|
-| macOS | `macos-latest` | `aarch64-apple-darwin` (arm64 runner) | `tar.gz` | none |
-| Linux | `ubuntu-latest` | `x86_64-unknown-linux-gnu` | `tar.gz` | none |
-| Windows | `windows-latest` | `x86_64-pc-windows-msvc` | `zip` | none |
+| OS | CI runner | Rust target built by CI | Archive | Desktop artifact | Signing |
+|---|---|---|---|---|---|
+| macOS | `macos-latest` | `aarch64-apple-darwin` (arm64 runner) | `tar.gz` | `ukk.app` + sibling `ukk-host` | none |
+| Linux | `ubuntu-latest` | `x86_64-unknown-linux-gnu` | `tar.gz` | `ukk-desktop` | none |
+| Windows | `windows-latest` | `x86_64-pc-windows-msvc` | `zip` | `ukk-desktop.exe` | none |
 
 The exact triple is taken from `rustc -vV` in each run and is recorded in
 `VERSION.txt`. Intel macOS and Windows arm64 are not built by this matrix; the
