@@ -22,7 +22,7 @@ This table records the **claim**, not a promise. `Pending evidence` means the wo
 | Stage | Claim | Evidence boundary |
 | --- | --- | --- |
 | Docs / architecture reset | Active docs describe the native Go/MyGo + external herdr-core + SwiftUI structure; obsolete Rust/GPUI claims removed | Documentation change only |
-| M0 Cutover + build spine | **Local macOS:** module builds, `ukk.app` packages ad-hoc (20.6 MB) with the pinned `libghostty-vt.dylib`, and the packaged app opens a native window and self-starts the bridge | `gofmt -l .` empty, `go vet ./...` clean, `go test ./...` 293 tests/18 packages (2026-11-08); no CI run yet, no Windows/Linux runtime check |
+| M0 Cutover + build spine | **Local macOS:** module builds, `ukk.app` packages ad-hoc with the pinned `libghostty-vt.dylib`, and the packaged app opens a native window and self-starts the bridge; CI is green on `bacec97` for macOS/Ubuntu/Windows plus launch smoke | Windows/Linux runtime interaction remains unverified even though they compile and test in CI |
 | M1 Local workspace + terminals | **Local macOS:** real herdr-core v0.1.18 terminal `t1z` attached read/write and rendered in the MyGo terminal; observe/credit/resize behavior has package tests | Window-close process survival, observer denial against a real core, and Windows/Linux attach remain unverified |
 | M2 Provider-neutral omp | **Local macOS:** bridge-owned omp 18.18.1 session started, accepted a prompt, streamed a completed turn and usage, and rendered in the Desktop conversation (`OK`, 13,622 tokens) | Long-Markdown bounds, approvals against a provider that emits them, and provider restart/resume remain unverified |
 | M3 Relay + pairing + iOS | **Local:** host-confirmed pairing, encrypted command dispatch, resume and revocation work through a real relay process; the iOS app builds and test-builds for the simulator with real CryptoKit handshakes, RPC screens and a WebRTC viewer | No deployed WSS relay, no WAN proof, no physical-device pairing/camera/APNs; simulator XCTest execution is blocked by host tooling |
@@ -30,11 +30,32 @@ This table records the **claim**, not a promise. `Pending evidence` means the wo
 | M5 Plugin safety | Manifest/grants/supervisor/framing have 93 package tests; bridge API and a Settings surface are wired | No malicious-plugin sandbox run; helpers are process-isolated, not OS-sandboxed |
 | M6 Unsigned distribution | A local macOS `.app` was built by `go tool mygo build` | No dmg/NSIS/deb artifacts from CI, no install matrix, no IPA |
 
+## Evidence register (2026-11-08)
+
+| Check | Observation | Result |
+| --- | --- | --- |
+| Format / vet / tests | `gofmt -l .`, `go vet ./...`, `go test ./...`, `go test -race ./...` in `apps/desktop` | clean; 296 tests, 18 packages; race clean |
+| Package | `go tool mygo build -platform darwin/arm64` | `ukk.app` 20.7 MB, ad-hoc signed, `libghostty-vt.dylib` bundled |
+| Native window | packaged app launch | window renders; bridge connects |
+| Bridge lifetime | quit the app, then `/v1/command` health over its socket | `{"ok":true}`; bridge kept running |
+| Terminal | herdr-core v0.1.18 `t1z` attached with libghostty-vt | `ukk terminal smoke` rendered; survived app exits |
+| Agent | omp 18.18.1 via bridge start/prompt | assistant `OK`, turn `done`, 13,622 tokens |
+| Relay + pairing | `TestPairResumeAndCommandsThroughRelay` | host-confirmed pairing, encrypted commands, resume, revocation denial |
+| Remote Screen | real ffmpeg/avfoundation capture | WebRTC offer with ICE/DTLS + H.264; stop ended capture |
+| Cross-compile | `GOOS=windows` / `GOOS=linux` build and vet | clean |
+| CI (`bacec97`) | Actions run 42472511431 | docs/layout, Go macOS/Ubuntu/Windows, launch smoke all success |
+| iOS build | Xcode-beta 27.0 generic simulator build, test build | success; `build-for-testing` success |
+| iOS launch | simulator install + launch with `-ukk-fixture` | native screen renders with an explicit fixture banner |
+| iOS crypto | macOS Swift probe of SecureChannel | transcript/HKDF/codes matched RFC 7748-derived values |
+| iOS XCTest | CI simulator unit tests | **BLOCKED / NOT PASSED**: host and runner test-host stalls; no assertion pass claim |
+
+These are single-host observations beyond the CI run. Windows/Linux runtime GUI, a deployed relay/TURN path and physical iPhone remain **NOT VERIFIED**.
+
 Do not copy a green result from one milestone or SHA to another. Do not treat an existing `apps/ios` fixture screen as Host integration.
 
 ## What is retained from before the reset
 
-- **iOS fixture shell:** `apps/ios` native SwiftUI navigation, fixture-labelled chat, trust shell, QR scanner code and reserved screen slot may be retained as UI scaffolding. It is not evidence of a real bridge, relay, pairing, approvals, APNs or camera session.
+- **iOS:** the SwiftUI app now carries real pairing, resume, encrypted RPC, approvals and a WebRTC viewer. Fixture content is shown only when no Host is paired and is labelled as such. No physical-device camera/APNs run has been recorded.
 - **Historical Rust implementation:** the previous `main` and its merged PRs are historical context only. They are not a compatibility target, are not migrated, and must not be cited as current source. Old crate/module paths and commands do not describe this tree.
 - **Retained documentation:** product/architecture docs, goals, decisions, references, the domain/security/plugins subsystem docs, release/incident runbooks and release assets remain the active documentation set.
 
@@ -52,7 +73,7 @@ Do not copy a green result from one milestone or SHA to another. Do not treat an
 ## Safety invariants under test
 
 - No Pane/Tab/Session/window close sends stop/kill; only explicit user intent with agent-control may stop execution.
-- Human vs automatic input is source-tagged on the single write path; never byte-sniffed.
+- Terminal input is never byte-sniffed; the current single plugin write path uses the legacy DATA tag for both human keys and automatic replies (documented limitation), while observers remain read-only.
 - Observers never write or resize; controller leases are explicit and expiring.
 - RESIZE is applied before paint; backpressure is bounded.
 - No ANSI-to-approval/tool inference.
