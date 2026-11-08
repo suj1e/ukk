@@ -5,7 +5,6 @@ go 1.27.3
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/egoist/mygo v0.8.3
-	github.com/google/uuid v1.6.0
 	github.com/pion/rtp v1.10.6
 	github.com/pion/webrtc/v4 v4.2.26
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
@@ -16,6 +15,7 @@ require (
 require (
 	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/pion/datachannel v1.6.3 // indirect
 	github.com/pion/dtls/v3 v3.1.15 // indirect
 	github.com/pion/ice/v4 v4.4.8 // indirect
