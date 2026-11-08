@@ -8,10 +8,10 @@
 The `Unsigned release artifacts` workflow
 (`.github/workflows/release-artifacts.yml`) builds `ukk-host` and `ukk-desktop`
 in release mode on macOS, Windows and Linux, packages one archive per OS and
-uploads it as a GitHub Actions artifact. Every push to `main`, every `v*` tag
-and manual dispatch produces downloadable unsigned packages; pull requests run
-it only when packaging inputs change. It never creates a GitHub Release and
-never uploads to an external service.
+uploads it as a GitHub Actions artifact. Every non-docs push to `main`, every
+`v*` tag and manual dispatch produces downloadable unsigned packages; docs-only
+pushes are skipped and pull requests run it only when packaging inputs change.
+It never creates a GitHub Release and never uploads to an external service.
 
 ## What is in an archive
 
@@ -80,7 +80,10 @@ The matrix is `macos-latest`, `windows-latest` and `ubuntu-latest`. Each job:
 4. packages the archive with `scripts/package_release.py`;
 5. re-opens the archive, verifies every member is non-empty and re-checks the
    internal `SHA256SUMS.txt` before upload;
-6. uploads the archive and `.sha256` file as a workflow artifact.
+6. verifies the outer `<archive>.sha256` matches the archive and contains only
+   LF line endings (a Windows CRLF regression is rejected);
+7. uploads the archive and `.sha256` file as a workflow artifact and writes a
+   run summary with both hashes.
 
 `scripts/package_release.py` uses only the Python standard library and works on
 all three runners. Archive metadata is fixed (sorted entries, tar mtime from
