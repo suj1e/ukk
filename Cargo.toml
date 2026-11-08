@@ -12,6 +12,7 @@ members = [
     "crates/protocol",
     "crates/worktree",
     "crates/remote",
+    "crates/media",
 ]
 default-members = ["crates/hc-client", "crates/host", "crates/host-client", "crates/domain", "crates/store", "crates/plugin-api", "crates/plugin-host", "crates/protocol", "crates/remote"]
 # GPUI app is a standalone pinned workspace until its native build is validated.

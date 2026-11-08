@@ -6,14 +6,17 @@ The iOS companion remains in a normal multi-agent session. A small, optional flo
 
 **Never add a persistent "Remote Desktop" main tab or replace the core Agent interface.**
 
-> **Implementation status (2026-11-08):** the only Remote Screen code that
-> exists is a bounded macOS ScreenCaptureKit **capture spike** under
-> `plugins/remote-screen/` — metadata listing plus one-frame,
-> display-only `capture-once`. There is **no input control, audio capture,
-> media transport, WebRTC/TURN path, Host/GPUI or iOS wiring, or Windows/Linux
-> adapter**. Everything below describes the target product, not implemented
-> behavior. See [Capture spike](#capture-spike-m1-macos-only) for the exact
-> boundary.
+> **Implementation status (2026-11-08):** two bounded pieces exist. First, a
+> macOS ScreenCaptureKit **capture spike** under `plugins/remote-screen/` —
+> metadata listing plus one-frame, display-only `capture-once`. Second,
+> `crates/media` implements the **versioned signalling, view/control grant and
+> controller-lease contract** with mock peers. There is still **no OS capture
+> adapter for Windows/Linux, no input control, audio capture, real media
+> transport, WebRTC/DTLS-SRTP/TURN path, Host/GPUI or iOS wiring**. Everything
+> below describes the target product, not implemented behavior. See
+> [Capture spike](#capture-spike-m1-macos-only) and
+> [M1 media/signalling contract](#m1-mediasignalling-contract-implemented-mock-tested)
+> for the exact boundaries.
 
 ## Interaction sequence
 
@@ -169,6 +172,157 @@ cargo test -p ukk-plugin-api shipped_remote_screen_capture_spike_manifest_is_val
 
 To exercise the real capture test on a manually granted machine:
 `UKK_RUN_SCREEN_CAPTURE_TESTS=1 swift test --package-path plugins/remote-screen/macos --filter CaptureNotVerifiedTests`.
+
+## M1 media/signalling contract (implemented, mock-tested)
+
+`crates/media` (`ukk-media`) is the typed boundary between the Host control
+plane and a future media transport. It contains **no capture backend, WebRTC
+stack, socket, event log or clock**. Two in-memory peers exercise it in
+`crates/media/tests/contract.rs`.
+
+### Versioned signalling (v1)
+
+One JSON object per message; `v` must be `1`; unknown fields, unknown versions,
+oversized input and the array form fail closed. The envelope has exactly these
+message types:
+
+| Type | Direction | Payload |
+|---|---|---|
+| `offer` | Host → viewer | `media_session_id`, absolute `expires_at_ms`, capability descriptor, SDP |
+| `answer` | viewer → Host | same id/expiry, negotiated capability subset, SDP |
+| `ice_candidate` | both | one bounded candidate line |
+| `ice_complete` | both | end-of-candidates marker |
+| `pause` | Host → viewer | `screen_locked`, `app_backgrounded`, `user_paused` or `reconnecting` |
+| `resume` | Host → viewer | resume media; never restores an old input lease |
+| `stop` | both | terminal stop with a typed reason |
+| `failed` | both | terminal failure with a typed reason |
+
+Bounds are enforced before parsing and again on the state-machine boundary:
+
+| Field | Bound |
+|---|---|
+| encoded message | 64 KiB |
+| SDP | 16 KiB, must start with `v=`, no NUL |
+| ICE candidate | 1 KiB, single-line printable ASCII |
+| ICE URL | 2 KiB; only `stun:`, `turn:`, `turns:`; no userinfo/fragment; `transport=udp\|tcp` only |
+| TURN username/credential | 512 bytes each; printable ASCII; supplied as a pair; required for `turn:`/`turns:` and forbidden for STUN-only |
+| codecs | 1–16 descriptors (`name`, clock rate, channels) |
+| transports | 1–2 descriptors; DTLS-SRTP is mandatory for v1 |
+| ICE servers | 0–8 per capability descriptor, 1–8 URLs each |
+| media session lifetime | at most 1 hour from the offer; absolute expiry, never relative |
+
+An answer must be a codec/transport subset of the offer and must carry **no**
+ICE server configuration: only the capture side supplies TURN/STUN settings.
+`Sdp`, `IceCandidate`, `Credential` and `IceServer` redact in `Debug`/`Display`;
+the raw TURN secret is available only through `Credential::expose_for_transport`
+for the ICE adapter. Validated TURN URLs cannot contain userinfo. There is no
+frame/sample/pixel variant or field, so media bytes cannot enter durable event
+history or a relay payload through this contract.
+
+### Separate grants and controller lease
+
+| Authority | Rule |
+|---|---|
+| `ViewGrant` | per bound device, Session and media session; absolute expiry ≤ 1 hour and capped by the media session expiry; authorizes receiving media only |
+| `ControlGrant` | minted only from a live view grant with the same device/Session/media session; expiry ≤ 10 minutes and capped by the view grant |
+| `ControllerLease` | one per media session; absolute expiry ≤ 10 minutes and capped by its control grant; single-controller binding |
+| Input admission | requires `connected` media state **and** live view + control + lease for the same bound device/Session/media session **and** an unlocked screen |
+
+`HostSession` is bound to one authenticated `ViewerBinding` `(device_id,
+session_id)` at construction. It must hold a live view grant before `start`, and
+every inbound answer/ICE is checked against that binding plus a live view grant;
+a different paired device, a device without `screen.view`, or a revoked grant
+is rejected with `WrongPeer`/`ViewDenied`. The sender identity is supplied by
+the transport from the authenticated handshake, never by the signalling
+envelope.
+
+`HostSession::authorize_input` is the only admission point on the capture side.
+A view-only device is refused with `MissingControlGrant`; an unbound device is
+refused with `WrongPeer`, and a viewer has no equivalent method at all.
+`release_controller`, `revoke_view`, `revoke_control`, `revoke_device`, `lock`
+and `stop` are explicit operations. Revoking a view cascades to its control
+grants and lease; device revocation removes every grant and lease it held; stop
+records the media session id in the Host's shared `StoppedSessions` tombstone
+set, so a grant cannot be revived and a new `HostSession` cannot reuse the id.
+
+### Pause, lock, reconnect and stop
+
+The state machine is:
+
+```text
+Host:   Idle --offer--> OfferSent --answer--> Connected
+Viewer: Idle --offer--> Connected
+Both:   Connected/Paused --pause--> Paused(reason) --resume--> Connected
+        any non-terminal --stop/failed--> Stopped/Failed (terminal)
+```
+
+* Pause, screen lock, app backgrounding and reconnect **withdraw the controller
+  lease**. Resume never restores it; the controller must claim a new lease.
+  Therefore no pointer/keyboard batch from before the gap can be replayed.
+* `lock` pauses media and blocks `resume` until an explicit `unlock`; unlock
+  alone does not resume media. `lock`, `unlock` and `resume` on a
+  `stopped`/`failed` session return `Terminal` instead of overwriting terminal
+  state.
+* `suspend_for_reconnect` emits `pause(reconnecting)`; `resume_after_reconnect`
+  reconnects media only after the transport has a fresh generation.
+* Stop/failure is terminal for that media session id; a new session needs a new
+  id. Expiry observed by any transition is converted into `failed(expired)` and
+  revokes grants. Terminal ids are kept in the Host's shared `StoppedSessions`
+  set.
+
+The `sdp` field is opaque to this crate: it is bounded and redacted, but the
+typed capability descriptor is the negotiation authority checked on both
+answer and offer. A WebRTC adapter must configure profiles/transport/DTLS from
+the validated typed capabilities (or re-validate the answer SDP itself); it
+must not treat SDP text as having passed the typed subset check.
+
+### Adapter boundary
+
+A future capture adapter creates a `HostSession` with a real `Sdp`,
+`MediaCapabilities`, and the authenticated `ViewerBinding`, issues a view grant
+for that binding, then calls `start`. It sends
+`SignallingMessage::encode()` bytes over the authenticated control channel,
+calls `handle(sender, message, now)` with the transport-authenticated sender,
+and calls `authorize_input` immediately before injecting one input batch. The
+WebRTC/ICE adapter consumes `Sdp`, `IceCandidate`, `IceUrl`/`Credential` and
+enforces DTLS-SRTP; **this crate never touches a frame, a socket or TURN**.
+The viewer mirror uses `MediaSession::viewer` and returns the answer produced by
+`MediaSession::handle`.
+
+No capture backend, Host RPC, GPUI/Desktop, iOS or `plugins/remote-screen` file
+is changed by this contract; the existing macOS capture spike remains a
+separate, metadata/single-frame boundary.
+
+### Test evidence
+
+`cargo test -p ukk-media` (27 tests) covers:
+
+* offer → answer → ICE candidate/complete ordering, and wrong order/session/role;
+* answer/ICE sender binding: only the live-granted `ViewerBinding` is accepted;
+* answer expiry mismatch, stale offer and codec/transport widening;
+* malformed, unknown-field, array-form, unsupported-version and oversized
+  messages, including rejection of a `frame`/`media_frame` field or type;
+* bounded SDP/candidate fields and `stun:`/`turn:`/`turns:` URL validation;
+* TURN username/credential redaction in `Debug`/`Display`;
+* separate view/control grants, control-without-view denial, unbound/view-only
+  input refusal, lease expiry, control expiry and view expiry;
+* media-session-capped view TTL and `authorize_view` expiry/closed checks;
+* single-controller binding, explicit release, wrong-device renew,
+  view/control/device revocation removing a live lease;
+* pause, screen lock/unlock/resume, reconnect/resume, and proof that an old
+  lease is refused after each withdrawal;
+* terminal stop/expiry, `lock`/`unlock`/`resume` refusing to overwrite terminal
+  state, and process-level stopped-id tombstones preventing resurrection.
+
+Dependency record: only the in-repo `ukk-protocol` path crate plus `serde` and
+`serde_json`, which the workspace already uses (MIT OR Apache-2.0). No new
+external crate, network call, cryptography or platform API is added.
+
+**NOT VERIFIED:** real WebRTC/DTLS-SRTP negotiation, ICE gathering or
+connectivity checks, any contact with a STUN/TURN server, OS capture, encoder,
+iOS viewer, Host RPC/relay wiring, production TURN credential issuance, or a
+physical iPhone. The 3-OS workflow (`.github/workflows/rust-spike.yml`) covers
+`crates/**`; its result is authoritative only once the PR runs.
 
 ## macOS host implementation targets
 
