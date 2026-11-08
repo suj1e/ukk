@@ -85,7 +85,9 @@ go tool mygo build        # unsigned package for this OS
 
 Platform notes: the terminal uses Ghostty's `libghostty-vt`, which MyGo packages
 as a checksum-pinned native library; Linux builds need GTK 3. macOS 13+ is the
-minimum. Signing, notarization and store distribution are out of scope; macOS
+minimum. Local packaging has been exercised for macOS (`.app`), Linux
+(`.deb`/tar/PKGBUILD) and Windows (`.exe`); install/run acceptance on Windows
+and Linux is still open. Signing, notarization and store distribution are out of scope; macOS
 ad-hoc signing is allowed.
 
 ## Documentation
