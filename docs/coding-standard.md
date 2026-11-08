@@ -1,84 +1,125 @@
 # ukk Engineering Standards / 工程规范
 
-> Architecture-first baseline. These rules apply to changes to Desktop, Host, iOS, plugins and all future native adapters.
+> Architecture-first baseline. These rules apply to the Go/MyGo Desktop, the background bridge, the relay, the SwiftUI companion and all plugins.
 
 ## Quality gate
 
 A feature is **not complete** when its source merely exists. It must have a tested contract and platform-specific evidence where applicable.
 
 1. Work on a topic branch and open a PR. Do not merge failing checks into `main`.
-2. Run `cargo fmt --all -- --check`, `cargo test --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings` from repository root.
-3. Run `cargo fmt --manifest-path apps/desktop/Cargo.toml --all -- --check` and `cargo check --manifest-path apps/desktop/Cargo.toml` for GPUI.
-4. Validate macOS, Windows and Linux: GPUI display backends are different, and Windows Named Pipe tests are not replaceable by a Unix CI pass.
-5. After every schema/protocol change, add a fixture, migration test, or transport contract test, and update docs.
-6. Treat GitHub Actions run status as authoritative. A source commit or a configured workflow is not proof that tests passed.
-7. Keep integration tests safe by default: no real Agent runs, destructive process signals or unintended network requests unless the test explicitly opts in.
+2. Use the pinned toolchain: **Go 1.27.3** and **MyGo v0.8.3** (`go tool mygo`, pinned in `apps/desktop/go.mod`).
+3. Run from `apps/desktop`:
+
+   ```bash
+   gofmt -l .
+   go vet ./...
+   go test ./...
+   go test -race ./...   # on hosts where the race detector is supported
+   go tool mygo doctor
+   go tool mygo build
+   ```
+
+   `gofmt -l .` must print nothing. `go test` must include real assertions, not placeholder tests that pass vacuously. Run the race detector on at least Linux and macOS; if a platform cannot run it, record that explicitly instead of claiming a race pass.
+4. Validate macOS, Windows and Linux. Desktop window creation, native permissions and OS services differ per platform; a compile on one OS is not evidence for the others.
+5. For iOS, generate the project from `apps/ios/project.yml` and run the simulator build/tests. A simulator build is not physical-device acceptance.
+6. After every protocol, provider or schema change, add a fixture or contract test and update the affected docs.
+7. Treat GitHub Actions run status on the exact SHA as authoritative. A source commit or a configured workflow is not proof that checks passed.
+8. Keep integration tests safe by default: no real Agent runs, destructive signals, screen capture or unintended network requests unless the test explicitly opts in.
+9. Never claim build/runtime/device acceptance that was not observed; write **NOT VERIFIED** with the exact missing prerequisite.
 
 ## Module boundaries
 
 | Area | Owns | Does not own |
 |---|---|---|
-| `apps/desktop/src/main.rs` | GPUI startup/window lifecycle only | Widgets, Session state, SQL, hc parsing |
-| `apps/desktop/src/workspace/state.rs` | Host state refresh and subscriptions | User actions, direct database writes |
-| `apps/desktop/src/workspace/actions.rs` | User-intent workspace commands | Agent process lifetime |
-| `apps/desktop/src/workspace/{sidebar,panes,agent_detail,toolbar,render}.rs` | Native UI composition | Network authentication, SQL |
-| `crates/host/src/cli.rs` | Developer/operator CLI | Host protocol and OS listeners |
-| `crates/host/src/transport.rs` | User-scoped Unix Socket and Named Pipe | Product domain rules |
-| `crates/host/src/rpc.rs` | RPC routing / local authorization | Rendering, SQLite internals |
-| `crates/host/src/broker.rs` | Runtime event continuity | Persisted Session layouts |
-| `crates/host/src/protocol_service.rs` | Durable protocol adapter: SQLite hydration, command admission/idempotency, replay and delivery authorization | Wire framing, OS listeners |
-| `crates/host/src/protocol_endpoint.rs` | Local length-prefixed protocol stream, same-user acceptance and per-connection bounds | Product domain rules, WAN/relay, TLS |
-| `crates/host/src/protocol_bridge.rs` | Structured herdr-core status → typed durable event for bound AgentRuns | Broker state ownership, approval inference, cursors |
-| `crates/domain/src` | Stable product identity and pure pane tree algorithms | I/O or herdr-core process control |
-| `crates/store/src/schema.rs` | SQLite open/migrations | Product UI |
-| `crates/store/src/records.rs` | Space/Session/AgentRun persistence | Pane rendering |
-| `crates/store/src/layouts.rs` | Layout validation and CAS | Agent termination |
-| `crates/store/src/snapshot.rs` | Read-only durable state materialization | Backend process management |
-| `crates/store/src/events.rs` | Durable S1 event-log cursors, retention and snapshot boundary | Wire framing, Host transport |
-| `crates/store/src/trust.rs` | Persisted device identity/grants and CAS rotation/revocation | Authorization decisions, key storage |
-| `crates/store/src/idempotency.rs` | Durable idempotency begin/finish and tombstones | Command execution, wire results |
+| `cmd/ukk` | MyGo app lifecycle, window creation, binding services | Domain rules, SQL, herdr-core parsing, remote credentials |
+| `cmd/ukk-bridge` | Background service lifecycle and wiring | UI rendering, direct widget state |
+| `cmd/ukk-relay` | Relay server startup, TLS/operator configuration | Product domain state, plaintext control content, screen media |
+| `internal/ui/app` | Shell, navigation, menus, keybindings, settings presentation | Authorization, process lifetime, persistence |
+| `internal/ui/workspace` | Space/Session/tab/pane composition and refresh | Agent control decisions, database writes |
+| `internal/ui/conversation` | Provider-neutral turns, tools, approvals, Markdown surfaces | Provider RPC parsing, approval authorization |
+| `internal/ui/terminal` | libghostty-vt view, resize intent, focus | Process ownership, observer/controller authorization |
+| `internal/ui/repository` | Read-only files, Git status/diff/activity surfaces | Git write actions without a capability |
+| `internal/ui/remotescreen` | Floating tile, permission prompts, local presentation | Capture/input authority, media transport |
+| `internal/bridge` | Local API acceptance, authorization, audit, lifecycle | Rendering, embedded provider parsing |
+| `internal/workspace` | Domain identities, layout validation, atomic JSON store, revision CAS | herdr-core process control, UI widgets |
+| `internal/agents` | Provider-neutral contract, omp adapter, capability detection | Terminal process ownership, approval replay |
+| `internal/hc` | herdr-core client, framed attach, provenance tags, resize, credit | Product UI, durable metadata |
+| `internal/remote` | Pairing, device identity, E2E, relay client, revocation | Screen media, generic RPC route policy |
+| `internal/remotescreen` | Capture/input adapters, media negotiation, leases | Agent control, permanent navigation |
+| `internal/relay` | WSS/TLS, operator auth, opaque routing, bounds | Decrypting control payloads, carrying raw video |
+| `apps/ios` | SwiftUI navigation, chat, approvals, pairing, APNs presentation | Desktop rendering, shared Go code |
 
-Keep modules **cohesive rather than arbitrarily small**. An entrypoint should ideally stay below ~150 lines and should not become a dumping ground. If a module exceeds ~300 lines, review whether it combines independent responsibilities; split when doing so improves ownership and testability. This is a review heuristic, not a rigid lint that encourages meaningless files.
+Keep packages **cohesive rather than arbitrarily small**. An entrypoint should stay below ~150 lines and must not become a dumping ground. If a package exceeds ~300 lines, review whether it combines independent responsibilities; split when doing so improves ownership and testability. This is a review heuristic, not a lint that encourages meaningless files.
 
-## Rust code conventions
+## Go code conventions
 
-- Modules named after domain responsibilities, not vague `utils`, `helpers` or `misc`.
-- Prefer typed commands/results and explicit error types; avoid `unwrap`/`expect` outside tests and startup invariants.
-- Do not introduce global mutable application state; isolate concurrency in Host services.
-- No blocking I/O inside GPUI `Render`, input handlers or main UI executor. Local RPC and SQLite work must run on background tasks.
-- Use `pub(crate)` / `pub(super)` only where cross-module access is needed; keep internals private by default.
-- Keep business logic free from GPUI, platform APIs and persistence by using domain-level functions and adapters.
-- Use `Result` and explicit typed errors for user operations. On optimistic CAS conflict, surface a retry/reload affordance; never silently overwrite layout.
-- Keep secret keys out of logging and UI errors. Security boundaries are additive: local edit capability never authorizes terminal input or remote desktop.
-- Do not infer Agent state from raw terminal text; use herdr-core structured status with an explicit unknown fallback.
+- Name packages after domain responsibilities, not vague `utils`, `helpers` or `misc`.
+- Prefer typed commands/results and wrapped errors (`fmt.Errorf("...: %w", err)`). Avoid `panic` outside startup invariants and tests.
+- Do not introduce global mutable application state. Inject dependencies; isolate concurrency behind a service with explicit lifecycle.
+- Every blocking operation takes a `context.Context` and honors cancellation/deadlines.
+- Bound everything crossing a trust boundary: frame size, queue depth, timeline bytes, concurrency, retries and retention.
+- Keep domain logic free of MyGo, platform APIs and persistence. Use interfaces at the edge, not in the middle of pure logic.
+- Do not block the MyGo main thread. Event listeners and native UI callbacks run there; do RPC, disk, network and provider work on goroutines.
+- Remember MyGo's threading rule: public calls are safe from any goroutine, but handler callbacks and drawing run on the main thread. Never sleep, poll or wait on a lock there.
+- Use `Result`-style typed outcomes for user operations. On optimistic revision conflict, surface a retry/reload affordance; never silently overwrite shared layout.
+- Keep secret keys and tokens out of logs, UI errors and audit entries. Local edit capability never authorizes terminal input, agent control, screen viewing or screen control.
+- Terminal writes carry an explicit source tag (`HUMAN_INPUT` / `AUTOMATIC_INPUT`). Never inspect bytes to classify input. Observers never write or resize.
+- Apply the core RESIZE result before painting. Do not paint a stale terminal grid.
+- Never infer Agent state, tool calls or approvals from raw terminal text. Use structured provider events; otherwise show an explicit unsupported/terminal fallback.
+- Render long Markdown incrementally and bounded; do not block the UI on unbounded parsing.
+- `CGO_ENABLED=0` remains the default for MyGo builds. Do not add cgo dependencies without an accepted ADR.
+
+## Security and correctness rules
+
+- The bridge is the only component that authorizes remote, agent-adapter and screen connections. The Desktop does not hold remote credentials.
+- Pairing, agent control, screen view and screen control are separate grants. Never treat one as implied by another.
+- Screen media does not traverse the relay; the relay carries no raw video.
+- Every mutation surface needs denial, replay and revocation tests.
+- Closing a view detaches. Only explicit user intent with the correct capability may stop an Agent, terminal, screen stream or controller lease.
+- Plugin code runs out of process by default; third-party plugins are untrusted and must be sandboxed where the OS supports it.
+- Do not log bearer tokens, pairing secrets, turn credentials or screen content.
 
 ## Test pyramid
 
-- **Pure unit:** pane split, close, resize; UUID and Session constraints; mismatched CAS revision; invalid/duplicate identifiers.
-- **Persistence:** SQLite reopen, migrations and revision conflicts; archived Session retaining AgentRun mappings.
-- **Protocol:** named pipe/Unix socket framing, auth failures, idempotent Session creation, daemon restart and event gap recovery.
-- **UI integration:** Session creation → Host → SQLite → refreshed GPUI view; closing Pane does not kill Agent; offline and error state.
-- **Real OS acceptance:** GPUI launches, keyboard accessibility, permissions, multi-window, and Host persistence on all desktop OSes.
+- **Pure unit:** pane split/close/resize, domain IDs, layouts, revision conflicts, source-tag selection, Markdown bounds.
+- **Persistence:** atomic store reopen, corrupt-document refusal, revision conflicts, pane-tree bounds, trust/grant revocation.
+- **Protocol/transport:** Unix socket and Windows named pipe framing, same-user acceptance, deadlines, quotas, malformed frames.
+- **Provider contracts:** omp fixture transcripts plus a real gated run; Codex/Claude contract fixtures only, with no live claim until verified.
+- **herdr-core:** recorded schema and mock transport tests; a pinned real-daemon acceptance job for process survival, attach/detach, resize, provenance and credit.
+- **Relay/media:** TLS/operator-auth rejection, opaque frame bounds, E2E possession, revocation, TURN negotiation and no-media-on-relay checks.
+- **UI integration:** Session creation → workspace store → refreshed MyGo view; provider start/prompt → bridge → refreshed conversation; closing a window does not kill an Agent; offline and error states.
+- **Real OS acceptance:** native window, keyboard/a11y, permissions, service install/uninstall and bridge survival on each desktop OS.
+- **iOS:** simulator unit/UI tests; physical-device pairing, camera, approvals and media only when signing/device prerequisites exist.
 
 ## PR checklist
 
-- [ ] Focused change: clear module ownership, no unrelated UI or infrastructure rewrite
-- [ ] Formatting, tests, Clippy, GPUI checks green
+- [ ] Focused change: clear package ownership, no unrelated rewrite
+- [ ] `gofmt`, `go vet`, `go test`, race tests and `mygo build` green, or an explicit reason the platform gate does not apply
 - [ ] New behavior has a failing-before / passing-after test, when feasible
-- [ ] No process kill on view close, no unintended mutation permissions
-- [ ] Security review for credentials, host IPC, plugins, screen capture or input
-- [ ] Documentation/ADR and platform matrix updated if architecture changed
-- [ ] Actual build/runtime outcomes recorded; unverified items explicitly noted
+- [ ] No view-triggered process kill; no hidden permission escalation
+- [ ] Security review for credentials, local IPC, relay, pairing, plugins, screen and terminal input
+- [ ] Schema/protocol/provider docs updated when architecture or contracts change
+- [ ] Actual build/runtime outcomes recorded with exact SHA and OS; unverified items explicitly noted
+- [ ] No fake adapter, dummy entrypoint, placeholder test or fabricated device evidence
 
 ## Commands
 
 ```bash
-cargo fmt --all -- --check
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+# Desktop/bridge/relay (module root apps/desktop)
+gofmt -l .
+go vet ./...
+go test ./...
+go test -race ./...
+go tool mygo doctor
+go tool mygo build
 
-cargo fmt --manifest-path apps/desktop/Cargo.toml --all -- --check
-cargo check --manifest-path apps/desktop/Cargo.toml
+# Development run
+go tool mygo dev
+
+# iOS
+cd apps/ios && xcodegen generate
+xcodebuild -project UkkCompanion.xcodeproj -scheme UkkCompanion \
+  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build
 ```
 
-The GPUI application intentionally has a separate Cargo workspace to keep UI platform dependencies out of pure Host/domain CI. It is nevertheless subject to the same quality bar.
+The Go module is the single build boundary for Desktop, bridge and relay. The iOS app is a separate native Xcode project sharing only the protocol.

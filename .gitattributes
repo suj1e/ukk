@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.icns binary
+*.ico binary
+*.dylib binary
+*.so binary
+*.dll binary
+*.zip binary
+*.gz binary
+*.xcresult binary

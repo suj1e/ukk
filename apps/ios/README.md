@@ -1,39 +1,66 @@
-# ukk iOS companion (fixture-first shell)
+# ukk iOS companion
 
-Roadmap task **I1**: a native SwiftUI iPhone/iPad shell. This app is deliberately
-**fixture-first**: it renders deterministic sample content and never contacts a
-Host. Real remote sessions, trust establishment and approvals belong to the
-S1/S2/R1 lanes and are not implemented here.
+Native SwiftUI iPhone/iPad client. It is a real remote client for a paired
+Desktop Host: pairing runs the v1 handshake, every Session view is backed by
+encrypted RPC, and Remote Screen uses a real WebRTC peer connection.
 
-This directory contains **no WebView**, no Android target, no GPUI fork and no
-root Rust workspace changes.
+The app starts in an explicitly labelled **fixture mode only when no Host has
+been paired** (`FIXTURE DATA — no Host connection`). As soon as a Host is
+pinned, fixture content is not used; cached Host data is labelled stale whenever
+the connection is connecting, degraded, offline, suspended or revoked.
 
 ## What is implemented
 
-- **Navigation**: Workspace → Space → Session → AgentRun, backed by a typed,
-  unit-tested `NavigationState` and `NavigationStack` routes.
-- **Chat-first Session screen**: user/agent/system messages, agent chips,
-  per-message fixture metadata. The composer is present but disabled.
-- **Connection indicators**: `ConnectionStateMachine` models
-  fixture/online/reconnecting/offline/suspended/revoked with bounded deterministic
-  backoff. The app starts in `fixtureData` and never claims "Live".
-- **Backgrounding contract**: `scenePhase` background suspends the transport
-  state; foreground requires a fresh authenticated handshake before going live.
-- **Approvals**: explicitly unsupported. `ApprovalPanelState.actions` is always
-  empty; the UI contains no approve/reject affordance. Terminal text is never
-  parsed into approvals.
-- **Trusted devices**: local management shell with roles, per-capability scopes
-  and local-only revocation. The current device cannot revoke itself.
-- **QR pairing presentation**: AVFoundation `AVCaptureMetadataOutput` QR scanner
-  with camera-unavailable state (simulator), a documented-invite parser and a
-  secret-redacting `description`. Parsing is local; no network, no trust storage.
-- **Reserved Session overlay slot**: a non-interactive placeholder for the future
-  M1 Remote Screen plugin. No capture, media or pointer path exists.
-- **Push contract**: an opaque-hint allowlist (`ukk_hint_id`). APNs registration,
-  delivery and background handling are **not implemented**.
-
-Every screen shows a persistent **FIXTURE DATA — no Host connection** banner;
-entity rows carry a FIXTURE badge and messages are stamped `fixture`.
+- **Transport** (`Transport/`)
+  - `RelayClient`: `URLSessionWebSocketTask` with base64 relay frames, a 20 s
+    keepalive ping and typed failures.
+  - `SecureChannel`: CryptoKit X25519, Ed25519, HKDF-SHA256 and
+    ChaCha20-Poly1305, matching `apps/desktop/internal/remote/doc.go` byte for
+    byte. Pairing C1/S1/C2, device-authenticated resume R1/R2/R3, six-digit
+    confirmation code, 1 MiB envelopes, counters starting at 1 and a 64-entry
+    replay window.
+  - `RemoteAPI`: request/response correlation by 8-byte hex id, typed errors,
+    concurrent requests, pushed `event` messages.
+  - `RemoteHostClient`: fresh resume handshake per connection, bounded
+    exponential backoff (1, 2, 4, 8, 16, 30 s), status stream and RPC surface.
+- **Pairing** (`Screens/QRPairingScreen.swift`, `Transport/PairingCoordinator.swift`)
+  - Scan or paste a v1 invite, show the six-digit code, require explicit
+    confirmation, then send C2 and verify the encrypted channel with `health`
+    before storing trust.
+  - Invite secrets are never stored, displayed or logged. The invite is single
+    use and expires within five minutes.
+- **Keychain** (`Transport/Keychain.swift`)
+  - Device Ed25519 seed and X25519 private key, plus the pinned Host public
+    keys and relay URL, in generic-password items with
+    `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and no iCloud sync.
+  - Channel keys and counters are never persisted; reconnect/relaunch always
+    performs a fresh resume handshake.
+- **Host-backed Sessions**
+  - `workspace.get` drives Spaces and Sessions; `agent.snapshot` drives messages,
+    turns, provider tool calls and pending approvals; `agent.list` is available
+    for event-shaped snapshots.
+  - `agent.prompt`, `agent.abort` (turn only), `agent.stop` (explicit process
+    stop) and `agent.approve` with explicit confirmation.
+  - Approvals are shown only when the Host granted `agent.approve` and the
+    provider emitted a pending request. Terminal text is never parsed.
+- **Trusted devices**
+  - `remote.status` loads devices, grants and expiries; `remote.revoke` revokes.
+    Revoking this device ends the connection and requires re-pairing.
+- **Remote Screen** (`Screen/`)
+  - LiveKitWebRTC `150.7871.05` via the local Swift package, fetched by `scripts/fetch-webrtc.sh` and checksum-verified (not committed). The Host's `screen.start` offer and
+    ICE (STUN/TURN) configuration feed an `LKRTC*` peer connection; the answer
+    returns through `screen.answer`; the video track renders in
+    `LKRTCMTLVideoView` inside the Session tile, with expand/collapse and
+    one-tap stop (`screen.stop`).
+  - Pointer input is sent only when the Host's `screen.start` result reports a
+    control grant, mapped into the captured frame's pixel space.
+  - If no video track arrives within 12 s the tile reports an explicit
+    unavailable state. There is no fake poster.
+- **Push contract** (`Domain/PushHintContracts.swift`)
+  - Still an opaque-hint allowlist (`ukk_hint_id`). APNs registration, delivery
+    and background handling are **not** implemented.
+- **Persistence**: only the pinned Host (Keychain) and the last selected
+  Host-backed Session id (UserDefaults) are persisted.
 
 ## Layout
 
@@ -42,123 +69,48 @@ apps/ios/
   project.yml                  XcodeGen specification (source of truth)
   UkkCompanion.xcodeproj       generated; regenerate with `xcodegen generate`
   UkkCompanion/
-    App/                       entry point + observable app model
-    Domain/                    models, fixtures, navigation, connection machine,
-                               approvals/capabilities, devices, pairing, push
-    Scanner/                   AVFoundation QR scanner + camera availability
+    App/                       entry point + app model
+    Domain/                    models, fixtures, navigation, state machine,
+                               capabilities, devices, push contract
+    Transport/                 relay, crypto, RPC, Keychain, pairing, host client
+    Screen/                    WebRTC controller and Remote Screen tile
+    Scanner/                   AVFoundation QR scanner + availability
     Screens/                   workspace/space/session/agent/devices/pairing
     Components/                theme, badges, chat bubbles, cards
     Resources/                 asset catalogue
   UkkCompanionTests/           unit tests (no simulator UI)
-  UkkCompanionUITests/         black-box UI smoke test
+  UkkCompanionUITests/         black-box fixture-mode smoke test
 ```
 
-Regenerate the project after editing `project.yml`:
+## Build
 
 ```bash
 cd apps/ios
 xcodegen generate
+xcodebuild -project UkkCompanion.xcodeproj -scheme UkkCompanion \
+  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build
 ```
 
-## Build and test
+The LiveKit binary target is required; the build fails rather than silently
+falling back to a video-less or fake screen.
+
+## Tests
 
 ```bash
-cd apps/ios
-
-# Compile for the simulator SDK (no runtime needed)
 xcodebuild -project UkkCompanion.xcodeproj -scheme UkkCompanion \
-  -sdk iphonesimulator \
-  -destination 'generic/platform=iOS Simulator' build
-
-# Run unit + UI tests on an installed iPhone simulator
-xcodebuild -project UkkCompanion.xcodeproj -scheme UkkCompanion \
-  -sdk iphonesimulator \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' test
-
-# Only the fast unit suite
-xcodebuild -project UkkCompanion.xcodeproj -scheme UkkCompanion \
-  -sdk iphonesimulator \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+  -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   -only-testing:UkkCompanionTests test
 ```
 
-If `xcrun simctl` or `xcodebuild` reports
-`CoreSimulator is out of date. Current version (...) is older than build version (...)`,
-the selected Xcode and the machine-wide CoreSimulator install are mismatched. The
-supported fix is to install the matching additional components for the installed
-Xcode (opening Xcode's "Install additional components" prompt, or
-`xcodebuild -runFirstLaunch`). Merely switching `DEVELOPER_DIR` to an older Xcode
-can also fail on a newer macOS: that Xcode's `DTServiceHub`/`dtarbiter` helpers may
-be rejected by AMFI (`com.apple.private.amfi.version-restriction`). Record which
-Xcode, simulator runtime and helper versions were actually used; compiling with a
-newer SDK does not prove test execution.
+Covered: invite parsing (strict fields, wss, userinfo, expiry, key lengths),
+fixed-key transcript/HKDF vectors for pairing and resume, AEAD proofs, envelope
+counter/replay/gap/authentication, Keychain round-trip via a test store, RPC
+correlation/errors/events, connection transitions and the fixture-mode
+guarantees.
 
-## Test coverage
+## Limitations
 
-CI: `.github/workflows/ios.yml` builds the committed project for a generic iOS
-Simulator and runs the unit suite on the first available iPhone simulator on
-`macos-latest`. UI tests are not run in CI (they are slower and more
-environment-sensitive); the UI suite is documented below and was run manually.
-
-`UkkCompanionTests`:
-
-- navigation push/depth/selection, duplicate push, workspace replacement, reset;
-- connection state machine: fixture start, live only after transport open,
-  reconnect backoff and terminal offline, background → foreground handshake,
-  revocation terminality, indicator honesty, bounded retry delay;
-- fixture integrity: deterministic IDs, every entity marked fixture, relationship
-  resolution, ordered messages, all capabilities unnegotiated, unknown-status
-  provenance;
-- approvals: unsupported reasons, empty actions, read-only composer, reserved
-  overlay slot;
-- trusted devices: ordering, revocation outcomes, least-privilege scopes;
-- pairing invite parsing: valid payload, expiry, version, relay scheme, UUID,
-  key charset, secret length, secret redaction;
-- push hint allowlist and sanitization;
-- simulator camera availability.
-
-`UkkCompanionUITests` (black box): fixture banner, non-live status, full
-navigation to the Session chat, unsupported approval state, disabled composer,
-reserved Remote Screen slot, agent drill-down, trusted-device shell, local
-revocation and the simulator camera-unavailable pairing screen.
-
-## Validation record (2026-11-08)
-
-- Generic simulator build with **Xcode 27.2** (iOS 27.2 SDK) succeeded. The host's
-  CoreSimulator mismatch warning appears during resolution but does not affect
-  compilation.
-- **CI** (`.github/workflows/ios.yml`) builds the committed project and runs the
-  unit suite (70 tests) on the first available iPhone simulator on
-  `macos-latest`. The 3 UI tests are not run in CI.
-- The full local test scheme (58 unit tests + 3 UI tests at that time) ran on an
-  **iPhone 16 simulator, iOS 26.0 (23A343)**. Xcode 27.2 could not load
-  simulator devices on this host because CoreSimulator 1174.21 is not installed;
-  the run therefore used **Xcode 27.0 beta** (matching CoreSimulator 1174.9.2).
-  That Xcode's instrument helpers were rejected by AMFI on macOS 27.2, so
-  newer signed `DTServiceHub`/`dtarbiter`/`dtsecurity` helper binaries were
-  temporarily substituted for the run and then restored (signatures verified).
-  The supported long-term fix is installing the matching Xcode components.
-- This is a single-host simulator result, not device acceptance.
-
-## Security notes
-
-- No credentials or trust material are stored. The pairing invite secret is held
-  only in memory while validating a payload. Scanned QR payloads are validated
-  directly and are **never copied into the visible paste field**; that editor only
-  contains text the user typed or pasted. The secret is never displayed, logged or
-  persisted, and `PairingInvite.description` redacts it.
-- The QR scanner stops capture after the first successful read.
-- No permissions are widened implicitly: every capability flag starts false and
-  every device scope is separate. Approvals are structurally unavailable.
-- No network requests exist in this build; the only `NS*UsageDescription` is
-  camera, used solely for QR presentation.
-
-## NOT VERIFIED
-
-- On-device iPhone/iPad execution, camera permission prompts and real QR scanning.
-- Any real Host integration, pairing handshake, relay transport, event replay or
-  command dispatch; this requires S1/S2/R1.
-- APNs registration/delivery, background push and notification actions.
-- Remote Screen media/control (M1); only the reserved slot exists.
-- iPad multi-column/adaptivity QA beyond the shared `TARGETED_DEVICE_FAMILY`
-  configuration, dynamic type extremes, VoiceOver and localization.
+- APNs is a contract only; no token registration or delivery exists.
+- Remote Screen is view + pointer input. Keyboard and wheel helpers exist in the
+  client, but the tile exposes pointer input only.
+- No signing or notarization is claimed.

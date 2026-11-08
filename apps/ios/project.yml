@@ -5,6 +5,9 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
   groupSortPosition: top
+packages:
+  LiveKitWebRTC:
+    path: ThirdParty/LiveKitWebRTC
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -26,17 +29,21 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: UkkCompanion
+    dependencies:
+      - package: LiveKitWebRTC
+        product: LiveKitWebRTC
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.ukk.companion
         PRODUCT_NAME: UkkCompanion
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: ukk
-        INFOPLIST_KEY_NSCameraUsageDescription: "ukk uses the camera only to scan a Desktop pairing QR code. This fixture build never connects to a Host."
+        INFOPLIST_KEY_NSCameraUsageDescription: "ukk uses the camera only to scan a Desktop pairing QR code."
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "ukk connects to the paired Desktop's screen relay on the local network when you open Remote Screen."
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SUPPORTS_MACCATALYST: NO

@@ -1,235 +1,225 @@
-name: Release (unsigned packages)
+name: Release (unsigned)
 
-# Builds release-mode ukk-host and ukk-desktop on macOS, Windows and Linux and
-# uploads per-OS archives. This workflow never publishes a GitHub Release, signs,
-# notarizes, installs a service or contacts an external service.
-# Pull requests only run it when the packaging contract itself changes; tags and
-# manual dispatch produce the artifacts.
+# Builds unsigned desktop installers and an unsigned iOS device-build IPA.
+# Never signs, notarizes, publishes a GitHub Release, or uploads to a store.
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-  pull_request:
-    paths:
-      - '.github/workflows/release.yml'
-      - 'scripts/package_release.py'
-      - 'scripts/test_package_release.py'
-      - 'docs/release.md'
-      - 'README.md'
-      - 'LICENSE'
-      - 'Cargo.toml'
-      - 'apps/desktop/Cargo.toml'
-      - 'apps/desktop/build.rs'
-      - 'apps/desktop/src/build_info.rs'
-      - 'apps/desktop/src/main.rs'
-      - 'crates/host/build.rs'
-      - 'crates/host/src/build_info.rs'
-      - 'crates/host/src/cli.rs'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  package:
-    name: Package unsigned ${{ matrix.os }} artifacts
+  desktop:
+    name: Desktop ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    permissions:
-      contents: read
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        include:
+          - os: macos-latest
+            target: darwin/universal
+            artifact: ukk-macos
+          - os: windows-latest
+            target: windows/amd64
+            artifact: ukk-windows
+          - os: ubuntu-latest
+            target: linux/amd64
+            artifact: ukk-linux
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: apps/desktop/go.sum
 
       - name: Install Linux native build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libfontconfig1-dev libfreetype-dev libvulkan-dev libudev-dev
+          sudo apt-get install -y \
+            pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libfontconfig1-dev libfreetype-dev \
+            libgl1-mesa-dev libvulkan-dev
 
-      - name: Run packaging self-test
+      - name: Install makensis for the Windows installer
+        if: runner.os == 'macOS' || runner.os == 'Linux'
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install makensis; else sudo apt-get install -y nsis; fi
+
+      - name: Test
+        working-directory: apps/desktop
         shell: bash
         run: |
-          set -euo pipefail
-          python=python3
-          if [ "${RUNNER_OS}" = "Windows" ]; then
-            python=python
-          fi
-          "${python}" scripts/test_package_release.py
+          gofmt_output="$(gofmt -l .)"
+          if [ -n "$gofmt_output" ]; then echo "$gofmt_output"; exit 1; fi
+          go vet ./...
+          go test ./...
 
-      - name: Resolve build identity
-        shell: bash
-        run: |
-          set -euo pipefail
-          package_version=$(awk -F'"' '/^version = / {print $2; exit}' crates/host/Cargo.toml)
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="${package_version}-dev.${GITHUB_SHA:0:7}"
-          fi
-          case "${RUNNER_OS}" in
-            macOS) os_name=macos ;;
-            Windows) os_name=windows ;;
-            Linux) os_name=linux ;;
-            *) echo "unsupported runner OS: ${RUNNER_OS}" >&2; exit 1 ;;
-          esac
-          case "${RUNNER_ARCH}" in
-            ARM64) arch=aarch64 ;;
-            X64) arch=x86_64 ;;
-            *) echo "unsupported runner arch: ${RUNNER_ARCH}" >&2; exit 1 ;;
-          esac
-          target=$(rustc -vV | awk '/^host:/ {print $2}')
-          {
-            echo "UKK_BUILD_VERSION=${version}"
-            echo "UKK_BUILD_COMMIT=${GITHUB_SHA}"
-            echo "UKK_PACKAGE_OS=${os_name}"
-            echo "UKK_PACKAGE_ARCH=${arch}"
-            echo "UKK_PACKAGE_TARGET=${target}"
-          } >> "$GITHUB_ENV"
-          echo "Packaging ukk ${version} for ${os_name}/${arch} (${target})"
-
-      - name: Build ukk-host in release mode
-        run: cargo build --release -p ukk-host
-
-      - name: Build ukk-desktop in release mode
-        run: cargo build --release --manifest-path apps/desktop/Cargo.toml --bin ukk-desktop
-
-      - name: Verify embedded version identity
-        shell: bash
-        run: |
-          set -euo pipefail
-          host_bin=target/release/ukk-host
-          desktop_bin=apps/desktop/target/release/ukk-desktop
-          if [ "${RUNNER_OS}" = "Windows" ]; then
-            host_bin="${host_bin}.exe"
-            desktop_bin="${desktop_bin}.exe"
-          fi
-          "${host_bin}" --version
-          "${desktop_bin}" --version
-
-      - name: Package release archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          python=python3
-          if [ "${RUNNER_OS}" = "Windows" ]; then
-            python=python
-          fi
-          "${python}" scripts/package_release.py \
-            --os "${UKK_PACKAGE_OS}" \
-            --arch "${UKK_PACKAGE_ARCH}" \
-            --target "${UKK_PACKAGE_TARGET}" \
-            --version "${UKK_BUILD_VERSION}" \
-            --commit "${UKK_BUILD_COMMIT}" \
-            --out-dir dist
-
-      - name: Verify macOS app bundle
+      - name: Build the macOS input helper
         if: runner.os == 'macOS'
-        shell: bash
         run: |
           set -euo pipefail
-          archive=$(ls dist/*.tar.gz)
-          tmp=$(mktemp -d)
-          tar -xzf "${archive}" -C "${tmp}"
-          root=$(find "${tmp}" -mindepth 1 -maxdepth 1 -type d -name 'ukk-*' -print -quit)
-          bundle="${root}/ukk.app"
-          test -d "${bundle}"
-          test -x "${root}/ukk-host"
-          test -x "${bundle}/Contents/MacOS/ukk-desktop"
-          test -f "${bundle}/Contents/Resources/ukk.icns"
-          test "$(head -c 4 "${bundle}/Contents/Resources/ukk.icns")" = "icns"
-          "${bundle}/Contents/MacOS/ukk-desktop" --version
-          plutil -lint "${bundle}/Contents/Info.plist"
-          test "$(plutil -extract CFBundleIdentifier raw "${bundle}/Contents/Info.plist")" = "dev.ukk.desktop"
-          test "$(plutil -extract CFBundleExecutable raw "${bundle}/Contents/Info.plist")" = "ukk-desktop"
-          test ! -e "${bundle}/Contents/_CodeSignature"
-          if codesign -dv "${bundle}" 2>&1 | grep -q "Authority=Developer ID"; then
-            echo "unexpected Developer ID signature on ${bundle}" >&2
-            exit 1
-          fi
-          (cd "${root}" && shasum -a 256 -c SHA256SUMS.txt)
-          python3 - "${root}" <<'PY'
-          import pathlib, sys
-          root = pathlib.Path(sys.argv[1])
-          declared = {
-              line.split("  ", 1)[1]
-              for line in (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
-          }
-          actual = {
-              path.relative_to(root).as_posix()
-              for path in root.rglob("*")
-              if path.is_file() and path.name != "SHA256SUMS.txt"
-          }
-          assert declared == actual, (sorted(declared - actual), sorted(actual - declared))
-          print(f"bundle manifest covers {len(actual)} files")
-          PY
+          mkdir -p apps/desktop/resources/darwin
+          swiftc -O -target arm64-apple-macos13 -o "$RUNNER_TEMP/ukk-input-arm64" apps/desktop/tools/ukk-input/main.swift
+          swiftc -O -target x86_64-apple-macos13 -o "$RUNNER_TEMP/ukk-input-x86_64" apps/desktop/tools/ukk-input/main.swift
+          lipo -create "$RUNNER_TEMP/ukk-input-arm64" "$RUNNER_TEMP/ukk-input-x86_64" -output apps/desktop/resources/darwin/ukk-input
+          chmod +x apps/desktop/resources/darwin/ukk-input
 
-      - name: Verify outer checksum format
+      - name: Prefetch pinned terminal library
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/prefetch_native.py --target '${{ matrix.target }}'
+
+      - name: Package
+        working-directory: apps/desktop
         shell: bash
         run: |
           set -euo pipefail
-          python=python3
-          if [ "${RUNNER_OS}" = "Windows" ]; then
-            python=python
+          version="${GITHUB_REF_NAME#v}"
+          if [ -z "${version}" ] || [ "${version}" = "${GITHUB_REF_NAME}" ]; then
+            version="0.1.0-dev.${GITHUB_SHA:0:7}"
           fi
-          "${python}" - <<'PY'
+          go tool mygo build -platform '${{ matrix.target }}' -o ../../dist/desktop
+          printf '%s\n' "${version}" > ../../dist/desktop/VERSION.txt
+
+      - name: Build bridge and relay binaries
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../../dist/desktop/bin
+          suffix=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then suffix=".exe"; fi
+          go build -trimpath -o "../../dist/desktop/bin/ukk-bridge${suffix}" ./cmd/ukk-bridge
+          go build -trimpath -o "../../dist/desktop/bin/ukk-relay${suffix}" ./cmd/ukk-relay
+          "./../../dist/desktop/bin/ukk-bridge${suffix}" --version
+          "./../../dist/desktop/bin/ukk-relay${suffix}" --version
+
+      - name: Verify package
+        working-directory: dist/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -maxdepth 3 -type f | sort
+          case '${{ runner.os }}' in
+            macOS)
+              test -d */*.app || test -d */*/*.app
+              ;;
+            Windows)
+              test -n "$(find . -name '*setup*.exe' -print -quit)"
+              ;;
+            Linux)
+              test -n "$(find . -name '*.deb' -print -quit)"
+              test -n "$(find . -name '*.tar.gz' -print -quit)"
+              ;;
+          esac
+
+      - name: Checksums
+        working-directory: dist/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
           import hashlib, pathlib
-          archives = [p for p in pathlib.Path("dist").iterdir() if not p.name.endswith(".sha256")]
-          assert len(archives) == 1, archives
-          archive = archives[0]
-          raw = archive.with_name(archive.name + ".sha256").read_bytes()
-          assert b"\r" not in raw, "checksum file must use LF line endings"
-          digest, name = raw.decode("utf-8").rstrip("\n").split("  ")
-          assert name == archive.name, (name, archive.name)
-          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
-          assert digest == actual, (digest, actual)
-          print(f"outer checksum OK: {archive.name} {actual}")
+          root = pathlib.Path('.')
+          lines = []
+          for path in sorted(p for p in root.rglob('*') if p.is_file()):
+              # MyGo's internal manifest is hidden and excluded from uploaded
+              # artifacts; checksumming it would make the downloaded set fail.
+              if path.name == '.mygo-files':
+                  continue
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              lines.append(f"{digest}  {path.as_posix()}")
+          pathlib.Path('SHA256SUMS.txt').write_text("\n".join(lines) + "\n", encoding='utf-8', newline='\n')
+          print(f"checksums for {len(lines)} files")
           PY
 
-      - name: Upload unsigned release archive
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ukk-${{ env.UKK_BUILD_VERSION }}-${{ env.UKK_PACKAGE_OS }}-${{ env.UKK_PACKAGE_ARCH }}
-          path: dist/*
+          name: ${{ matrix.artifact }}
+          path: dist/desktop
           if-no-files-found: error
           retention-days: 14
 
-      - name: Write package summary
+  ios-unsigned-ipa:
+    name: iOS unsigned device-build IPA
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Fetch WebRTC binary
+        working-directory: apps/ios
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/fetch-webrtc.sh
+
+      - name: Generate project
+        working-directory: apps/ios
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        working-directory: apps/ios
         shell: bash
         run: |
           set -euo pipefail
-          python=python3
-          if [ "${RUNNER_OS}" = "Windows" ]; then
-            python=python
-          fi
-          "${python}" - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import hashlib, os, pathlib
-          files = sorted(pathlib.Path("dist").iterdir())
-          print("### Unsigned desktop package")
-          print()
-          print(f"- version: `{os.environ['UKK_BUILD_VERSION']}`")
-          print(f"- commit: `{os.environ['UKK_BUILD_COMMIT']}`")
-          print(f"- target: `{os.environ['UKK_PACKAGE_TARGET']}`")
-          print()
-          print("| file | bytes | sha256 |")
-          print("| --- | ---: | --- |")
-          for path in files:
-              digest = hashlib.sha256(path.read_bytes()).hexdigest()
-              print(f"| `{path.name}` | {path.stat().st_size} | `{digest}` |")
-          PY
+          for attempt in 1 2 3 4; do
+            if xcodebuild -project UkkCompanion.xcodeproj -scheme UkkCompanion -resolvePackageDependencies; then
+              exit 0
+            fi
+            echo "package resolution failed (attempt ${attempt}); retrying" >&2
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Archive without signing
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          xcodebuild -project UkkCompanion.xcodeproj \
+            -scheme UkkCompanion \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/UkkCompanion.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            archive
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          mkdir -p ipa/Payload
+          cp -R UkkCompanion.xcarchive/Products/Applications/UkkCompanion.app ipa/Payload/
+          (cd ipa && zip -qry ../ukk-unsigned.ipa Payload)
+          mkdir -p "$GITHUB_WORKSPACE/dist/ios"
+          cp ukk-unsigned.ipa "$GITHUB_WORKSPACE/dist/ios/"
+          cat > "$GITHUB_WORKSPACE/dist/ios/README.txt" <<'EOF'
+          Unsigned device-build IPA for inspection only.
+          It is not signed, cannot be installed on an iPhone, and must not be
+          presented as a TestFlight, App Store, or installable build.
+          EOF
+          (cd "$GITHUB_WORKSPACE/dist/ios" && \
+            shasum -a 256 ukk-unsigned.ipa > ukk-unsigned.ipa.sha256)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ukk-ios-unsigned-ipa
+          path: dist/ios
+          if-no-files-found: error
+          retention-days: 14

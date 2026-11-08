@@ -2,108 +2,110 @@ import XCTest
 @testable import UkkCompanion
 
 final class PairingInviteTests: XCTestCase {
-    private let secret = String(repeating: "s", count: 24)
+    private let secret = Data(repeating: 0x42, count: 32)
+    private let now = FixtureTime.base
 
-    func testParsesDocumentedInviteAndRedactsSecret() throws {
-        let invite = try PairingInviteParser.parse(
-            payload: serialized(inviteObject()),
-            now: FixtureTime.base
-        ).get()
+    func testParsesV1InviteAndRedactsSecret() throws {
+        let invite = try parse(inviteObject()).get()
 
         XCTAssertEqual(invite.version, 1)
-        XCTAssertEqual(invite.relayOrigin.host, "relay.example.invalid")
-        XCTAssertEqual(invite.relayOrigin.scheme, "https")
-        XCTAssertEqual(invite.hostID.uuidString, "11111111-2222-4333-8444-555555555555")
+        XCTAssertEqual(invite.relay.scheme, "wss")
+        XCTAssertEqual(invite.relay.host, "relay.example.invalid")
+        XCTAssertEqual(invite.hostID, "11111111-2222-4333-8444-555555555555")
+        XCTAssertEqual(invite.hostEd, Data(repeating: 0x11, count: 32))
+        XCTAssertEqual(invite.hostX, Data(repeating: 0x22, count: 32))
         XCTAssertEqual(invite.inviteID, "invite-123456")
-        XCTAssertEqual(invite.inviteSecret, secret)
-        XCTAssertFalse(invite.description.contains(secret))
-        XCTAssertTrue(invite.description.contains("PairingInvite"))
-    }
-
-    func testAcceptsWebSocketSecureRelay() throws {
-        var object = inviteObject()
-        object["relay"] = "wss://relay.example.invalid/route"
-        let invite = try PairingInviteParser.parse(payload: serialized(object), now: FixtureTime.base).get()
-        XCTAssertEqual(invite.relayOrigin.scheme, "wss")
+        XCTAssertEqual(invite.secret, secret)
+        XCTAssertEqual(invite.expireMS, expireMS)
+        XCTAssertFalse(invite.description.contains(Base64URL.encode(secret)))
+        XCTAssertFalse(invite.description.lowercased().contains("secret"))
     }
 
     func testRejectsMalformedJSON() {
-        assertFailure("not an invite", equals: .malformedJSON)
+        assertFailure("not an invite", .malformedJSON)
+        assertFailure("{} trailing", .malformedJSON)
+    }
+
+    func testRejectsUnknownFields() {
+        var object = inviteObject()
+        object["extra"] = "value"
+        assertFailure(object, .unknownField("extra"))
     }
 
     func testRejectsUnsupportedVersion() {
         var object = inviteObject()
         object["v"] = 2
-        assertFailure(serialized(object), equals: .unsupportedVersion(2))
+        assertFailure(object, .unsupportedVersion(2))
     }
 
     func testRejectsMissingField() {
         var object = inviteObject()
-        object.removeValue(forKey: "host_id")
-        assertFailure(serialized(object), equals: .missingField("host_id"))
+        object.removeValue(forKey: "host_x")
+        assertFailure(object, .missingField("host_x"))
     }
 
-    func testRejectsInsecureRelayOrigin() {
+    func testRejectsNonWSSRelay() {
         var object = inviteObject()
-        object["relay"] = "http://relay.example.invalid"
-        assertFailure(serialized(object), equals: .invalidRelayOrigin)
+        object["relay"] = "https://relay.example.invalid"
+        assertFailure(object, .invalidRelayOrigin)
+
+        object["relay"] = "ws://relay.example.invalid"
+        assertFailure(object, .invalidRelayOrigin)
     }
 
-    func testRejectsInvalidHostIdentifier() {
+    func testRejectsRelayWithUserInfo() {
         var object = inviteObject()
-        object["host_id"] = "not-a-uuid"
-        assertFailure(serialized(object), equals: .invalidHostID)
+        object["relay"] = "wss://user@relay.example.invalid/ws"
+        assertFailure(object, .invalidRelayOrigin)
     }
 
-    func testRejectsNonBase64URLPublicKey() {
+    func testRejectsWrongKeyLengths() {
         var object = inviteObject()
-        object["host_public_key"] = "not a base64url key!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        assertFailure(serialized(object), equals: .invalidPublicKey)
+        object["host_ed"] = Base64URL.encode(Data(repeating: 1, count: 31))
+        assertFailure(object, .invalidKey("host_ed"))
+
+        object = inviteObject()
+        object["host_x"] = Base64URL.encode(Data(repeating: 1, count: 33))
+        assertFailure(object, .invalidKey("host_x"))
     }
 
-    func testRejectsShortInviteIdentifier() {
+    func testRejectsShortOrMissingSecret() {
         var object = inviteObject()
-        object["invite_id"] = "x"
-        assertFailure(serialized(object), equals: .invalidInviteIdentifier)
+        object["secret"] = Base64URL.encode(Data(repeating: 1, count: 16))
+        assertFailure(object, .invalidInviteSecret)
+
+        object.removeValue(forKey: "secret")
+        assertFailure(object, .missingField("secret"))
     }
 
-    func testRejectsShortInviteSecret() {
+    func testRejectsExpiredAndOverlongLifetimes() {
+        assertFailure(inviteObject(), .expired, now: Date(timeIntervalSince1970: Double(expireMS) / 1000))
+
         var object = inviteObject()
-        object["invite_secret"] = "short"
-        assertFailure(serialized(object), equals: .invalidInviteSecret)
+        object["expire_ms"] = Int64(now.timeIntervalSince1970 * 1000) + 300_001
+        assertFailure(object, .lifetimeTooLong)
     }
 
-    func testRejectsInvalidExpiry() {
+    func testAcceptsPaddedBase64URL() throws {
         var object = inviteObject()
-        object["expires_at"] = "tomorrow"
-        assertFailure(serialized(object), equals: .invalidExpiry)
-    }
-
-    func testRejectsExpiredInvite() {
-        assertFailure(
-            serialized(inviteObject()),
-            equals: .expired,
-            now: FixtureTime.minutes(5)
-        )
-        assertFailure(
-            serialized(inviteObject()),
-            equals: .expired,
-            now: FixtureTime.minutes(2)
-        )
+        object["host_ed"] = paddedBase64(Data(repeating: 0x11, count: 32))
+        _ = try parse(object).get()
     }
 
     func testEveryParseErrorMessageIsActionable() {
         let errors: [PairingInviteParseError] = [
             .malformedJSON,
+            .unknownField("x"),
             .unsupportedVersion(2),
             .missingField("relay"),
             .invalidRelayOrigin,
             .invalidHostID,
-            .invalidPublicKey,
+            .invalidKey("host_ed"),
             .invalidInviteIdentifier,
             .invalidInviteSecret,
             .invalidExpiry,
-            .expired
+            .expired,
+            .lifetimeTooLong
         ]
         for error in errors {
             XCTAssertFalse(error.message.isEmpty)
@@ -112,41 +114,57 @@ final class PairingInviteTests: XCTestCase {
 
     // MARK: - Helpers
 
+    private var expireMS: Int64 {
+        Int64(now.timeIntervalSince1970 * 1000) + 120_000
+    }
+
     private func inviteObject() -> [String: Any] {
         [
             "v": 1,
-            "relay": "https://relay.example.invalid",
             "host_id": "11111111-2222-4333-8444-555555555555",
-            "host_public_key": String(repeating: "A", count: 43),
+            "host_ed": Base64URL.encode(Data(repeating: 0x11, count: 32)),
+            "host_x": Base64URL.encode(Data(repeating: 0x22, count: 32)),
             "invite_id": "invite-123456",
-            "invite_secret": secret,
-            "expires_at": iso8601(FixtureTime.minutes(2))
+            "secret": Base64URL.encode(secret),
+            "expire_ms": expireMS,
+            "relay": "wss://relay.example.invalid/ws"
         ]
     }
 
-    private func serialized(_ object: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: object),
-              let json = String(data: data, encoding: .utf8) else {
-            XCTFail("failed to serialize invite fixture")
-            return "{}"
-        }
-        return json
+    private func parse(_ object: [String: Any], now: Date? = nil) -> Result<PairingInvite, PairingInviteParseError> {
+        let data = try! JSONSerialization.data(withJSONObject: object)
+        return PairingInviteParser.parse(payload: String(data: data, encoding: .utf8)!, now: now ?? self.now)
     }
 
-    private func iso8601(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: date)
+    private func paddedBase64(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+    }
+
+    private func assertFailure(
+        _ object: [String: Any],
+        _ expected: PairingInviteParseError,
+        now: Date? = nil,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        switch parse(object, now: now) {
+        case .success(let invite):
+            XCTFail("expected \(expected), parsed \(invite)", file: file, line: line)
+        case .failure(let error):
+            XCTAssertEqual(error, expected, file: file, line: line)
+        }
     }
 
     private func assertFailure(
         _ payload: String,
-        equals expected: PairingInviteParseError,
-        now: Date = FixtureTime.base,
+        _ expected: PairingInviteParseError,
+        now: Date? = nil,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        switch PairingInviteParser.parse(payload: payload, now: now) {
+        switch PairingInviteParser.parse(payload: payload, now: now ?? self.now) {
         case .success(let invite):
             XCTFail("expected \(expected), parsed \(invite)", file: file, line: line)
         case .failure(let error):

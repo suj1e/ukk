@@ -35,9 +35,6 @@ final class FixtureIntegrityTests: XCTestCase {
                 }
             }
         }
-        for device in catalog.devices {
-            XCTAssertEqual(device.provenance, .fixture)
-        }
     }
 
     func testRelationshipsResolve() {
@@ -85,6 +82,20 @@ final class FixtureIntegrityTests: XCTestCase {
         XCTAssertFalse(systemMessages.isEmpty)
         XCTAssertTrue(systemMessages[0].text.contains("Fixture transcript"))
         XCTAssertTrue(systemMessages[0].text.contains("no Host session was contacted"))
+        XCTAssertEqual(systemMessages[0].provenance, .fixture)
+    }
+
+    func testNoFixtureRowCanClaimLiveProvenance() {
+        for workspace in catalog.workspaces {
+            for space in workspace.spaces {
+                for session in space.sessions {
+                    XCTAssertEqual(session.provenance, .fixture)
+                    XCTAssertNil(session.rpcID)
+                    XCTAssertFalse(session.messages.contains { $0.provenance == .live })
+                    XCTAssertFalse(session.agentRuns.contains { $0.provenance == .live })
+                }
+            }
+        }
     }
 
     func testFixtureCapabilitiesAreAllUnnegotiated() throws {

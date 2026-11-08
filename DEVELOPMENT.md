@@ -1,82 +1,85 @@
 # Development
 
+## Current state
+
+This branch is a clean development reset: a native Go/MyGo Desktop, external
+herdr-core runtime ownership, and a native SwiftUI iOS companion. The reset
+lands the layout, configuration and documentation baseline before feature code.
+Until real Desktop/bridge/relay entrypoints land, `just check` validates
+repository structure, documentation links, `mygo.json`/iOS version agreement
+and Go module metadata. It does not build, test or launch an application, and
+a green run is not app evidence. The same PR that adds executable entrypoints
+must add real build/test/launch gates and update this page.
+
 ## Prerequisites
 
-- Rust stable (edition 2021) with `rustfmt` and `clippy`.
-- `just` for the command entry points.
-- `hc` from herdr-core 0.1.18+ on `PATH` (or `UKK_HC_BIN`) for real runtime work.
-- `omp` for the structured Agent provider (or `UKK_OMP_BINARY`).
-- macOS: full Xcode with the Metal Toolchain for release GPUI builds.
-- Linux: the native packages listed in `.github/workflows/desktop-cross-platform.yml`.
-- iOS: XcodeGen + Xcode; see `apps/ios/README.md`.
-
-The Host works without a GPU; the Desktop needs a native display backend.
+- Python 3 for the static checks (standard library only).
+- `just` for the command entry points (optional; the scripts run directly).
+- Go 1.27.3 when Go source lands; MyGo v0.8.3 is the pinned tool
+  (`github.com/egoist/mygo/cmd/mygo`).
+- herdr-core v0.1.18 as an external runtime. ukk integrates its public API and
+  must not vendor, rewrite or replace it.
+- `omp` for the first real structured Agent provider.
+- iOS 17 SDK, Xcode and XcodeGen for the companion; see
+  [apps/ios/README.md](apps/ios/README.md).
+- macOS 13+ for an ad-hoc/unsigned local desktop package once packaging exists.
 
 ## Layout
 
 ```text
-apps/desktop/     GPUI client (standalone workspace)
-apps/ios/         SwiftUI companion
-crates/           host, domain, store, protocol, adapters, plugins, remote, media, omp
-plugins/          sample and privileged helpers
-docs/             requirements, design, contracts, runbooks, spikes, decisions
-scripts/          docs/version checks and packaging
+apps/desktop/     Go/MyGo Desktop; one Go module (go.mod, go.sum, mygo.json)
+apps/ios/         Native SwiftUI companion, fixture-first
+assets/           Icons and shared static assets
+docs/             Requirements, design, decisions, status, runbooks
+scripts/          Static layout, docs and version checks
 ```
 
-## First run
-
-```bash
-just fetch            # dependencies for both workspaces
-just check            # docs + fmt + tests + clippy + desktop check
-just host             # foreground Host on the default local endpoint
-just desktop          # GPUI client (separate terminal)
-```
-
-Real integration:
-
-```bash
-export UKK_DB_PATH="$PWD/.dev/ukk.sqlite3"
-export UKK_SOCKET="$PWD/.dev/host.sock"
-export UKK_HC_BIN="$(command -v hc)"
-export UKK_OMP_BINARY="$(command -v omp)"
-./target/debug/ukk-host agent-control-enable   # optional; enables omp/runtime mutations
-./target/debug/ukk-host serve
-```
-
-`UKK_AGENT_CONTROL_TOKEN_FILE`, `UKK_AGENT_CONTROL_AUDIT` and the plugin-control
-token live beside the default data directory. Never commit them.
+`apps/desktop` is the only Go module. Planned real packages are
+`cmd/{ukk,ukk-bridge,ukk-relay}` and `internal/{ui,bridge,relay,agents,hc,
+workspace,remote,remotescreen}`. Add them only with real implementations, never
+as empty packages or placeholder `main` files made to satisfy a command. See
+[apps/desktop/README.md](apps/desktop/README.md) for ownership details.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `just fmt` / `just fmt-check` | format both workspaces / verify formatting |
-| `just test` | `cargo test --workspace` |
-| `just clippy` | strict workspace Clippy |
-| `just desktop-test` | GPUI native unit tests with the CI shader escape hatch |
-| `just desktop-check` | Desktop format + check |
-| `just docs` | markdown link/structure/AGENTS-length check |
-| `just check` | all required local gates |
-| `just package` | unsigned local archive (macOS stages `ukk.app`; set version/arch as needed) |
+| `just check` | all static gates below |
+| `just layout` | apps/metadata layout, Rust removal, single Go module integrity |
+| `just docs` | required docs, relative links, `AGENTS.md` length |
+| `just versions` | exact `mygo.json` contract and iOS `MARKETING_VERSION` agreement |
 
-## Platform notes
+There are deliberately no `dev`, `build`, `test`, `launch` or `package`
+recipes. The implementation PR that adds real entrypoints must add real
+executable gates in the same PR and record their actual results. Extend
+`just check` and CI with:
 
-- macOS release Desktop: default features require `xcrun metal`; install the
-  Metal Toolchain. `gpui_platform/runtime_shaders` exists only for CI smoke and
-  must not be published.
-- Windows: Named Pipe Host IPC, SID-scoped pipe ACL and overlapped I/O. Real
-  different-user denial still needs a machine-level check.
-- Linux: X11/Wayland dependencies are mandatory for the Desktop; Host tests do
-  not need a display.
-- iOS: fixture-first; real pairing/Host/APNs/camera remain **NOT VERIFIED**.
+- Desktop, bridge and relay: `go build ./...`, `go vet ./...` and
+  `go test ./...` (only when test packages exist), plus a headless
+  bridge/relay startup smoke that needs no GUI.
+- MyGo: `go tool mygo version`, real `cmd/ukk` launch checks, and unsigned
+  macOS/Windows/Linux package commands derived from `mygo.json`.
+- iOS: keep `.github/workflows/ios.yml` for the simulator build and tests;
+  real pairing/APNs/camera/device checks remain separate explicit evidence.
+- Packaging: add a real release workflow and artifact checks only after
+  binaries exist; signing, notarization and store submission stay excluded.
+
+Concrete commands once source exists include `go build ./...`,
+`go test ./...`, `go tool mygo dev`, `go tool mygo package` and the iOS
+`xcodebuild` commands already used by `.github/workflows/ios.yml`.
 
 ## Verification rules
 
-- Unit/mock tests are not real-daemon or real-device evidence.
-- Run the command you changed; a green build is not proof of behavior.
-- After a bug fix, add a failing-before/passing-after regression test when practical.
-- Record exact commands and outcomes in the PR; mark unverified items explicitly.
-- Never stop a herdr-core terminal or Agent to make a test pass.
+- A static check is not a build, test or launch. Never present it as one.
+- Run the command you changed; record the exact command and outcome in the PR.
+- Mark unverified behavior and real devices **NOT VERIFIED**.
+- Closing a pane, tab, window or Session never stops an Agent or terminal.
+- Approvals and tool execution come from typed provider events, never parsed
+  ANSI or terminal text.
+- Remote mutation, capture and input need explicit, separate grants; the relay
+  carries no raw screen video.
+- Never commit credentials, tokens, private keys or user data.
 
-See [coding-standard.md](docs/coding-standard.md), [status.md](docs/status.md) and
-the [host runbook](docs/runbooks/host-lifecycle.md).
+See [coding-standard.md](docs/coding-standard.md), [status.md](docs/status.md),
+the [implementation plan](docs/goals/mygo-implementation.md) and the
+[security contract](docs/subsystems/security.md).

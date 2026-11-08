@@ -1,8 +1,8 @@
 import XCTest
 
-/// Black-box smoke test of the fixture-first shell. It asserts the honest
-/// states: fixture labelling, no live claim, read-only composer, unsupported
-/// approvals, reserved Remote Screen slot and simulator camera handling.
+/// Black-box smoke test of the no-Host mode. It asserts the honest states:
+/// fixture labelling, no live claim, read-only composer, unsupported approvals,
+/// reserved Remote Screen slot and simulator camera handling.
 final class FixtureShellUITests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -12,12 +12,12 @@ final class FixtureShellUITests: XCTestCase {
         static let session = "0A11CE00-0000-4000-8000-000000000201"
         static let firstMessage = "0A11CE00-0000-4000-8000-000000000401"
         static let protocolRepairAgent = "0A11CE00-0000-4000-8000-000000000301"
-        static let studioMacDevice = "0A11CE00-0000-4000-8000-000000000502"
     }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        app.launchArguments = ["-ukk-fixture"]
         app.launch()
     }
 
@@ -42,18 +42,18 @@ final class FixtureShellUITests: XCTestCase {
         XCTAssertTrue(element("chatTranscript").waitForExistence(timeout: 10))
         XCTAssertTrue(element("messageRow-\(FixtureID.firstMessage)").waitForExistence(timeout: 5))
 
-        let approvals = element("approvalsUnsupportedHeadline")
+        let approvals = element("approvalsHeadline")
         XCTAssertTrue(approvals.exists)
         XCTAssertTrue(approvals.label.contains("unavailable"))
         XCTAssertFalse(app.buttons["Approve"].exists)
-        XCTAssertFalse(app.buttons["Reject"].exists)
+        XCTAssertFalse(app.buttons["Deny"].exists)
 
         XCTAssertTrue(element("overlaySlotReserved").exists)
 
         let composer = element("composerField")
         XCTAssertTrue(composer.exists)
         XCTAssertFalse(composer.isEnabled)
-        XCTAssertTrue(element("composerDisabledNote").exists)
+        XCTAssertTrue(element("composerNote").exists)
         XCTAssertTrue(element("composerSendButton").exists)
         XCTAssertFalse(element("composerSendButton").isEnabled)
 
@@ -62,21 +62,16 @@ final class FixtureShellUITests: XCTestCase {
         agentChip.tap()
         XCTAssertTrue(app.navigationBars["Protocol repair"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Structured approvals"].exists)
-        XCTAssertTrue(app.staticTexts["Unavailable"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Not granted"].firstMatch.exists)
     }
 
-    func testTrustedDevicesShellAndSimulatorCameraUnavailable() {
+    func testDevicesShowNoHostPairingAndSimulatorCameraUnavailable() {
         let devicesButton = element("trustedDevicesButton")
         XCTAssertTrue(devicesButton.waitForExistence(timeout: 30))
         devicesButton.tap()
 
-        XCTAssertTrue(element("pairingNotImplementedNote").waitForExistence(timeout: 10))
-        XCTAssertTrue(element("trustedDeviceRow-\(FixtureID.studioMacDevice)").exists)
-
-        let revoke = element("revokeButton-\(FixtureID.studioMacDevice)")
-        XCTAssertTrue(revoke.exists)
-        revoke.tap()
-        XCTAssertTrue(revoke.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(element("pairingNotPairedNote").waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Studio Mac"].exists)
 
         let pairRow = element("pairDeviceRow")
         scrollUntilHittable(pairRow)
@@ -88,6 +83,7 @@ final class FixtureShellUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(simulatorNote.waitForExistence(timeout: 5))
         XCTAssertTrue(element("pairingSecurityNote").exists)
+        XCTAssertTrue(element("pairingPayloadField").exists)
     }
 
     // MARK: - Helpers

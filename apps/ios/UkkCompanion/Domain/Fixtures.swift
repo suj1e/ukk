@@ -8,12 +8,8 @@ struct FixtureCatalog: Equatable, Sendable {
     static let disclaimer = "Deterministic sample content rendered locally. Nothing is sent to a Host and no Agent process is running."
 
     let workspaces: [Workspace]
-    let devices: [TrustedDevice]
 
-    static let fixture = FixtureCatalog(
-        workspaces: [.fixture],
-        devices: TrustedDevice.fixtureDevices
-    )
+    static let fixture = FixtureCatalog(workspaces: [.fixture])
 
     func workspace(_ id: WorkspaceID) -> Workspace? {
         workspaces.first { $0.id == id }

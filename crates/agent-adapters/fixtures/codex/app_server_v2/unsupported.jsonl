@@ -1,2 +1,0 @@
-{"method":"future/action","params":{"threadId":"thr_fixture","detail":"unmodelled"}}
-{"method":"item/started","params":{"threadId":"thr_fixture","turnId":"turn_fixture","item":{"id":"future_1","type":"futureItem","payload":true}}}

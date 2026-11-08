@@ -1,2 +1,0 @@
-{"type":"system","subtype":"init","uuid":"sys_denials","session_id":"sess_fixture","cwd":"/repo","model":"claude-sonnet-4-5","permissionMode":"default","tools":["Bash","Write"],"mcp_servers":[]}
-{"type":"result","subtype":"error","uuid":"res_denials","session_id":"sess_fixture","is_error":true,"duration_ms":500,"num_turns":1,"result":"","error":"Permission denied","permission_denials":[{"tool_name":"Bash","tool_use_id":"toolu_deny_a","tool_input":{"command":"git fetch"}},{"tool_name":"Write","tool_use_id":"toolu_deny_b","tool_input":{"path":"/repo/secret"}}]}
