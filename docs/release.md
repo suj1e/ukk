@@ -141,10 +141,10 @@ The matrix is `macos-latest`, `windows-latest` and `ubuntu-latest`. Each job:
 5. packages the archive with `scripts/package_release.py`;
 6. on macOS, extracts the real archive and verifies the `.app` directory, the
    executable bits on `ukk-host` and `ukk.app/Contents/MacOS/ukk-desktop`,
-   `plutil -lint` on the Info.plist, the expected bundle id/executable, that
-   the bundle has no `_CodeSignature`, fails `codesign --verify --strict` and
-   has no Developer ID authority, and that `SHA256SUMS.txt` covers every
-   extracted file;
+   `plutil -lint` on the Info.plist, the expected bundle id/executable, the
+   absence of `_CodeSignature`, a failing `codesign --verify --strict`, no
+   Developer ID authority, and `SHA256SUMS.txt` coverage of every extracted
+   file;
 7. re-opens the archive, verifies every member is non-empty and re-checks the
    internal `SHA256SUMS.txt` before upload;
 8. verifies the outer `<archive>.sha256` matches the archive and contains only
