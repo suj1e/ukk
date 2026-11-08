@@ -1,7 +1,8 @@
 # omp RPC structured Agent integration
 
-> Status: **source implemented; mock-verified on three OSes via CI; real omp
-> 18.18.1 smoke passed on macOS** · protocol v1 · 2026-11-08
+> Status: **source implemented; deterministic mock tests and strict clippy pass
+> locally; real omp 18.18.1 smoke passed on macOS. Three-OS CI on the PR is the
+> authority for merge readiness.** · protocol v1 · 2026-11-08
 >
 > This slice adds the first real structured Agent provider to ukk. It does not
 > add approvals, a tool-approval UI, WAN/relay, host tools, or persistence of
@@ -13,7 +14,7 @@
 | --- | --- | --- |
 | Transport client | new `crates/omp-client` | Typed newline-delimited JSON client for `omp --mode rpc --no-session` |
 | Host service | `crates/host/src/{omp_service,omp_timeline}.rs` | Host-owned process, bounded timeline, long-poll snapshots, agent-control mutations |
-| Host RPC | `crates/host/src/rpc.rs` | `omp.start` / `omp.prompt` / `omp.abort` / `omp.snapshot` / `omp.wait` |
+| Host RPC | `crates/host/src/rpc.rs` | `omp.start` / `omp.prompt` / `omp.abort` / `omp.stop` / `omp.snapshot` / `omp.wait` |
 | Desktop client | `crates/host-client` | Typed `omp_*` calls plus the separate agent-control token |
 | Desktop surface | `apps/desktop/src/workspace/omp.rs` | Session action + conversation panel with a real composer |
 
@@ -24,11 +25,15 @@
 2. Opening or closing the omp panel, closing a window, switching Sessions, or
    dropping a `HostClient` connection has **no Host-side effect**. There is no
    per-view teardown in `omp_service`.
-3. Only `omp.abort` (which cancels the active turn, not the process) or Host
+3. Only `omp.abort` (which cancels the active turn, not the process),
+   capability-gated `omp.stop` (explicit kill after a wedged turn), or Host
    shutdown stops the child.
-4. Host shutdown closes stdin and waits, then kills and reaps. If the Host is
-   killed abruptly, the OS closes the child's stdin pipe and omp exits on EOF;
-   this is why an orphan/zombie is not left behind.
+4. Host shutdown closes stdin and waits, then kills and reaps. On Unix a
+   dedicated SIGTERM/SIGINT handler calls `omp_service::shutdown_all()` and
+   exits, so systemd/launchd/task stop paths execute the same cleanup. On
+   Windows the service stop path does not run that handler; the child exits on
+   stdin EOF when the Host process closes the pipe. Both behaviours were
+   checked manually on macOS; automated signal-stop coverage is not present.
 5. **Host restart does not reattach** to a running omp session in this slice.
    The snapshot carries an explicit `restart_note`. The omp session id could be
    captured for a future `--resume`, but that is not implemented.
@@ -37,7 +42,7 @@
 
 - `omp.snapshot` and `omp.wait` are **read-only** and require no capability.
   They return the bounded conversation snapshot and never change process state.
-- `omp.start`, `omp.prompt` and `omp.abort` require the existing default-off
+- `omp.start`, `omp.prompt`, `omp.abort` and `omp.stop` require the existing default-off
   **agent-control** token (`AgentControlAuth`), plus `request_id` and
   `intent: "user"`. The workspace metadata token and the plugin-control token
   are both rejected by construction.
@@ -46,6 +51,13 @@
   in audit entries, snapshots or errors.
 - Missing or insecure (symlink/non-0600/short) token files are reported as a
   visible error; there is no silent fallback or implicit escalation.
+- `request_id` is an idempotency key for `omp.prompt`/`omp.abort`/`omp.stop`.
+  A repeated completed id returns the current snapshot without executing again
+  (up to 128 ids are retained); a duplicate still in flight returns the current
+  snapshot. An explicit `success:false` rejection releases the id so it can be
+  retried; a timeout/transport failure keeps it reserved because omp may have
+  accepted the command. The prompt gate atomically transitions Idle/Complete →
+  Running under one lock, so two concurrent prompts cannot both write.
 
 Enable control explicitly:
 
@@ -135,8 +147,9 @@ there is no terminal rendering in this surface.
 
 ### Bounds
 
-- Timeline: 400 entries, 8 KiB per entry, 512 KiB total. The oldest entries are
-  discarded and `truncated: true` is reported.
+- Timeline: 400 entries, 8 KiB per entry, 512 KiB total across all retained
+  entries. The oldest entries are discarded and `truncated: true` is reported;
+  a serialized snapshot therefore stays well below the Host's 4 MiB reply cap.
 - Prompt input: 64 KiB (Host), 8 KiB (Desktop composer).
 - stderr: 64 redacted lines, 4 KiB per line, drained on its own thread and never
   merged into the JSON parser.
@@ -183,6 +196,7 @@ the same shape. `cursor` is the last omp event sequence folded in.
 | `omp.start` | agent-control | idempotent per Session while running; max 4 children |
 | `omp.prompt` | agent-control | one active turn at a time |
 | `omp.abort` | agent-control | cancels the turn; the child stays alive |
+| `omp.stop` | agent-control | kills and reaps the child after a wedged turn; the Session record remains and `omp.start` can replace it |
 
 Error codes: `-32030` unauthorized/disabled, `-32034` unknown session,
 `-32040` session limit, `-32041` turn busy/no turn, `-32042` omp failure,
@@ -304,6 +318,9 @@ success, `omp.prompt` success, and no token material.
   macOS build in this session used a cached GPUI target because the machine's
   MetalToolchain component is missing.
 - Windows Named Pipe path for `omp.*` and real omp runs on Windows/Linux.
+- Automated SIGTERM/SIGINT shutdown test. The Unix handler and macOS manual
+  stop were exercised; Windows service-stop cleanup relies on stdin EOF and is
+  not verified.
 - Host restart reattachment / `--resume` of an omp session.
 - Protocol v2 chunk negotiation and reassembly (oversized frames are rejected
   honestly instead).

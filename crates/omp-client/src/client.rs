@@ -630,6 +630,9 @@ fn read_loop(
                     .wait_exit_status(Duration::from_millis(1000))
                     .flatten();
                 shared.mark_exited(code, format!("reading omp stdout failed: {error}"));
+                // A child blocked on a full stdout pipe would otherwise stay
+                // alive until Host shutdown. kill_and_reap is idempotent.
+                shared.kill_and_reap();
                 return;
             }
         };

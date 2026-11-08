@@ -18,8 +18,8 @@ Read [docs/OVERVIEW.zh-CN.md](docs/OVERVIEW.zh-CN.md), [docs/ARCHITECTURE.md](do
 ## Agent process ownership (omp RPC)
 
 - The **Host owns every omp RPC child**. The Desktop, iOS client and plugin helpers never spawn, signal, wait for or reparent an omp process.
-- Closing a Pane/Tab/window, switching Sessions or dropping a local client connection must never stop, kill or detach an omp child. Only an explicit `omp.abort` (which cancels the active turn, not the process) or Host shutdown terminates work.
-- `omp.start`, `omp.prompt` and `omp.abort` require the separate, default-off **agent-control** capability with `request_id` and `intent: "user"`. `omp.snapshot` and `omp.wait` are read-only and require no capability.
+- Closing a Pane/Tab/window, switching Sessions or dropping a local client connection must never stop, kill or detach an omp child. Only an explicit `omp.abort` (cancels the active turn), a capability-gated `omp.stop` (wedged-turn recovery kill), or Host shutdown terminates work.
+- `omp.start`, `omp.prompt`, `omp.abort` and `omp.stop` require the separate, default-off **agent-control** capability with `request_id` and `intent: "user"`. `omp.snapshot` and `omp.wait` are read-only and require no capability. `request_id` is idempotent; the prompt turn gate is atomic.
 - Never synthesize omp messages, turns, tool calls or approvals, and never infer them from terminal text. Render only typed RPC frames; unsupported/malformed frames are reported truthfully.
 - Host restart does not reattach to a running omp session in the current slice. Do not fake resume; start a new session.
 - Keep the Host omp timeline bounded (400 entries, 8 KiB per entry, 512 KiB total) and report truncation instead of growing memory.

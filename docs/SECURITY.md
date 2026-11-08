@@ -286,6 +286,44 @@ boundary has the following consequences:
 
 
 
+## omp RPC session surface
+
+`crates/omp-client` runs `omp --mode rpc --no-session` as a Host-owned child;
+the Desktop only calls the local Host. Security properties:
+
+- **Mutations:** `omp.start`, `omp.prompt`, `omp.abort` and `omp.stop` use the
+  same separate, default-off agent-control capability described above
+  (`control` field, `request_id`, `intent: "user"`). Workspace and
+  plugin-control tokens are never accepted. Every attempt (including denial)
+  is audited with `core_id: "omp"`; tokens and prompt text are not audited.
+- **Idempotency and pacing:** `request_id` is an idempotency key (bounded 128
+  completed ids). The prompt transition is atomic, and a second prompt while a
+  turn runs is rejected with `-32041` instead of silently steering. `omp.stop`
+  is the only explicit process-kill path.
+- **Read surface:** `omp.snapshot` / `omp.wait` require no capability because
+  the local endpoint is already same-user private (0600 socket in a 0700
+  directory; Windows protected Pipe DACL). They expose conversation text,
+  tool arguments/results, cwd, session state and a redacted stderr tail. Any
+  process that can reach the Host socket can read a conversation; this is
+  consistent with the local-observation model, but no remote/client caller may
+  receive it without future remote authorization.
+- **Bounds:** 400 entries, 8 KiB per entry, 512 KiB total; serialized
+  snapshots stay well below the 4 MiB Host reply cap. Oversized/malformed
+  frames are reported, not guessed.
+- **No synthesized approvals:** `extension_ui_request` methods that expect a
+  value are answered `cancelled`; fire-and-forget UI updates are ignored.
+  `host_tool_call` / `host_uri_request` are refused. omp's own tool policy and
+  approvals remain outside this surface; ukk adds no approval bypass.
+- **Process lifetime:** UI close/session switch/window close sends nothing.
+  On Unix SIGTERM/SIGINT stops children before exit; when the Host dies
+  abruptly the OS closes the child's stdin pipe and omp exits. Windows
+  service-stop handling relies on that EOF behaviour and is NOT VERIFIED.
+- **Residual risk:** an agent runs with the user's OS privileges and may place
+  secrets in tool output. Provider credentials are never passed by ukk, and
+  error/stderr text is redacted, but conversation text is shown verbatim to
+  the local user. There is no Host-restart reattach and no transcript
+  persistence in this slice.
+
 ## Plugin broker and `plugin.control`
 
 The Host owns one plugin supervisor (`crates/host/src/plugin_service.rs`). It

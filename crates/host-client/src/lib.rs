@@ -825,6 +825,24 @@ impl HostClient {
         Ok(serde_json::from_value(value)?)
     }
 
+    /// Stop the Host-owned omp child after a wedged turn. This is the only
+    /// explicit process-kill path; the Session record remains and can be
+    /// started again. Requires the separate agent-control capability.
+    pub fn omp_stop(&self, session_id: &str) -> Result<OmpSnapshot, HostError> {
+        let token = self.agent_control_token()?;
+        let value = self.request_with(
+            "omp.stop",
+            json!({
+                "session_id": session_id,
+                "request_id": ukk_domain::new_id(),
+                "intent": "user",
+                "control": token
+            }),
+            Duration::from_secs(15),
+        )?;
+        Ok(serde_json::from_value(value)?)
+    }
+
     /// Read-only plugin status and contributions. Never requires a capability.
     pub fn plugin_snapshot_json(&self) -> Result<Value, HostError> {
         self.request("plugin.snapshot")

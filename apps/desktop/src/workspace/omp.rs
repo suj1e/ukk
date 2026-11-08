@@ -578,7 +578,12 @@ impl Workspace {
                             .child(label),
                     )
                     .when_some(entry.tool_name.clone(), |row, name| {
-                        row.child(div().text_xs().text_color(rgb(MUTED)).child(name))
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(omp_sanitize(&name)),
+                        )
                     })
                     .when(entry.truncated, |row| {
                         row.child(

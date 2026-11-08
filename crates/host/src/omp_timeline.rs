@@ -70,6 +70,7 @@ impl Timeline {
         let (text, truncated) = bound(text.into(), MAX_ENTRY_BYTES);
         let seq = self.next_seq;
         self.next_seq = self.next_seq.saturating_add(1);
+        self.total_bytes = self.total_bytes.saturating_add(text.len());
         self.entries.push(OmpTimelineEntry {
             seq,
             at_ms: now_ms(),
@@ -532,6 +533,45 @@ mod tests {
         assert_eq!(timeline.entries().len(), MAX_ENTRIES);
         assert!(timeline.truncated());
         assert_eq!(timeline.entries().last().unwrap().text, "entry 424");
+    }
+
+    #[test]
+    fn total_bytes_cap_is_enforced_and_serialized_snapshots_stay_small() {
+        let mut timeline = Timeline::new();
+        for _ in 0..MAX_ENTRIES {
+            timeline.push(
+                OmpTimelineKind::Assistant,
+                "x".repeat(MAX_ENTRY_BYTES),
+                None,
+                None,
+                false,
+            );
+        }
+        assert!(timeline.total_bytes <= MAX_TOTAL_BYTES);
+        assert!(timeline.truncated());
+        assert!(timeline.entries().len() < MAX_ENTRIES);
+        let serialized = serde_json::to_vec(timeline.entries()).unwrap();
+        // The Host reply cap is 4 MiB; the timeline must stay well below it.
+        assert!(
+            serialized.len() < 4 * 1024 * 1024,
+            "snapshot {}",
+            serialized.len()
+        );
+    }
+
+    #[test]
+    fn replace_and_append_keep_total_bytes_symmetric() {
+        let mut timeline = Timeline::new();
+        timeline.push(OmpTimelineKind::Tool, "start", None, None, false);
+        let seq = timeline.entries()[0].seq;
+        timeline.replace(seq, "a longer replacement", None);
+        timeline.append(seq, " plus delta");
+        let expected: usize = timeline
+            .entries()
+            .iter()
+            .map(|entry| entry.text.len())
+            .sum();
+        assert_eq!(timeline.total_bytes, expected);
     }
 
     #[test]

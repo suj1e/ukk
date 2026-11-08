@@ -35,6 +35,7 @@ enum Scenario {
     DelayedAck,
     UiConfirm,
     Commands,
+    Flood,
 }
 
 fn scenario_from_args() -> Scenario {
@@ -65,6 +66,7 @@ fn scenario_from_args() -> Scenario {
         "delayed-ack" => Scenario::DelayedAck,
         "ui-confirm" => Scenario::UiConfirm,
         "commands" => Scenario::Commands,
+        "flood" => Scenario::Flood,
         other => panic!("unknown mock scenario {other}"),
     }
 }
@@ -194,8 +196,10 @@ fn text_turn_with_start(id: &Value) {
 fn main() {
     let scenario = scenario_from_args();
     let pid = std::process::id();
-    if scenario == Scenario::NoReady {
+    if matches!(scenario, Scenario::NoReady | Scenario::Flood) {
         eprintln!("MOCK-PID {pid}");
+    }
+    if scenario == Scenario::NoReady {
         // Stay alive without ever disclosing readiness; the client must time
         // out and kill/reap this process.
         let stdin = io::stdin();
@@ -218,6 +222,25 @@ fn main() {
     if scenario == Scenario::Stderr {
         eprintln!("mock stderr line one");
         eprintln!("mock stderr line two sk-{}", "a1b2c3d4".repeat(3));
+    }
+    if scenario == Scenario::Flood {
+        // More than 2x the advertised frame cap without a newline: the client
+        // must stop the reader, kill the child and reap it.
+        let mut handle = OUT.lock().unwrap();
+        let chunk = [b'x'; 65_536];
+        for _ in 0..48 {
+            if handle
+                .write_all(&chunk)
+                .and_then(|_| handle.flush())
+                .is_err()
+            {
+                return;
+            }
+        }
+        drop(handle);
+        let stdin = io::stdin();
+        for _ in stdin.lock().lines() {}
+        return;
     }
     let stdin = io::stdin();
     loop {

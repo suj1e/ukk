@@ -325,6 +325,46 @@ fn startup_timeout_kills_and_reaps_the_child() {
 }
 
 #[test]
+fn reader_failure_kills_and_reaps_the_child() {
+    let client = OmpClient::spawn(mock_config("flood")).expect("flood child becomes ready");
+    let _events = client.subscribe();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while client.state().is_running() {
+        assert!(
+            Instant::now() < deadline,
+            "reader failure never stopped the child"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(matches!(client.state(), OmpState::Exited { .. }));
+    let pid_line = client
+        .stderr_tail()
+        .into_iter()
+        .find(|line| line.starts_with("MOCK-PID "))
+        .expect("mock reports its pid");
+    let pid = pid_line.trim_start_matches("MOCK-PID ").trim().to_owned();
+    #[cfg(unix)]
+    {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let alive = std::process::Command::new("/bin/kill")
+                .args(["-0", &pid])
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "reader failure left child {pid} unreaped"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[test]
 fn stderr_is_separate_redacted_and_never_becomes_an_event() {
     let (client, events) = spawn("stderr");
     client.prompt("hi").unwrap();

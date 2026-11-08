@@ -117,7 +117,8 @@ pub(super) fn handle_request_with_plugins(
                 "error":{"code":-32001,"message":error.to_string()}
             }),
         },
-        method @ ("omp.snapshot" | "omp.wait" | "omp.start" | "omp.prompt" | "omp.abort") => {
+        method @ ("omp.snapshot" | "omp.wait" | "omp.start" | "omp.prompt" | "omp.abort"
+        | "omp.stop") => {
             let params = req.get("params").unwrap_or(&Value::Null);
             match omp_service::dispatch(method, params) {
                 Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),

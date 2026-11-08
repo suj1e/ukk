@@ -13,7 +13,7 @@
 use super::omp_timeline::Timeline;
 use super::runtime_auth::{now_ms, AgentControlAuth, AuditEntry, AuditLog};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +59,9 @@ impl OmpServiceError {
 
 pub(crate) struct OmpService {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    /// Serializes the limit check + spawn + insert so concurrent starts cannot
+    /// briefly exceed [`MAX_SESSIONS`]. Snapshots and waits never take it.
+    start_gate: Mutex<()>,
     /// Test/embedding override. Production builds use `OmpConfig::default()`
     /// plus the Session cwd, optionally overridden by `UKK_OMP_BINARY` /
     /// `UKK_OMP_ARGS` for integration testing.
@@ -83,6 +86,7 @@ impl OmpService {
         };
         Self {
             sessions: Mutex::new(HashMap::new()),
+            start_gate: Mutex::new(()),
             config,
             audit: AuditLog::file(AgentControlAuth::audit_path()),
         }
@@ -92,6 +96,7 @@ impl OmpService {
     pub(crate) fn with_config(config: OmpConfig) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            start_gate: Mutex::new(()),
             config: Some(config),
             audit: AuditLog::memory(),
         }
@@ -125,6 +130,12 @@ impl OmpService {
             self.audit(params, "omp.start", session_id, "error:invalid_cwd");
             return Err(OmpServiceError::invalid("cwd"));
         }
+        // Held across the limit check, spawn and insert. This is the only
+        // place that reserves a child slot.
+        let _start_gate = self
+            .start_gate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         {
             let sessions = self.sessions();
             if let Some(existing) = sessions.get(session_id) {
@@ -183,23 +194,34 @@ impl OmpService {
             return Err(OmpServiceError::invalid("message"));
         }
         self.authorize(params, auth, "omp.prompt", session_id)?;
+        let request_id = required_str(params, "request_id")?;
+        let key = format!("prompt:{request_id}");
         let session = self.session(session_id)?;
         if !session.client.state().is_running() {
             return Err(OmpServiceError::new(-32043, "omp is not running"));
         }
-        {
-            let turn = session
-                .turn
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            if matches!(turn.state, OmpTurnState::Running | OmpTurnState::Aborting) {
-                return Err(OmpServiceError::new(
-                    -32041,
-                    "an omp turn is already running; abort it first",
-                ));
+        match session.request_begin(&key) {
+            RequestSlot::Completed => {
+                // A retry of an already-accepted command must not execute
+                // the prompt twice; return the authoritative snapshot.
+                self.audit(params, "omp.prompt", session_id, "ok:idempotent");
+                return session.snapshot();
             }
+            RequestSlot::InFlight => {
+                self.audit(params, "omp.prompt", session_id, "ok:in_flight");
+                return session.snapshot();
+            }
+            RequestSlot::New => {}
         }
-        session.begin_user(message);
+        // Atomic Idle/Complete/Error → Running under one turn lock, before the
+        // user entry is appended or any bytes are written.
+        if !session.begin_turn(message) {
+            session.request_release(&key);
+            return Err(OmpServiceError::new(
+                -32041,
+                "an omp turn is already running; abort it first",
+            ));
+        }
         session.bump();
         let result = session.client.prompt(message);
         match result {
@@ -207,25 +229,69 @@ impl OmpService {
                 if ack.agent_invoked == Some(false) {
                     session.complete_local();
                 }
+                session.request_complete(&key);
                 self.audit(params, "omp.prompt", session_id, "ok");
                 session.snapshot()
             }
             Err(error) => {
-                session.fail(&format!("omp rejected the prompt: {error}"));
+                let code = match &error {
+                    OmpError::RequestTimeout { .. } => -32044,
+                    OmpError::InvalidArgument(_) => -32602,
+                    _ => -32042,
+                };
+                // An explicit rejection means the prompt was not executed and
+                // the request id may be retried. A timeout or transport
+                // failure is ambiguous: omp may have accepted it, so keep the
+                // id reserved and do not overwrite the running turn.
+                let ambiguous = matches!(
+                    &error,
+                    OmpError::RequestTimeout { .. }
+                        | OmpError::Transport(_)
+                        | OmpError::NotRunning(_)
+                        | OmpError::Io(_)
+                );
+                if ambiguous {
+                    session.request_complete(&key);
+                    session.prompt_ambiguous(&format!(
+                        "omp did not acknowledge the prompt ({error}); the turn may still be running"
+                    ));
+                } else {
+                    session.request_release(&key);
+                    session.fail(&format!("omp did not accept the prompt: {error}"));
+                }
                 self.audit(
                     params,
                     "omp.prompt",
                     session_id,
                     &format!("error:{}", error.kind()),
                 );
-                Err(match error {
-                    OmpError::RequestTimeout { .. } | OmpError::StartupTimeout { .. } => {
-                        OmpServiceError::new(-32044, error.to_string())
-                    }
-                    other => OmpServiceError::new(-32042, other.to_string()),
-                })
+                Err(OmpServiceError::new(code, error.to_string()))
             }
         }
+    }
+
+    /// Capability-gated process kill for a wedged child. The Session record
+    /// stays (state becomes `exited`) so `omp.start` can replace it.
+    pub(crate) fn stop(
+        &self,
+        params: &Value,
+        auth: &AgentControlAuth,
+    ) -> Result<Value, OmpServiceError> {
+        let session_id = required_str(params, "session_id")?;
+        self.authorize(params, auth, "omp.stop", session_id)?;
+        let session = self.session(session_id)?;
+        if let Err(error) = session.client.kill() {
+            self.audit(
+                params,
+                "omp.stop",
+                session_id,
+                &format!("error:{}", error.kind()),
+            );
+            return Err(OmpServiceError::new(-32042, error.to_string()));
+        }
+        session.note_exit();
+        self.audit(params, "omp.stop", session_id, "ok");
+        session.snapshot()
     }
 
     pub(crate) fn abort(
@@ -385,14 +451,61 @@ impl OmpService {
     }
 }
 
-/// Drops every Host-owned omp child when the Host service loop exits. A child
-/// also exits on stdin EOF if the Host process is killed, because the pipe is
-/// closed by the OS; this is why no zombie is left behind.
+/// Stops every Host-owned omp child when `serve` returns normally. Real
+/// SIGTERM/SIGINT stops are handled by [`install_shutdown_signals`] on Unix.
+/// If the process is killed without either path, the OS closes the child's
+/// stdin pipe and omp exits on EOF; no zombie is left behind.
 pub(crate) struct ShutdownGuard;
 
 impl Drop for ShutdownGuard {
     fn drop(&mut self) {
-        service().shutdown_all();
+        shutdown_all();
+    }
+}
+
+/// Bounded idempotency ledger for mutating commands. A repeated request id
+/// returns the current snapshot instead of executing again.
+#[derive(Default)]
+struct RequestLedger {
+    in_flight: HashSet<String>,
+    completed: VecDeque<String>,
+    completed_set: HashSet<String>,
+}
+
+const MAX_COMPLETED_REQUESTS: usize = 128;
+
+enum RequestSlot {
+    New,
+    InFlight,
+    Completed,
+}
+
+impl RequestLedger {
+    fn begin(&mut self, key: &str) -> RequestSlot {
+        if self.completed_set.contains(key) {
+            return RequestSlot::Completed;
+        }
+        if self.in_flight.contains(key) {
+            return RequestSlot::InFlight;
+        }
+        self.in_flight.insert(key.to_owned());
+        RequestSlot::New
+    }
+
+    fn complete(&mut self, key: &str) {
+        self.in_flight.remove(key);
+        if self.completed_set.insert(key.to_owned()) {
+            self.completed.push_back(key.to_owned());
+            while self.completed.len() > MAX_COMPLETED_REQUESTS {
+                if let Some(expired) = self.completed.pop_front() {
+                    self.completed_set.remove(&expired);
+                }
+            }
+        }
+    }
+
+    fn release(&mut self, key: &str) {
+        self.in_flight.remove(key);
     }
 }
 
@@ -407,6 +520,7 @@ struct Session {
     last_sequence: Mutex<u64>,
     unknown_frames: Mutex<u64>,
     error: Mutex<Option<String>>,
+    requests: Mutex<RequestLedger>,
     exit_noted: AtomicBool,
 }
 
@@ -427,6 +541,7 @@ impl Session {
             last_sequence: Mutex::new(0),
             unknown_frames: Mutex::new(0),
             error: Mutex::new(None),
+            requests: Mutex::new(RequestLedger::default()),
             exit_noted: AtomicBool::new(false),
         };
         session
@@ -464,7 +579,22 @@ impl Session {
             .wait_timeout_while(generation, timeout, |generation| *generation <= after);
     }
 
-    fn begin_user(&self, message: &str) {
+    /// Atomically transition into a running turn. Returns false when another
+    /// turn is already active, so two concurrent prompts cannot both write.
+    fn begin_turn(&self, message: &str) -> bool {
+        {
+            let mut turn = self
+                .turn
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if matches!(turn.state, OmpTurnState::Running | OmpTurnState::Aborting) {
+                return false;
+            }
+            turn.state = OmpTurnState::Running;
+            turn.agent_invoked = None;
+            turn.started_ms = Some(now_ms());
+            turn.finished_ms = None;
+        }
         {
             let mut timeline = self
                 .timeline
@@ -473,18 +603,41 @@ impl Session {
             timeline.begin_turn();
             timeline.push(OmpTimelineKind::User, message.to_owned(), None, None, false);
         }
-        let mut turn = self
-            .turn
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        turn.state = OmpTurnState::Running;
-        turn.agent_invoked = None;
-        turn.started_ms = Some(now_ms());
-        turn.finished_ms = None;
         *self
             .error
             .lock()
             .unwrap_or_else(|poison| poison.into_inner()) = None;
+        true
+    }
+
+    fn request_begin(&self, key: &str) -> RequestSlot {
+        self.requests
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .begin(key)
+    }
+
+    fn request_complete(&self, key: &str) {
+        self.requests
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .complete(key);
+    }
+
+    fn request_release(&self, key: &str) {
+        self.requests
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .release(key);
+    }
+
+    /// A prompt whose acknowledgement never arrived may still be running:
+    /// record the ambiguity without overwriting the turn state.
+    fn prompt_ambiguous(&self, message: &str) {
+        self.timeline
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(OmpTimelineKind::Notice, message, None, None, false);
     }
 
     fn complete_local(&self) {
@@ -736,11 +889,18 @@ pub(crate) fn dispatch(method: &str, params: &Value) -> Result<Value, OmpService
         "omp.start" => service().start(params, &AgentControlAuth::from_env()),
         "omp.prompt" => service().prompt(params, &AgentControlAuth::from_env()),
         "omp.abort" => service().abort(params, &AgentControlAuth::from_env()),
+        "omp.stop" => service().stop(params, &AgentControlAuth::from_env()),
         _ => Err(OmpServiceError::new(
             -32601,
             format!("unknown omp method {method}"),
         )),
     }
+}
+
+/// Terminates every Host-owned omp child. Called by the Unix SIGTERM/SIGINT
+/// handler, by the serve guard on normal return, and by tests.
+pub(crate) fn shutdown_all() {
+    service().shutdown_all();
 }
 
 /// Status surface for `host.ping` / diagnostics. Contains no secrets.
@@ -752,7 +912,7 @@ pub(crate) fn status() -> Value {
         "problem": auth.problem(),
         "provenance": OMP_PROVENANCE,
         "protocol_version": OMP_RPC_PROTOCOL_VERSION,
-        "mutations": ["omp.start", "omp.prompt", "omp.abort"],
+        "mutations": ["omp.start", "omp.prompt", "omp.abort", "omp.stop"],
         "read_only": ["omp.snapshot", "omp.wait"],
         "view_close_stops_omp": false,
         "host_restart_reattaches": false
@@ -1049,6 +1209,95 @@ mod tests {
         let second = service.start(&mutation("s1"), &auth()).unwrap();
         assert_eq!(first["generation"], second["generation"]);
         assert_eq!(service.sessions().len(), 1);
+    }
+
+    #[test]
+    fn concurrent_prompts_have_exactly_one_winner() {
+        use std::sync::{Arc, Barrier};
+        let service = Arc::new(OmpService::with_config(mock_config("commands")));
+        service.start(&mutation("s1"), &auth()).unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let handles: Vec<_> = (0..2)
+            .map(|index| {
+                let service = Arc::clone(&service);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let mut prompt = mutation("s1");
+                    prompt["message"] = json!(format!("concurrent {index}"));
+                    prompt["request_id"] = json!(format!("req-concurrent-{index}"));
+                    service.prompt(&prompt, &auth())
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        let winners = results.iter().filter(|result| result.is_ok()).count();
+        let losers = results
+            .iter()
+            .filter(|result| result.as_ref().is_err_and(|error| error.code == -32041))
+            .count();
+        assert_eq!((winners, losers), (1, 1), "{results:?}");
+        let snapshot = service.snapshot(&json!({"session_id":"s1"})).unwrap();
+        let user_entries = snapshot["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["kind"] == "user")
+            .count();
+        assert_eq!(user_entries, 1, "{snapshot}");
+    }
+
+    #[test]
+    fn repeated_request_id_is_idempotent() {
+        let service = OmpService::with_config(mock_config("commands"));
+        service.start(&mutation("s1"), &auth()).unwrap();
+        let mut prompt = mutation("s1");
+        prompt["message"] = json!("first");
+        prompt["request_id"] = json!("req-same");
+        service.prompt(&prompt, &auth()).unwrap();
+        prompt["message"] = json!("second with the same id");
+        service.prompt(&prompt, &auth()).unwrap();
+        let snapshot = service.snapshot(&json!({"session_id":"s1"})).unwrap();
+        let user_entries = snapshot["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["kind"] == "user")
+            .count();
+        assert_eq!(user_entries, 1, "{snapshot}");
+        assert!(service
+            .audit_entries()
+            .iter()
+            .any(|entry| entry.action == "omp.prompt" && entry.outcome == "ok:idempotent"));
+    }
+
+    #[test]
+    fn stop_kills_the_child_and_is_audited() {
+        let service = OmpService::with_config(mock_config("commands"));
+        service.start(&mutation("s1"), &auth()).unwrap();
+        let mut stop = mutation("s1");
+        stop["request_id"] = json!("req-stop");
+        let snapshot = service.stop(&stop, &auth()).unwrap();
+        assert_eq!(snapshot["state"], "exited");
+        assert!(snapshot["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("omp process ended"))
+            }));
+        assert!(service
+            .audit_entries()
+            .iter()
+            .any(|entry| entry.action == "omp.stop" && entry.outcome == "ok"));
+        let mut denied = mutation("s1");
+        denied["control"] = json!("wrong");
+        assert_eq!(service.stop(&denied, &auth()).unwrap_err().code, -32030);
     }
 
     /// Real omp through the Host service (the code path behind `omp.*`).
