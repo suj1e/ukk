@@ -431,7 +431,9 @@ Database safety (Host metadata only; never prints rows):
   plugin-control-enable Create the separate plugin-control token (plugin mutations only)
   plugin-control-disable Remove that token; plugin mutations become disabled
   plugin-control-status Show whether plugin control is enabled
-  serve                Start private local Unix socket / Named Pipe
+  serve                Start private local Unix socket / Named Pipe; on Unix
+                       also the versioned protocol stream at
+                       ~/.ukk/run/agent-host.protocol (local-only, no TCP)
   request [method]     Read local Host RPC (default host.ping)
 Lifecycle (explicit; `serve` never installs anything):
   install              Register the current-user Host service (launchd/systemd --user/logon task)

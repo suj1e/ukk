@@ -26,6 +26,9 @@ A feature is **not complete** when its source merely exists. It must have a test
 | `crates/host/src/transport.rs` | User-scoped Unix Socket and Named Pipe | Product domain rules |
 | `crates/host/src/rpc.rs` | RPC routing / local authorization | Rendering, SQLite internals |
 | `crates/host/src/broker.rs` | Runtime event continuity | Persisted Session layouts |
+| `crates/host/src/protocol_service.rs` | Durable protocol adapter: SQLite hydration, command admission/idempotency, replay and delivery authorization | Wire framing, OS listeners |
+| `crates/host/src/protocol_endpoint.rs` | Local length-prefixed protocol stream, same-user acceptance and per-connection bounds | Product domain rules, WAN/relay, TLS |
+| `crates/host/src/protocol_bridge.rs` | Structured herdr-core status → typed durable event for bound AgentRuns | Broker state ownership, approval inference, cursors |
 | `crates/domain/src` | Stable product identity and pure pane tree algorithms | I/O or herdr-core process control |
 | `crates/store/src/schema.rs` | SQLite open/migrations | Product UI |
 | `crates/store/src/records.rs` | Space/Session/AgentRun persistence | Pane rendering |

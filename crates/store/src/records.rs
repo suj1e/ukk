@@ -172,6 +172,24 @@ impl Store {
         Ok(run)
     }
 
+    /// Looks up the AgentRun bound to a herdr-core terminal address.
+    ///
+    /// Returns `(session_id, agent_run_id)`. An unbound terminal has no
+    /// durable Agent identity and must not gain one implicitly.
+    pub fn agent_run_for_terminal(
+        &self,
+        terminal_address: &str,
+    ) -> Result<Option<(String, String)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT session_id,id FROM agent_runs WHERE terminal_address=?1",
+                params![terminal_address],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
     pub fn archive_session(&mut self, session_id: &str) -> Result<()> {
         let count = self.conn.execute(
             "UPDATE sessions SET archived=1, updated_ms=?2 WHERE id=?1",

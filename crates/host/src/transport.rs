@@ -64,6 +64,16 @@ pub(super) fn serve() -> AppResult<()> {
     let auth = Arc::new(LocalAuth::install()?);
     let broker = Broker::new();
     broker.start();
+    // The versioned streaming endpoint is a second, separate local socket.
+    // It never changes the JSON-RPC semantics above, and its setup runs off
+    // the JSON-RPC accept path: a slow database open or a bind failure must
+    // not delay or disable the existing local RPC endpoint.
+    let protocol_broker = Arc::clone(&broker);
+    std::thread::spawn(move || {
+        if let Err(error) = protocol_endpoint::serve_in_background(protocol_broker) {
+            eprintln!("ukk protocol endpoint disabled: {error}");
+        }
+    });
     let plugins = Arc::new(PluginService::from_env());
     println!("ukk Host listening on {}", path.display());
     println!(
@@ -242,6 +252,10 @@ pub(super) fn serve_windows() -> AppResult<()> {
     broker.start();
     let plugins = Arc::new(PluginService::from_env());
     println!("ukk Host listening on local Named Pipe {name}");
+    println!(
+        "ukk protocol endpoint: Windows Named Pipe streaming is NOT VERIFIED and \
+         not implemented in this build; no protocol listener started"
+    );
     println!(
         "Security: same-user Named Pipe clients only; protected DACL; remote pipe clients \
          rejected; max {MAX_CONNECTIONS} clients"

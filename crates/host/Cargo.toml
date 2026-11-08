@@ -17,4 +17,6 @@ ukk-domain = { path = "../domain" }
 ukk-host-client = { path = "../host-client" }
 ukk-plugin-api = { path = "../plugin-api" }
 ukk-plugin-host = { path = "../plugin-host" }
+ukk-protocol = { path = "../protocol" }
+uuid = "1"
 

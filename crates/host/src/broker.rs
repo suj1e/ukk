@@ -98,6 +98,16 @@ impl Broker {
         }
     }
 
+    /// Process-local epoch. It is used to detect a Host restart in the local
+    /// broker only; it is never a durable protocol cursor.
+    ///
+    /// Only the Unix protocol bridge reads the epoch directly; on Windows the
+    /// existing JSON-RPC snapshot API is the only broker surface.
+    #[cfg(unix)]
+    pub(crate) fn epoch(&self) -> &str {
+        &self.epoch
+    }
+
     pub(crate) fn snapshot(&self) -> Value {
         let guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         self.snapshot_inner(&guard)

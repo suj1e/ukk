@@ -1,9 +1,11 @@
 # ukk client ↔ Agent Host protocol
 
 > Status: implemented contract for generation 1 (`crates/protocol`) · 2026-11-08.
-> Host socket/relay wiring and pairing cryptography are separate follow-ups
-> (S1 Host integration, S2 pairing). This document describes what the protocol
-> crate actually enforces, not an aspiration.
+> The Unix local streaming endpoint, SQLite hydration and transport tests are
+> implemented (see [Local Host endpoint](#local-host-endpoint-implemented-unix)).
+> A WAN/relay listener, TLS/E2EE and pairing cryptography remain separate
+> follow-ups (S2). This document describes what the repository actually
+> enforces, not an aspiration.
 
 The protocol is independent of herdr-core's OpenRPC API and of alma-relay's
 transport frame. herdr-core positions (`hc_seq`) and Host process epochs
@@ -338,6 +340,63 @@ SQLite busy timeout are not exercised by this adapter. The contract is tested
 through SQLite reopen, concurrent begin, CAS conflict and migration tests in
 `crates/store`.
 
+## Local Host endpoint (implemented, Unix)
+
+`crates/host/src/protocol_endpoint.rs` serves this protocol over a same-user
+Unix Domain Socket; `crates/host/src/protocol_service.rs` hydrates
+`ukk_protocol::ProtocolService` from SQLite and owns admission/delivery. The
+endpoint starts with `ukk-host serve` and is independent of the existing
+newline-delimited JSON-RPC socket, whose semantics are unchanged.
+
+| Property | Implemented behavior |
+| --- | --- |
+| Path | `~/.ukk/run/agent-host.protocol` (sibling of `agent-host.sock`). `UKK_PROTOCOL_SOCKET` overrides it; with `UKK_SOCKET` set the sibling stays in that private directory |
+| Authorization | socket mode `0600` in the `0700` run directory; `SO_PEERCRED`/`getpeereid` verifies the peer uid before any frame; the verified uid is the `TransportBinding::local_ipc` principal |
+| Framing | 4-byte big-endian length + UTF-8 JSON body. Not newline JSON. The declared length is checked against `Limits::max_envelope_bytes` (64 KiB) before the body is read or allocated |
+| Handshake | first frame must be `hello`; commands/subscriptions before it are refused. A device claim on this local binding is `plane_mismatch` |
+| Streams | one durable stream, `workspace`; the `hello` reply carries its persisted `floor`/`head`. Live and replay frames are ordered by the event log cursor. Session commands and the herdr-core status bridge append to this stream, and open subscriptions receive the new cursor live |
+| Snapshot | a cursor below the retention floor yields a `snapshot` at the durable head whose body is the Host's durable workspace snapshot; the client resumes at `at_cursor` |
+| Commands | `session_create` (idempotent Session metadata + `session_created` event) and `device_revoke` (`device.manage`; the local owner holds all scopes, and pairing never grants `device.manage`). `agent_send`, `approval_respond` and `pointer_input` are **refused before admission**; they belong to the separate runtime-control and controller-lease surfaces and are never reported as `accepted` |
+| Idempotency | `Store::begin_idempotent_command`/`finish` are the durable authority; the in-memory `IdempotencyStore` in `ProtocolService` is bypassed to avoid two sources of truth. A retry across a Host restart returns the stored result with `replayed: true` |
+| Delivery | `authorize_delivery` runs before every outbound batch, including an idle live stream. Revocation, key rotation or grant expiry sends a typed `error` and closes the subscription/connection |
+| Bounds | 16 concurrent connections, `max_queue_depth` outbound frames per connection (a non-draining client is closed), 60 s idle deadline for pre-handshake, non-subscribing and partial-frame connections, 10 s write deadline, 256-event replay batches |
+
+The 40 ms live poll means a newly appended event reaches an open subscription
+without a reconnect; replay itself is served from SQLite in bounded batches.
+Acknowledgements are advisory and tracked per connection with a monotonic
+check; no per-client checkpoint is persisted by this slice.
+
+The herdr-core runtime broker stays on the JSON-RPC plane for its snapshot
+API. A bridge (`crates/host/src/protocol_bridge.rs`) additionally publishes a
+structured terminal status change as `agent_run_status_changed` on the durable
+`workspace` stream **only when the terminal is already bound to a persisted
+`AgentRun`**. Unbound terminals never gain an Agent identity, and the broker's
+`hc_seq`/`host_epoch`/revision are never used as cursors: the Store assigns the
+durable cursor. Mapping is deliberately narrow — `working`→`running`,
+`idle`→`idle`, everything else (including `blocked`)→`unknown`, because an
+approval must never be inferred from terminal status.
+
+### Local vs WAN separation
+
+```mermaid
+flowchart LR
+  DESKTOP["Desktop / local test client"] -->|Unix socket, peer uid| LOCAL["protocol_endpoint (local plane)"]
+  LOCAL --> SERVICE["ProtocolHost + SQLite"]
+  PHONE["iPhone / remote client"] -.->|NOT IMPLEMENTED| WAN["relay / WAN transport"]
+  WAN -.-> REMOTE["remote plane (S2)"]
+```
+
+There is **no TCP listener** and no forwarding from the local socket to a
+remote plane. `EndpointPlane::RemoteForTests` exists only under `cfg(test)` to
+exercise device grants, unauthorized commands and mid-stream revocation over
+the same socket; production constructs `EndpointPlane::Local` only.
+
+**NOT VERIFIED in this slice:** a Windows Named Pipe implementation of this
+streaming endpoint (the shared logic compiles and is unit-tested on all three
+OSes, but no Windows protocol listener exists); a real relay/TLS/WAN listener;
+pairing proof-of-possession; OS key storage; iOS client integration; and
+cross-account peer denial beyond the existing single-user runbook.
+
 ## Limits and backpressure
 
 Default bounds (`Limits`); all are configurable and validated at startup:
@@ -394,6 +453,35 @@ See [security](SECURITY.md), [pairing](PAIRING.md),
   tombstones that refuse retries; capacity is refused rather than evicting;
   stale/future queued commands are rejected/discarded; the service refuses a
   post-retention retry instead of re-executing.
+
+`crates/host` (real Unix socket, in-crate `protocol_endpoint/tests.rs`):
+
+* `hello_negotiates_generation_and_rejects_incompatible_versions` — handshake
+  bounds and disjoint-generation refusal.
+* `subscribe_replays_batches_snapshots_pruned_history_and_streams_live` — ordered
+  replay, cursor-beyond-head error, retention snapshot, live cursor continuation.
+* `command_idempotency_never_executes_twice` — durable retry classification and
+  fingerprint conflict.
+* `handshake_is_required_and_remote_commands_need_their_scope` — pre-handshake
+  refusal, local device-claim rejection, remote `missing_scope`.
+* `revocation_and_grant_expiry_terminate_an_open_stream` — live revocation and
+  absolute grant expiry close delivery with typed denials.
+* `oversized_and_malformed_frames_are_rejected` — length-prefix bound, malformed
+  JSON/UTF-8/empty frames, connection remains usable after recoverable errors.
+* `reconnect_resumes_from_the_persisted_cursor` — disconnect, bounded replay,
+  resume at head, next live cursor.
+* `events_and_idempotency_survive_a_host_restart` — SQLite reopen preserves
+  event ids/cursors and the completed idempotency record.
+* `protocol_service` unit tests — trust hydration from `devices`/`device_grants`,
+  durable idempotency, generation mismatch before execution, and broker-status
+  publication only for bound AgentRuns; these compile and run on all three OSes.
+* `crates/host/tests/protocol_stream.rs` — the shipped `ukk-host serve` process
+  derives the sibling endpoint path, hydrates the seeded database and answers
+  `hello`/`session_create`/`subscribe` over a raw client.
+* `crates/host/tests/protocol_bridge.rs` — a mock herdr-core status stream
+  (`status.state=working`) becomes a durable `agent_run_status_changed` event
+  on the socket; `blocked` is unit-tested to map to `unknown`, never an
+  inferred approval.
 
 `crates/store` (schema v3):
 
