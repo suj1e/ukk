@@ -214,8 +214,8 @@ jobs:
           It is not signed, cannot be installed on an iPhone, and must not be
           presented as a TestFlight, App Store, or installable build.
           EOF
-          shasum -a 256 "$GITHUB_WORKSPACE/dist/ios/ukk-unsigned.ipa" \
-            > "$GITHUB_WORKSPACE/dist/ios/ukk-unsigned.ipa.sha256"
+          (cd "$GITHUB_WORKSPACE/dist/ios" && \
+            shasum -a 256 ukk-unsigned.ipa > ukk-unsigned.ipa.sha256)
 
       - uses: actions/upload-artifact@v4
         with:
