@@ -456,6 +456,15 @@ pub(super) enum TerminalKeyAction {
     Send,
 }
 
+/// One reserved Host operation. The request id is stable for an unchanged
+/// draft, so a retry after a lost reply is deduped by the Host instead of
+/// executing the line twice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TerminalSendAttempt {
+    pub request_id: String,
+    pub text: String,
+}
+
 /// Local composer state for one bound Session terminal.
 ///
 /// The text is owned by one terminal key. Switching to another terminal drops
@@ -470,6 +479,9 @@ pub(super) struct TerminalInputState {
     /// Terminal key whose draft is currently submitted. Only that draft is
     /// frozen; another pane can still be drafted locally.
     busy_key: Option<String>,
+    /// Idempotency key for the current draft. Kept across a failed send;
+    /// invalidated by any text or binding change and cleared on success.
+    draft_request_id: Option<String>,
     notice: Option<TerminalInputNotice>,
     capability: TerminalControlCapability,
 }
@@ -507,6 +519,7 @@ impl TerminalInputState {
         if self.owner.as_deref() != Some(key) {
             self.owner = Some(key.to_owned());
             self.text.clear();
+            self.draft_request_id = None;
             self.notice = None;
         }
     }
@@ -534,10 +547,12 @@ impl TerminalInputState {
             }
             "backspace" => {
                 self.text.pop();
+                self.draft_request_id = None;
                 TerminalKeyAction::None
             }
             "escape" => {
                 self.text.clear();
+                self.draft_request_id = None;
                 TerminalKeyAction::None
             }
             _ => {
@@ -554,6 +569,7 @@ impl TerminalInputState {
                     }
                     if self.text.len() + text.len() <= TERMINAL_INPUT_MAX_BYTES {
                         self.text.push_str(text);
+                        self.draft_request_id = None;
                     }
                 }
                 TerminalKeyAction::None
@@ -563,14 +579,22 @@ impl TerminalInputState {
 
     /// Reserve the current draft for one Host call. The draft stays visible
     /// until the call is verified, so a failure cannot look like a success.
-    pub(super) fn begin_send(&mut self, key: &str) -> Option<String> {
+    /// An unchanged draft keeps its request id across retries.
+    pub(super) fn begin_send(&mut self, key: &str) -> Option<TerminalSendAttempt> {
         if self.owner.as_deref() != Some(key) || !self.can_send() {
             return None;
         }
+        let request_id = self
+            .draft_request_id
+            .get_or_insert_with(ukk_domain::new_id)
+            .clone();
         self.busy = true;
         self.busy_key = Some(key.to_owned());
         self.notice = None;
-        Some(self.text.clone())
+        Some(TerminalSendAttempt {
+            request_id,
+            text: self.text.clone(),
+        })
     }
 
     pub(super) fn finish_success(
@@ -583,6 +607,7 @@ impl TerminalInputState {
         self.busy_key = None;
         if self.owner.as_deref() == Some(key) && self.text == submitted {
             self.text.clear();
+            self.draft_request_id = None;
         }
         let replay = if outcome.replayed {
             " · idempotent replay"
@@ -848,7 +873,7 @@ impl Workspace {
         let matching = binding.and_then(|run| {
             self.terminal_feeds
                 .get(&key)
-                .filter(|feed| feed.address == run.terminal_address)
+                .filter(|feed| feed_matches_binding(feed, &run.core_id, &run.terminal_address))
                 .map(TerminalFeed::snapshot)
         });
         let stale =
@@ -972,7 +997,7 @@ impl Workspace {
             ));
         } else if stale {
             body = body.child(self.terminal_notice(
-                "The attached stream targets a previous terminal address. Reattach to follow the current binding; the old stream is only dropped, never signalled.",
+                "The attached stream targets a previous terminal binding (core or address). Reattach to follow the current binding; the old stream is only dropped, never signalled.",
             ));
         } else {
             body = body.child(self.terminal_notice(
@@ -1136,7 +1161,7 @@ impl Workspace {
         terminal: &str,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let key = terminal_pane_key(pane_id);
+        let key = terminal_input_key(pane_id, core_id, terminal);
         let capability = self.terminal_input.capability();
         let enabled = capability.is_enabled();
         let busy = self.terminal_input.busy();
@@ -1329,7 +1354,16 @@ impl Workspace {
         event: &KeyDownEvent,
         cx: &mut Context<Self>,
     ) {
-        let key = terminal_pane_key(pane_id);
+        let Some((core_id, terminal)) = self
+            .domain
+            .agent_runs
+            .iter()
+            .find(|run| run.id == agent_run_id)
+            .map(|run| (run.core_id.clone(), run.terminal_address.clone()))
+        else {
+            return;
+        };
+        let key = terminal_input_key(pane_id, &core_id, &terminal);
         match self.terminal_input.handle_key(&key, event) {
             TerminalKeyAction::Send => self.send_terminal_line(agent_run_id, pane_id, cx),
             TerminalKeyAction::None => cx.notify(),
@@ -1348,7 +1382,6 @@ impl Workspace {
         if self.terminal_input.busy() {
             return;
         }
-        let key = terminal_pane_key(pane_id);
         let Some((core_id, terminal)) = self
             .domain
             .agent_runs
@@ -1358,10 +1391,12 @@ impl Workspace {
         else {
             return;
         };
+        let feed_key = terminal_pane_key(pane_id);
+        let key = terminal_input_key(pane_id, &core_id, &terminal);
         let stream_matches = self
             .terminal_feeds
-            .get(&key)
-            .is_some_and(|feed| feed.address == terminal && feed.is_running());
+            .get(&feed_key)
+            .is_some_and(|feed| feed_is_live_for_binding(feed, &core_id, &terminal));
         if !stream_matches {
             self.terminal_input.block_send(
                 &key,
@@ -1371,23 +1406,33 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let Some(line) = self.terminal_input.begin_send(&key) else {
+        let Some(attempt) = self.terminal_input.begin_send(&key) else {
             return;
         };
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let submitted = line.clone();
+            let request_id = attempt.request_id;
+            let submitted = attempt.text;
             let core = core_id.clone();
             let terminal_address = terminal.clone();
+            let request_for_host = request_id.clone();
+            let text_for_host = submitted.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    HostClient::from_env().runtime_send(&core, &terminal_address, &submitted)
+                    HostClient::from_env().runtime_send_with_request_id(
+                        &request_for_host,
+                        &core,
+                        &terminal_address,
+                        &text_for_host,
+                    )
                 })
                 .await;
             this.update(cx, |view, cx| {
                 match result {
-                    Ok(outcome) => view.terminal_input.finish_success(&key, &line, &outcome),
+                    Ok(outcome) => view
+                        .terminal_input
+                        .finish_success(&key, &submitted, &outcome),
                     Err(error) => {
                         // Show the failure and refresh the truthful capability
                         // state. The line is never resent automatically.
@@ -1513,6 +1558,22 @@ impl Workspace {
 
 fn terminal_pane_key(pane_id: &str) -> String {
     format!("pane:{pane_id}")
+}
+
+/// Drafts are scoped to a pane **and** the exact binding, so a rebind to a
+/// different core or address cannot reuse text typed for the old terminal.
+fn terminal_input_key(pane_id: &str, core_id: &str, terminal: &str) -> String {
+    format!("input:{pane_id}:{core_id}:{terminal}")
+}
+
+/// A feed belongs to a binding only when both the address and core identity
+/// match. A same-address rebind to another core must not look attached.
+fn feed_matches_binding(feed: &TerminalFeed, core_id: &str, terminal: &str) -> bool {
+    feed.address == terminal && feed.core_id.as_deref() == Some(core_id)
+}
+
+fn feed_is_live_for_binding(feed: &TerminalFeed, core_id: &str, terminal: &str) -> bool {
+    feed_matches_binding(feed, core_id, terminal) && feed.is_running()
 }
 
 fn terminal_detail_key(address: &str) -> String {
@@ -1687,7 +1748,15 @@ mod tests {
     fn terminal_line_validation_is_one_line_and_bounded() {
         assert!(valid_terminal_line("cargo test"));
         assert!(valid_terminal_line("printf 'hi'"));
-        for invalid in ["", "   ", "one\ntwo", "one\rtwo", "tab\there", "bell\u{7}"] {
+        for invalid in [
+            "",
+            "   ",
+            "one\ntwo",
+            "one\rtwo",
+            "tab\there",
+            "bell\u{7}",
+            "spoof\u{202e}txt",
+        ] {
             assert!(!valid_terminal_line(invalid), "{invalid:?}");
         }
         assert!(!valid_terminal_line(
@@ -1735,6 +1804,11 @@ mod tests {
             TerminalKeyAction::None
         );
         assert_eq!(input.text_for("pane:p1"), "");
+        assert_eq!(
+            input.handle_key("pane:p1", &key_event("x", Some("\u{202e}"))),
+            TerminalKeyAction::None
+        );
+        assert_eq!(input.text_for("pane:p1"), "");
     }
 
     #[test]
@@ -1779,7 +1853,8 @@ mod tests {
     fn draft_is_kept_on_failure_and_cleared_only_after_verified_success() {
         let mut input = enabled_input();
         type_text(&mut input, "pane:p1", "cargo test");
-        assert_eq!(input.begin_send("pane:p1").as_deref(), Some("cargo test"));
+        let first = input.begin_send("pane:p1").unwrap();
+        assert_eq!(first.text, "cargo test");
         assert!(input.busy());
         // The draft stays visible while the Host call is in flight.
         assert_eq!(input.text_for("pane:p1"), "cargo test");
@@ -1794,13 +1869,34 @@ mod tests {
         assert_eq!(notice.kind(), TerminalNoticeKind::Error);
         assert!(notice.text().contains("denied"));
 
-        assert_eq!(input.begin_send("pane:p1").as_deref(), Some("cargo test"));
+        let retry = input.begin_send("pane:p1").unwrap();
+        assert_eq!(retry.text, "cargo test");
+        assert_eq!(
+            retry.request_id, first.request_id,
+            "an unchanged draft must reuse its idempotency key"
+        );
         input.finish_success("pane:p1", "cargo test", &sent(7, false));
         assert!(!input.busy());
         assert_eq!(input.text_for("pane:p1"), "");
         let notice = input.notice_for("pane:p1").unwrap();
         assert_eq!(notice.kind(), TerminalNoticeKind::Success);
         assert!(notice.text().contains("turn 7"));
+    }
+
+    #[test]
+    fn editing_a_draft_after_failure_gets_a_new_request_id() {
+        let mut input = enabled_input();
+        type_text(&mut input, "pane:p1", "echo one");
+        let first = input.begin_send("pane:p1").unwrap();
+        input.finish_failure("pane:p1", "timeout".into());
+        // Backspace is an explicit edit and must not reuse the old key.
+        assert_eq!(
+            input.handle_key("pane:p1", &key_event("backspace", None)),
+            TerminalKeyAction::None
+        );
+        let edited = input.begin_send("pane:p1").unwrap();
+        assert_eq!(edited.text, "echo on");
+        assert_ne!(edited.request_id, first.request_id);
     }
 
     #[test]
@@ -1833,10 +1929,8 @@ mod tests {
     fn submitted_line_is_verbatim_without_rewriting() {
         let mut input = enabled_input();
         type_text(&mut input, "pane:p1", "git commit -m 'msg with spaces'");
-        assert_eq!(
-            input.begin_send("pane:p1"),
-            Some("git commit -m 'msg with spaces'".to_owned())
-        );
+        let attempt = input.begin_send("pane:p1").unwrap();
+        assert_eq!(attempt.text, "git commit -m 'msg with spaces'");
         assert_eq!(input.text_for("pane:p1"), "git commit -m 'msg with spaces'");
     }
 
@@ -1844,7 +1938,8 @@ mod tests {
     fn success_does_not_clear_text_the_user_changed_after_submitting() {
         let mut input = enabled_input();
         type_text(&mut input, "pane:p1", "one");
-        assert_eq!(input.begin_send("pane:p1").as_deref(), Some("one"));
+        let attempt = input.begin_send("pane:p1").unwrap();
+        assert_eq!(attempt.text, "one");
         // A different terminal becomes the owner while the reply is pending.
         type_text(&mut input, "pane:p2", "two");
         input.finish_success("pane:p1", "one", &sent(3, true));
@@ -1854,17 +1949,82 @@ mod tests {
     }
 
     #[test]
-    fn attaching_a_stream_alone_cannot_produce_terminal_input() {
-        let feeds = TerminalFeeds::default();
-        assert!(feeds.is_empty());
+    fn attaching_a_live_stream_alone_cannot_produce_terminal_input() {
+        let shared = Arc::new(SharedFeed::default());
+        shared.set_status(TerminalStatus::Attached);
+        let feed = TerminalFeed {
+            address: "t7".into(),
+            core_id: Some("core-1".into()),
+            pane_id: Some("pane-1".into()),
+            shared: Arc::clone(&shared),
+            cancel: Arc::new(AtomicBool::new(false)),
+            seen_generation: 0,
+        };
+        assert!(feed.is_running());
+        let mut feeds = TerminalFeeds::default();
+        feeds.feeds.insert("pane:pane-1".into(), feed);
+        assert!(!feeds.is_empty());
+
         let mut input = enabled_input();
         assert!(!input.busy());
-        assert_eq!(input.text_for("pane:p1"), "");
-        assert!(input.begin_send("pane:p1").is_none());
+        assert_eq!(input.text_for("pane:pane-1"), "");
+        assert!(input.begin_send("pane:pane-1").is_none());
         assert_eq!(
-            input.handle_key("pane:p1", &key_event("enter", None)),
+            input.handle_key("pane:pane-1", &key_event("enter", None)),
             TerminalKeyAction::None
         );
+    }
+
+    #[test]
+    fn feed_binding_requires_core_address_and_live_status() {
+        let shared = Arc::new(SharedFeed::default());
+        shared.set_status(TerminalStatus::Attached);
+        let feed = TerminalFeed {
+            address: "t7".into(),
+            core_id: Some("core-1".into()),
+            pane_id: Some("pane-1".into()),
+            shared: Arc::clone(&shared),
+            cancel: Arc::new(AtomicBool::new(false)),
+            seen_generation: 0,
+        };
+        assert!(feed_matches_binding(&feed, "core-1", "t7"));
+        assert!(feed_is_live_for_binding(&feed, "core-1", "t7"));
+        assert!(
+            !feed_matches_binding(&feed, "core-2", "t7"),
+            "same address on another core must not match"
+        );
+        assert!(!feed_matches_binding(&feed, "core-1", "t8"));
+        assert!(!feed_is_live_for_binding(&feed, "core-2", "t7"));
+
+        shared.set_status(TerminalStatus::Closed {
+            reason: "exited".into(),
+            exit_code: Some(0),
+            signal: None,
+        });
+        assert!(!feed_is_live_for_binding(&feed, "core-1", "t7"));
+        assert!(
+            feed_matches_binding(&feed, "core-1", "t7"),
+            "a closed feed still identifies the binding"
+        );
+
+        let detail = TerminalFeed {
+            address: "t9".into(),
+            core_id: None,
+            pane_id: None,
+            shared: Arc::new(SharedFeed::default()),
+            cancel: Arc::new(AtomicBool::new(false)),
+            seen_generation: 0,
+        };
+        assert!(!feed_matches_binding(&detail, "core-1", "t9"));
+    }
+
+    #[test]
+    fn input_keys_are_scoped_to_pane_and_binding() {
+        let a = terminal_input_key("pane-1", "core-1", "t7");
+        assert_eq!(a, terminal_input_key("pane-1", "core-1", "t7"));
+        assert_ne!(a, terminal_input_key("pane-1", "core-2", "t7"));
+        assert_ne!(a, terminal_input_key("pane-1", "core-1", "t8"));
+        assert_ne!(a, terminal_input_key("pane-2", "core-1", "t7"));
     }
 
     #[test]

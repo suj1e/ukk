@@ -162,6 +162,75 @@ fn runtime_send_issues_a_new_request_id_for_each_explicit_line() {
 }
 
 #[test]
+fn runtime_send_with_request_id_reuses_the_host_idempotency_key() {
+    let dir = temp_dir("rk");
+    let socket = dir.join("host.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let token_path = dir.join("explicit.agent-control");
+    write_token(&token_path, &agent_token(), 0o600);
+
+    let handler = thread::spawn(move || {
+        let mut ids = Vec::new();
+        for replayed in [false, true] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            ids.push(request["params"]["request_id"].as_str().unwrap().to_owned());
+            let response = json!({
+                "jsonrpc":"2.0","id":request["id"],
+                "result":{"turn":3,"status":"working","replayed":replayed}
+            });
+            writeln!(stream, "{response}").unwrap();
+        }
+        ids
+    });
+
+    let client = client(&socket, &token_path);
+    let first = client
+        .runtime_send_with_request_id("stable-draft-id", "core-1", "t7", "echo hi")
+        .unwrap();
+    let second = client
+        .runtime_send_with_request_id("stable-draft-id", "core-1", "t7", "echo hi")
+        .unwrap();
+    let ids = handler.join().unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(ids, vec!["stable-draft-id", "stable-draft-id"]);
+    assert!(!first.replayed);
+    assert!(second.replayed);
+}
+
+#[test]
+fn runtime_send_surfaces_a_core_mismatch_without_sending_elsewhere() {
+    let dir = temp_dir("rc");
+    let socket = dir.join("host.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let token_path = dir.join("explicit.agent-control");
+    write_token(&token_path, &agent_token(), 0o600);
+
+    let handler = serve_once(listener, |request| {
+        json!({
+            "jsonrpc":"2.0","id":request["id"],
+            "error":{"code":-32045,"message":"AgentRun binding belongs to core core-1, but the connected core is core-2"}
+        })
+    });
+
+    let error = client(&socket, &token_path)
+        .runtime_send("core-1", "t7", "echo hi")
+        .expect_err("a core mismatch must not be treated as success");
+    handler.join().unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+
+    match error {
+        HostError::Remote(value) => assert_eq!(value["code"], -32045),
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
 fn runtime_send_surfaces_a_host_denial_without_retrying() {
     let dir = temp_dir("rd");
     let socket = dir.join("host.sock");
@@ -245,7 +314,8 @@ fn runtime_send_never_connects_without_the_control_token() {
 fn runtime_send_rejects_an_insecure_or_short_control_token() {
     let dir = temp_dir("rx");
     let socket = dir.join("host.sock");
-    let _listener = UnixListener::bind(&socket).unwrap();
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
     let token_path = dir.join("insecure.agent-control");
     write_token(&token_path, &agent_token(), 0o644);
 
@@ -256,6 +326,10 @@ fn runtime_send_rejects_an_insecure_or_short_control_token() {
         matches!(&error, HostError::Protocol(message) if message.contains("0600")),
         "unexpected error: {error}"
     );
+    assert!(
+        listener.accept().is_err(),
+        "an insecure capability must not open a connection"
+    );
 
     write_token(&token_path, "short", 0o600);
     let error = client(&socket, &token_path)
@@ -264,6 +338,10 @@ fn runtime_send_rejects_an_insecure_or_short_control_token() {
     assert!(
         matches!(&error, HostError::Protocol(message) if message.contains("too short")),
         "unexpected error: {error}"
+    );
+    assert!(
+        listener.accept().is_err(),
+        "a short capability must not open a connection"
     );
     fs::remove_dir_all(&dir).unwrap();
 }

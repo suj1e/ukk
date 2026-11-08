@@ -240,11 +240,14 @@ most 256 completed ids and fails closed when that bound is reached instead of
 silently evicting an id that might still be retried. `intent: "user"` is a UI
 convention asserted by the caller, not cryptographic proof; the capability is
 the actual control boundary. The Host verifies the binding's `core_id`
-against the connected herdr-core identity before acting. Successful and
-denied control attempts are written to a JSONL audit file
-(`UKK_AGENT_CONTROL_AUDIT`, default beside the token) containing the request
-id, action, core id, terminal address, intent and outcome — never the token or
-terminal contents.
+against the connected herdr-core identity before acting. Successful control
+attempts and denials that reach preflight (missing/disabled/insecure
+capability, unauthorized `control`, missing user intent, invalid line) are
+written to a JSONL audit file (`UKK_AGENT_CONTROL_AUDIT`, default beside the
+token) containing the request id, action, core id, terminal address, intent
+and outcome — never the token or terminal contents. A malformed request that
+cannot supply a request id or binding is rejected before an audit record
+exists.
 
 Local-only threat model: the capability is same-user, same-host defense in
 depth, not remote authentication and not a boundary against a process that can
@@ -297,19 +300,31 @@ turn the observe stream into a writer and does not add terminal emulation:
   Nothing is sent on load, selection, Tab switch, attach, reattach or per
   keystroke. There is no keystroke streaming, resize, interrupt, stop, kill or
   detach path in the composer.
-- `HostClient::runtime_send` reads the separate, default-off agent-control
-  token **at call time**. The workspace metadata token and the plugin-control
-  token are never accepted or substituted. Every call carries a fresh
-  `request_id`, `intent: "user"` and the exact `core_id` +
-  `terminal_address` binding.
+- `HostClient::runtime_send_with_request_id` reads the separate, default-off
+  agent-control token **at call time**. The workspace metadata token and the
+  plugin-control token are never accepted or substituted. Every call carries
+  `intent: "user"`, the exact `core_id` + `terminal_address` binding and a
+  `request_id`.
+- The request id is stable for one unchanged draft: a retry after a lost reply
+  reuses it so the Host dedupes (`replayed`) or reports "in flight" instead of
+  executing the line twice. The idempotency cache is in memory and is lost on
+  Host restart. Editing the draft, or a binding change, mints a new id.
 - The line is one bounded printable line (8 KiB maximum); newlines, tabs,
-  other control characters and bidi overrides are rejected client-side before
-  the token is read or a socket is opened. The Host still validates the
-  address and text.
+  other control characters and bidi overrides are rejected by the Desktop,
+  `ukk-host-client` and the Host preflight. The Host also validates the
+  address; malformed text never reaches herdr-core.
+- The attached feed must match **both** the terminal address and the binding's
+  `core_id`, and must still be live at send time. A same-address rebind to
+  another core is treated as stale. Drafts are keyed by pane + core + address,
+  so text typed for one terminal is not reused after a rebind.
 - The Host preflights the capability, checks the binding against the connected
   core identity, applies in-process idempotency by `request_id`, and writes an
   audit entry (request id, action, core id, terminal address, intent, outcome).
-  Neither the token nor the submitted text is audited.
+  Successful attempts and every preflight denial — missing/disabled/insecure
+  capability, unauthorized `control` value, missing user intent, invalid line
+  — are audited before any `hc connect` spawn. Neither the token nor the
+  submitted text is audited. Parse failures that never produce a valid
+  `request_id`/binding are rejected before an audit record exists.
 - Failures are truthful: the draft is kept and the error is shown; the Desktop
   never retries automatically. The field is cleared only after a verified Host
   success. A Host-reported `replayed` outcome is labelled instead of hidden.

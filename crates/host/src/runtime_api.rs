@@ -9,8 +9,11 @@
 //! `auth` token is ignored here by construction.
 
 use super::runtime::{
-    Intent, RunBinding, RuntimeAction, RuntimeCall, RuntimeError, RuntimeOutcome, RuntimeService,
+    audit_denial, Intent, RunBinding, RuntimeAction, RuntimeCall, RuntimeError, RuntimeOutcome,
+    RuntimeService,
 };
+#[cfg(test)]
+use super::runtime_auth::AuditEntry;
 use super::runtime_auth::{AgentControlAuth, AuditLog};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -59,18 +62,62 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value, RuntimeError> {
     // unauthenticated caller must not allocate a child process or worker.
     let call = parse_call(method, params)?;
     let auth = AgentControlAuth::from_env();
-    RuntimeService::preflight(&auth, &call)?;
+    let audit = audit_log();
+    if let Err(error) = RuntimeService::preflight(&auth, &call) {
+        // Audit before returning: a disabled, missing, insecure or
+        // unauthorized capability attempt is still a control attempt.
+        audit_denial(&audit, &call, &error)?;
+        return Err(error);
+    }
     let connection = HcClient::default()
         .framed()
         .map_err(RuntimeError::from_hc)?;
-    let mut service = RuntimeService::new(
-        auth,
-        Box::new(connection),
-        AuditLog::file(AgentControlAuth::audit_path()),
-        global_cache(),
-    );
+    let mut service = RuntimeService::new(auth, Box::new(connection), audit, global_cache());
     let execution = service.execute(call)?;
     execution_json(execution)
+}
+
+/// The durable audit sink, or a test-only shared memory sink installed by
+/// [`with_test_audit`]. The override is thread-local, so parallel tests never
+/// write to the operator's real audit file.
+fn audit_log() -> AuditLog {
+    #[cfg(test)]
+    {
+        if let Some(entries) = TEST_AUDIT.with(|slot| slot.borrow().clone()) {
+            return AuditLog::from_shared(entries);
+        }
+    }
+    AuditLog::file(AgentControlAuth::audit_path())
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_AUDIT: std::cell::RefCell<Option<Arc<Mutex<Vec<AuditEntry>>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with a thread-local in-memory audit sink and return the recorded
+/// entries. Used by RPC dispatch tests so a denial can be asserted without
+/// touching the real audit path.
+#[cfg(test)]
+pub fn with_test_audit<T>(f: impl FnOnce() -> T) -> (T, Vec<AuditEntry>) {
+    struct ClearOnDrop;
+    impl Drop for ClearOnDrop {
+        fn drop(&mut self) {
+            TEST_AUDIT.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    let entries = Arc::new(Mutex::new(Vec::new()));
+    TEST_AUDIT.with(|slot| *slot.borrow_mut() = Some(Arc::clone(&entries)));
+    let _clear = ClearOnDrop;
+    let result = f();
+    drop(_clear);
+    let recorded = entries
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    (result, recorded)
 }
 
 fn status_from(auth: &AgentControlAuth) -> Value {

@@ -32,24 +32,35 @@ for an unbound Host terminal stays read-only.
 
 ```text
 explicit Send click or Enter in the composer
-  → HostClient::runtime_send (reads the separate agent-control token at call time)
+  → HostClient::runtime_send_with_request_id
+      (reads the separate agent-control token at call time)
   → Host runtime.send
-      preflight: request_id, intent:"user", separate control capability
+      preflight: request_id, intent:"user", separate control capability,
+                 one-line/size/C0/bidi text rule
       exact core_id + terminal_address check against the connected core
-      durable audit entry, in-process idempotency by request_id
+      audit entry for success and for every preflight denial
+      in-process idempotency by request_id
   → hc terminal.send (paste this line, then Enter after the quiet period)
 ```
 
 The composer is not terminal emulation:
 
 - one line, at most 8 KiB, printable text only; newline, tab, other control
-  characters and bidi overrides are rejected before any connection is opened;
+  characters and bidi overrides are rejected by both the Desktop/client and
+  the Host before any backend call;
 - typing is local. Nothing is sent on application load, Session selection, Tab
   switch, attach, reattach or on each keystroke;
 - no resize, interrupt, stop, kill, detach, named keys or paste channel is
   reachable from this surface;
-- the binding and the attached stream address are re-resolved at send time; a
-  stale render is refused instead of targeting another terminal;
+- the binding and the attached stream are re-resolved at send time. Both the
+  `core_id` and the terminal address must match the live feed; a same-address
+  rebind to another core, an ended stream or a stale render is refused;
+- drafts are keyed by pane plus `core_id` plus terminal address, so a rebind
+  cannot reuse text typed for the previous terminal;
+- an unchanged draft retries with the **same** `request_id`, so a reply lost to
+  a timeout is deduped by the Host instead of executing the line twice
+  (within one Host process; the idempotency cache is in memory). Editing the
+  draft, or a binding change, mints a new id;
 - the field is cleared only after a verified Host success. A failure keeps the
   draft, shows the Host/client error verbatim and is never retried
   automatically. A Host-reported `replayed` outcome is labelled as such.
@@ -145,8 +156,8 @@ for data it has consumed, so a stalled UI applies backpressure instead of
 growing memory. The GPUI thread only checks a generation counter and repaints;
 it never performs terminal I/O.
 
-One submitted line is capped at 8 KiB by both the Desktop composer and
-`ukk-host-client` before the capability file is read or a socket is opened.
+One submitted line is capped at 8 KiB by the Desktop composer,
+`ukk-host-client` and the Host preflight before any backend call.
 
 ## Verification
 
@@ -159,20 +170,32 @@ Automated unit tests cover:
 - a mocked event source proves sanitization, progress and close handling;
 - an ignored real-daemon test launches a test-owned terminal, observes text,
   receives a normal close, and cleans up that terminal only;
-- one-line validation, keyboard typing/Backspace/Escape, Enter-only send,
-  capability gating (unknown/disabled/offline), draft retention on failure,
-  clear-only-after-verified-success, and that attaching alone cannot produce
-  input or a send request.
+- one-line/C0/bidi/size validation, keyboard typing/Backspace/Escape,
+  Enter-only send, capability gating (unknown/disabled/offline), draft
+  retention on failure, stable request id across an unchanged-draft retry and
+  a new id after an edit, clear-only-after-verified-success, core+address feed
+  matching (including a same-address core rebind), draft key scoping, and that
+  an attached live stream alone cannot produce input or a send request.
 
 Host-client contract tests cover:
 
 - the request carries the separate agent-control token, never the workspace
   token, plus `request_id`, `intent:"user"` and the exact binding;
-- each explicit line gets a fresh `request_id`;
-- Host denial, idempotent replay and missing/insecure capability errors are
-  returned without retry or a fabricated success;
-- malformed lines and bindings are rejected before any IPC;
+- each new explicit line gets a fresh `request_id`; a caller-supplied id is
+  reused verbatim for an unchanged-draft retry;
+- Host denial, core mismatch, idempotent replay and missing/insecure/short
+  capability errors are returned without retry or a fabricated success, and a
+  bad capability opens no IPC connection;
+- malformed lines, bindings and request ids are rejected before any IPC;
 - `runtime.status` is read-only and needs no capability file.
+
+Host runtime tests cover:
+
+- one-line/size/C0/bidi text rejection before the backend, with a
+  `denied:invalid_params` audit entry;
+- a workspace-shaped `control` value rejected for `runtime.send` with a
+  `denied:unauthorized` audit entry;
+- preflight denials recorded through the RPC `handle_request` path.
 
 Manual macOS evidence for the observe path is recorded in the pull request
 body: real `hc 0.1.18` framed observe attach against a test terminal. Windows

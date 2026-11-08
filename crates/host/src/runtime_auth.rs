@@ -9,6 +9,8 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use ukk_domain::new_id;
@@ -270,7 +272,7 @@ pub struct AuditEntry {
 
 pub enum AuditSink {
     #[cfg(test)]
-    Memory(Mutex<Vec<AuditEntry>>),
+    Memory(Arc<Mutex<Vec<AuditEntry>>>),
     File {
         path: PathBuf,
         write: Mutex<()>,
@@ -284,8 +286,27 @@ pub struct AuditLog {
 impl AuditLog {
     #[cfg(test)]
     pub fn memory() -> Self {
+        Self::memory_shared().0
+    }
+
+    /// Test-only log whose entries can be inspected from the caller even
+    /// after the log is moved into a dispatcher.
+    #[cfg(test)]
+    pub fn memory_shared() -> (Self, Arc<Mutex<Vec<AuditEntry>>>) {
+        let entries = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                sink: AuditSink::Memory(Arc::clone(&entries)),
+            },
+            entries,
+        )
+    }
+
+    /// Reuse an existing test sink. Never available outside `cfg(test)`.
+    #[cfg(test)]
+    pub fn from_shared(entries: Arc<Mutex<Vec<AuditEntry>>>) -> Self {
         Self {
-            sink: AuditSink::Memory(Mutex::new(Vec::new())),
+            sink: AuditSink::Memory(entries),
         }
     }
 

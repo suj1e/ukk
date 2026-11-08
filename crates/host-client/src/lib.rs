@@ -118,6 +118,15 @@ fn is_bidi_format(character: char) -> bool {
     matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
+fn validate_runtime_request_id(request_id: &str) -> Result<(), HostError> {
+    if request_id.trim().is_empty() || request_id.len() > 128 {
+        return Err(HostError::Protocol(
+            "request_id must be 1-128 characters".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Read a same-user capability file at call time. The token is never logged,
 /// stored in a snapshot or included in an error. `label` names the capability
 /// in diagnostics only.
@@ -882,12 +891,28 @@ impl HostClient {
     /// `terminal_address`.
     ///
     /// The separate agent-control token is read **at call time**, never the
-    /// workspace token. Every call carries a fresh `request_id`, an explicit
-    /// `intent: "user"` and the exact binding. There is no automatic retry:
-    /// a failure is returned to the caller, and a Host-reported `replayed`
-    /// outcome is surfaced instead of being hidden.
+    /// workspace token. This convenience wrapper mints a fresh `request_id`
+    /// for a new draft. Retrying the *same unchanged draft* must use
+    /// [`Self::runtime_send_with_request_id`] so the Host can dedupe a reply
+    /// lost to a timeout instead of executing the line twice.
     pub fn runtime_send(
         &self,
+        core_id: &str,
+        terminal_address: &str,
+        line: &str,
+    ) -> Result<RuntimeSendOutcome, HostError> {
+        self.runtime_send_with_request_id(&ukk_domain::new_id(), core_id, terminal_address, line)
+    }
+
+    /// One explicit line with a caller-owned idempotency key.
+    ///
+    /// Reuse `request_id` only for the same unchanged draft and binding; a new
+    /// line, terminal or core needs a new id. A Host-reported `replayed`
+    /// outcome means the original request already executed and this attempt
+    /// did not send again.
+    pub fn runtime_send_with_request_id(
+        &self,
+        request_id: &str,
         core_id: &str,
         terminal_address: &str,
         line: &str,
@@ -896,6 +921,7 @@ impl HostClient {
         // connection, so a malformed line cannot look like a denial.
         validate_runtime_binding(core_id, terminal_address)?;
         validate_runtime_line(line)?;
+        validate_runtime_request_id(request_id)?;
         let token = self.agent_control_token()?;
         let value = self.request_with(
             "runtime.send",
@@ -903,7 +929,7 @@ impl HostClient {
                 "core_id": core_id,
                 "terminal": terminal_address,
                 "text": line,
-                "request_id": ukk_domain::new_id(),
+                "request_id": request_id,
                 "intent": "user",
                 "control": token
             }),
@@ -1511,6 +1537,14 @@ mod tests {
             assert!(validate_runtime_binding(invalid_core, "t7").is_err());
         }
         assert!(validate_runtime_binding("core-1", "  ").is_err());
+    }
+
+    #[test]
+    fn runtime_send_request_id_validation_is_bounded() {
+        assert!(validate_runtime_request_id("stable-draft-id").is_ok());
+        assert!(validate_runtime_request_id("  ").is_err());
+        assert!(validate_runtime_request_id(&"r".repeat(129)).is_err());
+        assert!(validate_runtime_request_id(&"r".repeat(128)).is_ok());
     }
 
     #[test]

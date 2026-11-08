@@ -359,6 +359,34 @@ mod tests {
     }
 
     #[test]
+    fn runtime_send_preflight_denial_is_audited() {
+        let broker = Broker::new();
+        let auth = LocalAuth::test();
+        let request = json!({
+            "jsonrpc":"2.0","id":63,"method":"runtime.send",
+            "params":{
+                "core_id":"core","terminal":"t1","text":"echo hi",
+                "request_id":"audit-denial-1","intent":"automation"
+            }
+        });
+        let (response, entries) =
+            runtime_api::with_test_audit(|| handle_request(&request, &broker, &auth));
+        assert!(response.get("result").is_none(), "{response}");
+        assert!(
+            response["error"]["code"].as_i64().unwrap() < 0,
+            "{response}"
+        );
+        assert!(
+            entries.iter().any(|entry| {
+                entry.request_id == "audit-denial-1"
+                    && entry.action == "runtime.send"
+                    && entry.outcome.starts_with("denied:")
+            }),
+            "preflight denial was not audited: {entries:?}"
+        );
+    }
+
+    #[test]
     fn runtime_status_is_not_a_workspace_mutation() {
         let broker = Broker::new();
         let auth = LocalAuth::test();
