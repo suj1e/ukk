@@ -12,3 +12,12 @@ __pycache__/
 .vscode/
 
 .hc/
+dist/
+.mygo/
+build/
+*.ipa
+
+# Local build outputs
+apps/desktop/ukk
+apps/desktop/ukk-bridge
+apps/desktop/ukk-relay

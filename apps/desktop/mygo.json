@@ -1,0 +1,17 @@
+{
+  "name": "ukk",
+  "slug": "ukk",
+  "identifier": "dev.ukk.desktop",
+  "version": "0.1.0",
+  "main": "./cmd/ukk",
+  "icon": "../../assets/icon/ukk-macos-1024.png",
+  "out": "../../dist/desktop",
+  "license": "MIT",
+  "macos": {
+    "minimumSystemVersion": "13.0",
+    "signingIdentity": "-"
+  },
+  "linux": {
+    "webview": false
+  }
+}

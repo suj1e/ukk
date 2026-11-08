@@ -2,70 +2,45 @@ set shell := ["bash", "-uc"]
 
 default: check
 
-# Fetch both workspaces without building.
-fetch:
-    cargo fetch
-    cargo fetch --manifest-path apps/desktop/Cargo.toml
+# Repository layout and Go module metadata.
+layout:
+    python3 scripts/check_layout.py
 
-fmt:
-    cargo fmt --all
-    cargo fmt --manifest-path apps/desktop/Cargo.toml --all
-
-fmt-check:
-    cargo fmt --all -- --check
-    cargo fmt --manifest-path apps/desktop/Cargo.toml --all -- --check
-
-test:
-    cargo test --workspace
-
-clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
-
+# Required documentation, relative links and AGENTS.md length.
 docs:
     python3 scripts/check_docs.py
+
+# mygo.json contract and iOS MARKETING_VERSION agreement.
+versions:
     python3 scripts/check_versions.py
 
-# Prove archive layout, Info.plist, checksum coverage and determinism with
-# fake binaries; runs on macOS, Linux and Windows without extra dependencies.
-package-test:
-    python3 scripts/test_package_release.py
+fmt-check:
+    test -z "$(cd apps/desktop && gofmt -l .)"
 
-desktop-check:
-    cargo fmt --manifest-path apps/desktop/Cargo.toml --all -- --check
-    # Local check uses the runtime-shader escape hatch when the Metal Toolchain
-    # is absent. CI's desktop workflow builds the default features.
-    cargo check --manifest-path apps/desktop/Cargo.toml --features gpui_platform/runtime_shaders
+build:
+    cd apps/desktop && GOTOOLCHAIN=go1.27.3 go build ./...
 
-# CI shader escape hatch only; never publish binaries built with this feature.
-desktop-test:
-    cargo test --manifest-path apps/desktop/Cargo.toml --features gpui_platform/runtime_shaders
+test:
+    cd apps/desktop && GOTOOLCHAIN=go1.27.3 go test ./...
 
-check: docs package-test fmt-check test clippy desktop-check
+race:
+    cd apps/desktop && GOTOOLCHAIN=go1.27.3 go test -race ./internal/hc ./internal/agents ./internal/remote ./internal/relay ./internal/extensions ./internal/workspace ./internal/bridge
 
-host:
-    cargo run -p ukk-host -- serve
+# Launch the native desktop against this machine's herdr-core.
+app:
+    cd apps/desktop && GOTOOLCHAIN=go1.27.3 go run ./cmd/ukk
 
-desktop:
-    cargo run --manifest-path apps/desktop/Cargo.toml --bin ukk-desktop
+# Run the background bridge only (agents, pairing, Remote Screen).
+bridge:
+    cd apps/desktop && GOTOOLCHAIN=go1.27.3 go run ./cmd/ukk-bridge serve
 
-# Build one unsigned archive for the current OS/arch. Override with
-# UKK_BUILD_VERSION, UKK_BUILD_COMMIT, UKK_PACKAGE_ARCH or UKK_PACKAGE_OS.
+# Unsigned package for the current OS (MyGo downloads its native terminal
+# library and, on Windows, NSIS unless installed).
 package:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    version="${UKK_BUILD_VERSION:-0.1.0-dev.local}"
-    commit="${UKK_BUILD_COMMIT:-$(git rev-parse HEAD)}"
-    arch="${UKK_PACKAGE_ARCH:-$(uname -m)}"
-    os="${UKK_PACKAGE_OS:-}"
-    if [ -z "$os" ]; then
-      case "$(uname -s)" in
-        Darwin) os=macos ;;
-        Linux) os=linux ;;
-        *) echo "unsupported OS; set UKK_PACKAGE_OS" >&2; exit 2 ;;
-      esac
-    fi
-    UKK_BUILD_VERSION="$version" UKK_BUILD_COMMIT="$commit" \
-      python3 scripts/package_release.py --os "$os" --arch "$arch" \
-      --version "$version" --commit "$commit" --out-dir dist
+    cd apps/desktop && GOTOOLCHAIN=go1.27.3 go tool mygo build
 
-release: package
+# iOS project regeneration and simulator tests (macOS only).
+ios-project:
+    cd apps/ios && xcodegen generate
+
+check: layout docs versions fmt-check build test

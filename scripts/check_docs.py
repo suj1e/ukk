@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Check repository documentation structure and relative links.
+"""Check documentation structure, required pages and relative links.
 
-No third-party dependencies. Fails on missing required pages, AGENTS.md over
-60 lines, or a broken relative Markdown link in a tracked .md file.
+Paths come from ``git ls-files --cached --others --exclude-standard`` so new
+Markdown is checked locally before it is committed and deleted paths are
+ignored. Required pages cover the post-reset layout plus the desktop config.
+Standard library only.
 """
 
 from __future__ import annotations
@@ -14,45 +16,62 @@ import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
 REQUIRED = [
     "AGENTS.md",
     "LESSONS.md",
-    "REVIEW.md",
+    "LICENSE",
     "README.md",
     "CONTRIBUTING.md",
     "DEVELOPMENT.md",
+    "REVIEW.md",
     "justfile",
-    "LICENSE",
-    ".github/workflows/ci.yml",
-    ".github/workflows/release.yml",
     ".github/PULL_REQUEST_TEMPLATE.md",
     ".github/ISSUE_TEMPLATE/bug.yml",
     ".github/ISSUE_TEMPLATE/feature.yml",
-    "docs/goals/v1-complete.md",
-    "docs/requirements.md",
-    "docs/tech-design.md",
+    ".github/workflows/ci.yml",
+    ".github/workflows/ios.yml",
+    "apps/desktop/README.md",
+    "apps/desktop/go.mod",
+    "apps/desktop/go.sum",
+    "apps/desktop/mygo.json",
     "docs/coding-standard.md",
-    "docs/roadmap.md",
-    "docs/release.md",
-    "docs/status.md",
     "docs/decisions/0001-platform-and-runtime.md",
     "docs/decisions/0002-remote-control-is-plugin.md",
-    "docs/subsystems/domain-model.md",
-    "docs/subsystems/security.md",
-    "docs/runbooks/host-lifecycle.md",
-    "docs/runbooks/release.md",
+    "docs/goals/mygo-implementation.md",
+    "docs/goals/v1-complete.md",
+    "docs/references.md",
+    "docs/release.md",
+    "docs/requirements.md",
+    "docs/roadmap.md",
     "docs/runbooks/incident.md",
-    "docs/spikes/runtime-spike.md",
+    "docs/runbooks/release.md",
+    "docs/status.md",
+    "docs/subsystems/domain-model.md",
+    "docs/subsystems/plugins.md",
+    "docs/subsystems/security.md",
+    "docs/tech-design.md",
 ]
+
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+['\"][^'\"]*['\"])?\)")
 FENCE_RE = re.compile(r"```.*?```", re.S)
+SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 
 
 def tracked_markdown() -> list[Path]:
     output = subprocess.check_output(
-        ["git", "ls-files", "*.md"], cwd=ROOT, text=True
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "*.md"],
+        cwd=ROOT,
     )
-    return [ROOT / line for line in output.splitlines() if line]
+    pages: list[Path] = []
+    for raw in output.split(b"\0"):
+        if not raw:
+            continue
+        relative = raw.decode("utf-8", "surrogateescape")
+        page = ROOT / relative
+        if page.is_file():
+            pages.append(page)
+    return pages
 
 
 def main() -> int:
@@ -61,15 +80,19 @@ def main() -> int:
         if not (ROOT / relative).exists():
             failures.append(f"missing required path: {relative}")
 
-    agents_lines = len((ROOT / "AGENTS.md").read_text(encoding="utf-8").splitlines())
-    if agents_lines > 60:
-        failures.append(f"AGENTS.md is {agents_lines} lines; maximum is 60")
+    agents = ROOT / "AGENTS.md"
+    agents_lines = 0
+    if agents.is_file():
+        agents_lines = len(agents.read_text(encoding="utf-8").splitlines())
+        if agents_lines > 60:
+            failures.append(f"AGENTS.md is {agents_lines} lines; maximum is 60")
 
     checked = 0
-    for page in tracked_markdown():
+    pages = tracked_markdown()
+    for page in pages:
         text = FENCE_RE.sub("", page.read_text(encoding="utf-8"))
         for raw in LINK_RE.findall(text):
-            if raw.startswith(("#", "/", "http://", "https://", "mailto:")):
+            if raw.startswith("#") or raw.startswith("/") or SCHEME_RE.match(raw):
                 continue
             target = urllib.parse.unquote(raw.split("#", 1)[0].split("?", 1)[0])
             if not target:
@@ -91,7 +114,11 @@ def main() -> int:
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
         return 1
-    print(f"docs check OK: {len(REQUIRED)} required paths, {checked} relative links, AGENTS.md {agents_lines} lines")
+    print(
+        f"docs check OK: {len(REQUIRED)} required paths, "
+        f"{len(pages)} markdown pages, {checked} relative links, "
+        f"AGENTS.md {agents_lines} lines"
+    )
     return 0
 
 

@@ -2,75 +2,105 @@ name: CI
 
 on:
   push:
-    paths:
-      - 'Cargo.toml'
-      - 'crates/**'
-      - 'apps/desktop/**'
-      - 'apps/ios/**'
-      - 'plugins/**'
-      - 'scripts/**'
+    paths-ignore:
+      - '**/*.md'
       - 'docs/**'
-      - 'AGENTS.md'
-      - 'README.md'
-      - 'DEVELOPMENT.md'
-      - 'REVIEW.md'
-      - 'CONTRIBUTING.md'
-      - 'LESSONS.md'
-      - 'justfile'
-      - '.github/**'
+      - 'LICENSE'
   pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'crates/**'
-      - 'apps/desktop/**'
-      - 'apps/ios/**'
-      - 'plugins/**'
-      - 'scripts/**'
+    paths-ignore:
+      - '**/*.md'
       - 'docs/**'
-      - 'AGENTS.md'
-      - 'README.md'
-      - 'DEVELOPMENT.md'
-      - 'REVIEW.md'
-      - 'CONTRIBUTING.md'
-      - 'LESSONS.md'
-      - 'justfile'
-      - '.github/**'
+      - 'LICENSE'
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   docs:
+    name: Docs and layout
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Check repository documentation
-        run: |
-          python3 scripts/check_docs.py
-          python3 scripts/check_versions.py
-      - name: Run packaging self-test
-        run: python3 scripts/test_package_release.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 scripts/check_layout.py
+      - run: python3 scripts/check_docs.py
+      - run: python3 scripts/check_versions.py
 
-  test:
+  go:
+    name: Go ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
+        include:
+          - os: macos-latest
+          - os: ubuntu-latest
+          - os: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
         with:
-          components: clippy, rustfmt
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
-      - name: Run unit and mock protocol tests
-        run: cargo test --workspace
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+          go-version: '1.27.3'
+          cache-dependency-path: apps/desktop/go.sum
+      - name: Format check
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+      - name: Vet
+        working-directory: apps/desktop
+        run: go vet ./...
+      - name: Test
+        working-directory: apps/desktop
+        run: go test ./...
+      - name: Race tests (Unix)
+        if: runner.os != 'Windows'
+        working-directory: apps/desktop
+        run: go test -race ./internal/hc ./internal/agents ./internal/remote ./internal/relay ./internal/extensions ./internal/workspace ./internal/bridge ./internal/remotescreen
+      - name: Build macOS input helper
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          xcrun swiftc -O -o "$RUNNER_TEMP/ukk-input" apps/desktop/tools/ukk-input/main.swift
+          printf '' | "$RUNNER_TEMP/ukk-input" | grep -q '"type":"ready"'
+      - name: Build all entrypoints
+        working-directory: apps/desktop
+        run: go build ./...
+
+  desktop-launch:
+    name: Desktop launch smoke (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: apps/desktop/go.sum
+      - name: Build the native app
+        working-directory: apps/desktop
+        run: go build -o "$RUNNER_TEMP/ukk-desktop" ./cmd/ukk
+      - name: Launch and verify a window exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          export UKK_DATA_DIR="$RUNNER_TEMP/ukk-smoke"
+          "$RUNNER_TEMP/ukk-desktop" &
+          pid=$!
+          sleep 8
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "desktop exited during startup" >&2
+            exit 1
+          fi
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          test -f "$UKK_DATA_DIR/workspace/workspace.json"

@@ -1,3 +1,0 @@
-{"type":"future_message","uuid":"future_1","session_id":"sess_fixture","payload":{}}
-{"type":"system","subtype":"future_system","uuid":"future_2","session_id":"sess_fixture"}
-{"type":"control_request","request_id":"req_1","session_id":"sess_fixture","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -rf /tmp/x"}}}
