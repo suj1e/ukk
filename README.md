@@ -160,6 +160,7 @@ Host 已增加基于 SQLite v2 变更版本的 `workspace.state` / `workspace.wa
 | [Windows IPC](docs/WINDOWS_IPC.md) | Windows Named Pipe、用户 ACL、安全约束、验收清单 |
 | [Platform Support](docs/PLATFORM_SUPPORT.md) | macOS / Windows / Linux 一等桌面支持、OS 特定适配及测试清单 |
 | [Desktop Spike 02](docs/DESKTOP_SPIKE.md) | GPUI 原生窗口、真实终端状态、macOS 构建验收项 |
+| [Desktop Terminal](docs/GPUI_TERMINAL.md) | 只读终端观察、直接 hc-client 边界、安全后果与验收 |
 | [Live Runtime Sync](docs/LIVE_EVENTS.md) | Host 实时订阅、事件缺口恢复、Desktop 自动刷新和测试 |
 | [Upstream References](docs/REFERENCES.md) | 官方依赖、许可和待确认事项 |
 | [ADR-0001](docs/adr/0001-platform-and-runtime.md) | GPUI + SwiftUI + herdr-core 的技术决策 |

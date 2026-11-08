@@ -256,6 +256,35 @@ Closing a Pane/Tab/Session/window, detaching a framed view or calling
 `runtime.detach` is local and performs **zero** runtime calls. There is no
 code path from view close to `terminal.kill` or `terminal.rm`.
 
+### Desktop read-only terminal observation
+
+The Desktop's Terminal pane and terminal detail card open
+`terminal.attach {observe:true}` directly through `ukk-hc-client` from a
+background worker. The line RPC cannot carry a backpressured byte stream, and
+the Host remains the owner of control and Agent lifetime. This direct read
+boundary has the following consequences:
+
+- It is enabled only by an explicit pane/detail action, never on application
+  load or Session selection.
+- The observer request fixes `observe:true`, sends no input, does not resize
+  after the initial `cols`/`rows`, and has no call path to interrupt, stop,
+  kill, archive or input. The client refuses those calls for observers before
+  writing a frame.
+- Dropping the attachment/connection only closes this view's stream and reaps
+  the local `hc connect` helper. Terminal and Agent lifetime remain owned by
+  herdr-core. See [GPUI_TERMINAL.md](GPUI_TERMINAL.md).
+- The Desktop is another same-user client of the herdr-core socket. It does
+  not sandbox herdr-core and does not add authentication or per-client
+  permissions; a process that can already reach the socket has account shell
+  access.
+- Terminal output is untrusted display text. CSI/OSC and other control strings
+  are stripped, invalid UTF-8 is replaced lossily, and raw bytes are never
+  parsed into Agent messages, tool calls or approvals.
+- The terminal byte ring is capped at 256 KiB / 4096 lines per attachment and
+  relies on framed CREDIT backpressure. Diagnostics never include terminal
+  contents.
+
+
 
 ## Plugin broker and `plugin.control`
 

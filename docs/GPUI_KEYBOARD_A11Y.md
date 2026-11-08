@@ -111,6 +111,15 @@ A visible status strip explains that the change was not applied and offers:
 Non-conflict errors and local focus-file failures use the same strip without a
 retry button. The retry intent is discarded if the reload itself fails.
 
+## Read-only terminal surface
+
+The Terminal pane and the Agent detail terminal card attach only after an
+explicit pointer/button action and expose no keyboard input path. Keyboard
+focus still reaches the pane shell (split, tab, close, resize and copy
+actions), but no shortcut is forwarded to the PTY. A local detach closes this
+view's stream only; it never signals the terminal. See
+[GPUI_TERMINAL.md](GPUI_TERMINAL.md).
+
 ## Accessibility
 
 - Tabs expose `Tab`/`TabList` roles, `aria-selected`, titles and shortcut hints.

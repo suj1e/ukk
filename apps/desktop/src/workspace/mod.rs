@@ -27,6 +27,8 @@ mod sidebar;
 mod splits;
 mod state;
 mod tabs;
+mod terminal;
+mod terminal_buffer;
 mod toolbar;
 mod unsupported_surface;
 
@@ -155,6 +157,8 @@ pub(crate) struct Workspace {
     plugin_refreshing: bool,
     plugin_busy: bool,
     plugin_notice: Option<plugins::PluginNotice>,
+    /// Explicit read-only terminal observers, keyed by pane or detail view.
+    terminal_feeds: terminal::TerminalFeeds,
     /// Selected `session.tab` view id. Selection is local and never invokes.
     plugin_active_tab: Option<String>,
 }
@@ -204,11 +208,13 @@ impl Workspace {
             plugin_refreshing: false,
             plugin_busy: false,
             plugin_notice: None,
+            terminal_feeds: terminal::TerminalFeeds::default(),
             plugin_active_tab: None,
         };
         view.watch_updates(cx);
         view.watch_workspace(cx);
         view.watch_plugins(cx);
+        view.watch_terminals(cx);
         view.refresh(cx);
         view.load_local_focus(cx);
         view
