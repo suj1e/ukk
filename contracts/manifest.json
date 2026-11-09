@@ -55,6 +55,11 @@
       "file": "remote/v1/fixtures/s1.json",
       "schema": "remote/v1/handshake.schema.json",
       "go": ""
+    },
+    {
+      "file": "world/v1/fixtures/document.json",
+      "schema": "world/v1/document.schema.json",
+      "go": ""
     }
   ]
 }

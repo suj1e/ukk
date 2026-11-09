@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ukk world document v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spaces"],
+  "properties": {
+    "spaces": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/space" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "space": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "folder", "tabs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "maxLength": 256 },
+        "folder": { "type": "string", "maxLength": 4096 },
+        "tabs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/tab" }
+        }
+      }
+    },
+    "tab": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "root"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "maxLength": 256 },
+        "root": { "$ref": "node.schema.json" }
+      }
+    }
+  }
+}

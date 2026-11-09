@@ -9,6 +9,7 @@ contracts/
   bridge/v1/    local and remote command envelope (Desktop/iOS ↔ ukk-bridge)
   core/v1/      herdr-core generation 1 (ukk ↔ external herdr-core)
   remote/v1/    device pairing and E2E handshake (iOS ↔ ukk-bridge)
+  world/v1/     app world document in herdr-core (spaces, tabs, panes)
   manifest.json fixture → schema → Go type map
 ```
 

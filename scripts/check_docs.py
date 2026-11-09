@@ -40,6 +40,7 @@ REQUIRED = [
     "contracts/bridge/v1/contract.md",
     "contracts/core/v1/contract.md",
     "contracts/remote/v1/contract.md",
+    "contracts/world/v1/contract.md",
     "docs/coding-standard.md",
     "docs/decisions/0001-platform-and-runtime.md",
     "docs/decisions/0002-remote-control-is-plugin.md",

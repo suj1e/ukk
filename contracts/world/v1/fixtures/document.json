@@ -1,0 +1,75 @@
+{
+  "spaces": [
+    {
+      "id": "desk/web",
+      "name": "Web",
+      "folder": "/home/dev/projects/site",
+      "tabs": [
+        {
+          "id": "desk/web/tab-dev",
+          "name": "dev",
+          "root": {
+            "id": "desk/web/tab-dev/root",
+            "type": "row",
+            "gap": 4,
+            "padding": [8, 12],
+            "children": [
+              {
+                "id": "desk/web/tab-dev/server",
+                "type": "block",
+                "title": "server",
+                "size": { "weight": 2 },
+                "content": { "terminal": "desk/term-1" }
+              },
+              {
+                "id": "desk/web/tab-dev/side",
+                "type": "column",
+                "size": { "weight": 1 },
+                "children": [
+                  {
+                    "id": "desk/web/tab-dev/shell",
+                    "type": "block",
+                    "title": "shell",
+                    "min": 120,
+                    "content": { "terminal": "desk/term-2" }
+                  },
+                  {
+                    "id": "desk/web/tab-dev/files",
+                    "type": "block",
+                    "size": { "px": 260 },
+                    "content": { "mod": "files", "props": { "root": "src" } }
+                  }
+                ]
+              }
+            ],
+            "floating": [
+              {
+                "id": "desk/web/tab-dev/todo",
+                "content": { "mod": "todo", "props": { "list": "today" } },
+                "edge": "right",
+                "align": "start",
+                "peek": 220
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "desk/agents",
+      "name": "Agents",
+      "folder": "/home/dev/projects/site",
+      "tabs": [
+        {
+          "id": "desk/agents/tab-omp",
+          "name": "omp",
+          "root": {
+            "id": "desk/agents/tab-omp/root",
+            "type": "block",
+            "content": { "agent": "desk/omp-1" }
+          }
+        }
+      ]
+    }
+  ]
+}

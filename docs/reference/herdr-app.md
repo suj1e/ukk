@@ -113,6 +113,15 @@ Dark themes derive from the terminal palette:
   (`window.rs:710-722`).
 - Closing the window never stops a core terminal; panes stay in the core.
 
+## One deliberate difference: closing a view
+
+Herdr ends a terminal when its pane, tab or space closes (`window.rs`
+`pane.close`/`tab.close`/`space.close` call `kill`). ukk's non-negotiable is
+the opposite: closing a Pane/Tab/Session/window only detaches, and only an
+explicit stop with agent control may end a process (AGENTS.md). Do not copy
+Herdr's kill-on-close; if that product decision ever changes it needs its own
+decision record and user approval.
+
 ## What ukk must change to match
 
 | Herdr | ukk today | Change |
