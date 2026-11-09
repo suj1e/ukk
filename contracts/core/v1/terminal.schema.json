@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "herdr-core terminal record v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["address", "labels", "argv", "cwd", "state", "created_ms", "screen", "cols", "rows"],
+  "properties": {
+    "address": { "type": "string", "minLength": 1 },
+    "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+    "argv": { "type": "array", "items": { "type": "string" } },
+    "cwd": { "type": "string" },
+    "state": { "type": "string", "minLength": 1 },
+    "created_ms": { "type": "integer", "minimum": 0 },
+    "screen": { "type": "string" },
+    "cols": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "rows": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "name": { "type": "string" },
+    "title": { "type": "string" },
+    "keep": { "type": "boolean" },
+    "notify": { "type": "boolean" },
+    "pid": { "type": "integer", "minimum": 0 },
+    "exit_code": { "type": "integer" },
+    "signal": { "type": "integer" },
+    "finished_ms": { "type": "integer", "minimum": 0 },
+    "reason": { "type": "string" },
+    "identity": { "type": "string" },
+    "parent": { "type": "string" },
+    "turn": { "type": "integer", "minimum": 0 },
+    "foreground": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["pid", "name", "argv", "cwd"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "name": { "type": "string" },
+        "argv": { "type": "array", "items": { "type": "string" } },
+        "cwd": { "type": "string" }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["state"],
+      "properties": {
+        "state": { "type": "string" },
+        "app": { "type": "string" },
+        "title": { "type": "string" },
+        "msg": { "type": "string" }
+      }
+    }
+  }
+}

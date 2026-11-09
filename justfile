@@ -23,6 +23,10 @@ build:
 test:
     cd apps/desktop && GOTOOLCHAIN=go1.27.3 go test ./...
 
+# Normative wire contracts: schema compile, fixture validation, Go round-trip.
+contracts:
+    cd apps/desktop && GOTOOLCHAIN=go1.27.3 go test ./internal/contracts
+
 race:
     cd apps/desktop && GOTOOLCHAIN=go1.27.3 go test -race ./internal/hc ./internal/agents ./internal/remote ./internal/relay ./internal/extensions ./internal/workspace ./internal/bridge
 

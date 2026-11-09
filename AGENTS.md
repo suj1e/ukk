@@ -8,22 +8,23 @@ the MyGo version recorded in `apps/desktop/go.mod`; the local module source and
 `go doc` are the authority when the website and the pinned release differ.
 
 0. [Goal](docs/goals/v1-complete.md) and [implementation plan](docs/goals/mygo-implementation.md) — one delivery track, issue #55.
-1. [Requirements](docs/requirements.md) — product scope and decisions.
-2. [Technical design](docs/tech-design.md) — architecture and ownership.
-3. [Coding standard](docs/coding-standard.md) — quality gate and commands.
-4. [Status](docs/status.md) and [roadmap](docs/roadmap.md) — what is verified and what is claimable.
-5. [Subsystem contracts](docs/subsystems/) — workspace identity, security and plugin boundaries.
-6. [Runbooks](docs/runbooks/) — release and incident handling.
-7. [Review](REVIEW.md), [contributing](CONTRIBUTING.md), [lessons](LESSONS.md) — process and evidence.
+1. [Wire contracts](contracts/README.md) — versioned agent/bridge/core/remote schemas and fixtures. Change the contract here first.
+2. [Requirements](docs/requirements.md) — product scope and decisions.
+3. [Technical design](docs/tech-design.md) — architecture and ownership; [Herdr reference](docs/reference/herdr-app.md) records the official app's model and metrics.
+4. [Coding standard](docs/coding-standard.md) — quality gate and commands.
+5. [Status](docs/status.md) and [roadmap](docs/roadmap.md) — what is verified and what is claimable.
+6. [Subsystem contracts](docs/subsystems/) — workspace identity, security and plugin boundaries.
+7. [Runbooks](docs/runbooks/) — release and incident handling.
+8. [Review](REVIEW.md), [contributing](CONTRIBUTING.md), [lessons](LESSONS.md) — process and evidence.
 
 ## Non-negotiable
 
 - Build Go/MyGo native Desktop, native SwiftUI iOS, and use external herdr-core; never fork herdr-app.
 - All product code lives in apps/desktop or apps/ios. The single Go module and MyGo config live in apps/desktop.
-- Closing a Pane/Tab/Session/window must never signal an Agent or terminal.
-- Space, Session, AgentRun, TerminalRef and Pane are distinct entities with distinct lifetimes.
+- Closing a Pane/Tab/Space view/window must never signal an Agent or terminal; it detaches only ([ADR-0003](docs/decisions/0003-close-detaches-not-kills.md)).
+- Space, Tab, Pane and TerminalRef are distinct entities with distinct lifetimes. Spaces/tabs/panes are the core `herdr-app` document (`doc.get`/`doc.set`, version CAS); ukk keeps only local view state.
 - Never infer approvals, turns or tool execution from terminal text; use typed events only.
-- Remote Screen is an opt-in floating Session plugin. Pairing, Agent control and screen control are separate grants.
+- Remote Screen is an opt-in floating plugin. Pairing, Agent control and screen control are separate grants.
 - Android, Web and TUI are deferred. iOS stays native SwiftUI.
 - Bridge and relay share the Desktop Go module but must not import the GUI. Relay carries control/signalling, not video.
 - This is a development reset: no user-data migration or old Rust Host compatibility layer.

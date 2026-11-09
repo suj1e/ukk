@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ukk pairing and resume handshake message v1",
+  "oneOf": [
+    { "$ref": "#/$defs/c1" },
+    { "$ref": "#/$defs/s1" },
+    { "$ref": "#/$defs/c2" },
+    { "$ref": "#/$defs/r1" },
+    { "$ref": "#/$defs/r2" },
+    { "$ref": "#/$defs/r3" }
+  ],
+  "$defs": {
+    "key": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "nonce": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" },
+    "proof": { "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
+    "c1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "invite_id", "ed", "x", "eph", "nc", "sig"],
+      "properties": {
+        "t": { "const": "c1" },
+        "invite_id": { "type": "string", "minLength": 1 },
+        "ed": { "$ref": "#/$defs/key" },
+        "x": { "$ref": "#/$defs/key" },
+        "eph": { "$ref": "#/$defs/key" },
+        "nc": { "$ref": "#/$defs/nonce" },
+        "sig": { "$ref": "#/$defs/signature" }
+      }
+    },
+    "s1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "host_ed", "host_x", "eph", "ns", "sig", "proof"],
+      "properties": {
+        "t": { "const": "s1" },
+        "host_ed": { "$ref": "#/$defs/key" },
+        "host_x": { "$ref": "#/$defs/key" },
+        "eph": { "$ref": "#/$defs/key" },
+        "ns": { "$ref": "#/$defs/nonce" },
+        "sig": { "$ref": "#/$defs/signature" },
+        "proof": { "$ref": "#/$defs/proof" }
+      }
+    },
+    "c2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "proof"],
+      "properties": {
+        "t": { "const": "c2" },
+        "proof": { "$ref": "#/$defs/proof" }
+      }
+    },
+    "r1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "host_id", "device_ed", "device_x", "eph", "nc", "sig"],
+      "properties": {
+        "t": { "const": "r1" },
+        "host_id": { "type": "string", "minLength": 1 },
+        "device_ed": { "$ref": "#/$defs/key" },
+        "device_x": { "$ref": "#/$defs/key" },
+        "eph": { "$ref": "#/$defs/key" },
+        "nc": { "$ref": "#/$defs/nonce" },
+        "sig": { "$ref": "#/$defs/signature" }
+      }
+    },
+    "r2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "host_ed", "host_x", "eph", "ns", "sig", "proof"],
+      "properties": {
+        "t": { "const": "r2" },
+        "host_ed": { "$ref": "#/$defs/key" },
+        "host_x": { "$ref": "#/$defs/key" },
+        "eph": { "$ref": "#/$defs/key" },
+        "ns": { "$ref": "#/$defs/nonce" },
+        "sig": { "$ref": "#/$defs/signature" },
+        "proof": { "$ref": "#/$defs/proof" }
+      }
+    },
+    "r3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "proof"],
+      "properties": {
+        "t": { "const": "r3" },
+        "proof": { "$ref": "#/$defs/proof" }
+      }
+    }
+  }
+}

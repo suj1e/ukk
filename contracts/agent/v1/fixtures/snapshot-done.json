@@ -1,0 +1,43 @@
+{
+  "id": "session-demo",
+  "provider": "omp",
+  "providerSessionId": "01a1beb9-9423-774a-aa27-ee47285d2f9a",
+  "state": "idle",
+  "turns": [
+    {
+      "id": "turn-1",
+      "state": "done",
+      "startedMs": 1762550000000,
+      "endedMs": 1762550009000
+    }
+  ],
+  "messages": [
+    {
+      "id": "user-1",
+      "role": "user",
+      "text": "Reply with the single word OK.",
+      "final": true,
+      "createdMs": 1762550000000
+    },
+    {
+      "id": "msg-2",
+      "role": "assistant",
+      "text": "OK",
+      "final": true,
+      "createdMs": 1762550009000
+    }
+  ],
+  "tools": [],
+  "pendingApprovals": [],
+  "usage": {
+    "reported": true,
+    "inputTokens": 14000,
+    "outputTokens": 722,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 0,
+    "totalTokens": 14722,
+    "costUsd": 0
+  },
+  "provenance": "omp-rpc",
+  "updatedMs": 1762550009000
+}

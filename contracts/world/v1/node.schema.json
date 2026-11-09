@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ukk world node v1",
+  "$ref": "#/$defs/node",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "node": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "enum": ["row", "column", "stack", "block"] },
+        "size": { "$ref": "#/$defs/size" },
+        "min": { "type": "number", "minimum": 0 },
+        "max": { "type": "number", "minimum": 0 },
+        "hidden": { "type": "boolean" },
+        "title": { "type": "string", "maxLength": 256 },
+        "background": { "$ref": "#/$defs/background" },
+        "border": { "$ref": "#/$defs/line" },
+        "radius": { "type": "number", "minimum": 0 },
+        "shadow": { "enum": ["sm", "md", "lg"] },
+        "padding": { "$ref": "#/$defs/padding" },
+        "focus": { "$ref": "#/$defs/focusLook" },
+        "gap": { "type": "number", "minimum": 0 },
+        "divider": { "$ref": "#/$defs/line" },
+        "movable": { "type": "boolean" },
+        "closable": { "type": "boolean" },
+        "resizable": { "type": "boolean" },
+        "floating": { "type": "array", "items": { "$ref": "#/$defs/float" } },
+        "window_drag": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "row" } },
+            "required": ["type"]
+          },
+          "then": { "$ref": "#/$defs/container" }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "column" } },
+            "required": ["type"]
+          },
+          "then": { "$ref": "#/$defs/container" }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "stack" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["children"],
+            "properties": {
+              "children": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+              "active": { "$ref": "#/$defs/id" },
+              "header": { "$ref": "#/$defs/header" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "block" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["content"],
+            "properties": { "content": { "$ref": "#/$defs/content" } }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "container": {
+      "required": ["children"],
+      "properties": {
+        "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
+      }
+    },
+    "content": {
+      "oneOf": [
+        { "$ref": "#/$defs/terminalContent" },
+        { "$ref": "#/$defs/modContent" },
+        { "$ref": "#/$defs/contextContent" },
+        { "$ref": "#/$defs/agentContent" }
+      ]
+    },
+    "terminalContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal"],
+      "properties": {
+        "terminal": { "$ref": "#/$defs/id" }
+      }
+    },
+    "modContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mod"],
+      "properties": {
+        "mod": { "$ref": "#/$defs/id" },
+        "props": {}
+      }
+    },
+    "contextContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tab"],
+      "properties": {
+        "tab": { "$ref": "#/$defs/id" },
+        "pane": { "$ref": "#/$defs/paneFrame" }
+      }
+    },
+    "agentContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": { "$ref": "#/$defs/id" }
+      }
+    },
+    "size": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["px"],
+          "properties": {
+            "px": { "type": "number", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["weight"],
+          "properties": {
+            "weight": { "type": "number", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "padding": {
+      "oneOf": [
+        { "type": "number", "minimum": 0 },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "number", "minimum": 0 }
+        }
+      ]
+    },
+    "line": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "number", "minimum": 0, "default": 1 },
+        "color": { "type": "string", "minLength": 1, "default": "border" }
+      }
+    },
+    "focusLook": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "border": { "$ref": "#/$defs/line" },
+        "background": { "type": "string", "minLength": 1 }
+      }
+    },
+    "background": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["gradient"],
+          "properties": {
+            "gradient": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "angle": { "type": "number", "default": 180 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["image"],
+          "properties": {
+            "image": { "type": "string", "minLength": 1 },
+            "fit": { "enum": ["cover", "contain"], "default": "cover" }
+          }
+        }
+      ]
+    },
+    "headerContent": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mod"],
+          "properties": {
+            "mod": { "$ref": "#/$defs/id" },
+            "props": {}
+          }
+        }
+      ]
+    },
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content"],
+      "properties": {
+        "content": { "$ref": "#/$defs/headerContent" },
+        "reveal": { "enum": ["always", "hover"], "default": "always" },
+        "height": { "type": "number", "minimum": 0, "default": 30 },
+        "position": { "enum": ["top", "bottom"], "default": "top" }
+      }
+    },
+    "paneFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gap": { "type": "number", "minimum": 0 },
+        "radius": { "type": "number", "minimum": 0 },
+        "background": { "$ref": "#/$defs/background" },
+        "border": { "$ref": "#/$defs/line" },
+        "focus": { "$ref": "#/$defs/line" },
+        "header": { "$ref": "#/$defs/header" },
+        "lone": { "type": "boolean" }
+      }
+    },
+    "float": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "content"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "content": { "$ref": "#/$defs/content" },
+        "edge": { "enum": ["top", "right", "bottom", "left"], "default": "right" },
+        "align": { "enum": ["start", "center", "end"], "default": "center" },
+        "peek": { "type": "number", "minimum": 0 },
+        "hidden": { "type": "boolean" }
+      }
+    }
+  }
+}

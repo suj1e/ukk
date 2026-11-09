@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "herdr-core hello reply v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["generation", "version", "core", "framed", "methods", "features"],
+  "properties": {
+    "generation": { "const": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "core": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      }
+    },
+    "framed": { "const": true },
+    "methods": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "features": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "error": { "type": "object" }
+  }
+}

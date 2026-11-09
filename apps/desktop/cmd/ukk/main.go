@@ -6,13 +6,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/suj1e/ukk/apps/desktop/internal/bridge"
 	"github.com/suj1e/ukk/apps/desktop/internal/ui/app"
-	domain "github.com/suj1e/ukk/apps/desktop/internal/workspace"
 )
 
 func main() {
@@ -40,16 +38,11 @@ func main() {
 			}
 			dir = resolved
 		}
-		store, err := domain.Open(filepath.Join(dir, "workspace"))
-		if err != nil {
-			report("cannot open the workspace", err)
-			return
-		}
-		application = app.New(store, dir)
+		application = app.New(dir)
 		window := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "ukk",
-			Width:     1320,
-			Height:    860,
+			Width:     1180,
+			Height:    740,
 			MinWidth:  960,
 			MinHeight: 620,
 			StateKey:  "main",
@@ -58,9 +51,6 @@ func main() {
 		application.Attach(window)
 		window.OnClose(func(*mygo.CloseEvent) {
 			application.Shutdown()
-		})
-		window.OnClosed(func() {
-			_ = store.Close()
 		})
 		mygo.App.SetMenu(buildMenu(application))
 	})

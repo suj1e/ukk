@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ukk Agent event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "sessionId", "sequence"],
+  "properties": {
+    "kind": {
+      "enum": [
+        "snapshot",
+        "message",
+        "tool",
+        "approval",
+        "usage",
+        "error",
+        "diagnostic",
+        "closed"
+      ]
+    },
+    "sessionId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "snapshot": { "$ref": "snapshot.schema.json" },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "text", "final", "createdMs"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["user", "assistant", "system", "tool", "unknown"] },
+        "text": { "type": "string" },
+        "final": { "type": "boolean" },
+        "createdMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "status", "isError"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "turnId": { "type": "string" },
+        "name": { "type": "string", "minLength": 1 },
+        "input": {},
+        "output": {},
+        "status": { "enum": ["pending", "running", "completed", "failed", "unknown"] },
+        "startedMs": { "type": "integer", "minimum": 0 },
+        "endedMs": { "type": "integer", "minimum": 0 },
+        "isError": { "type": "boolean" }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "turnId": { "type": "string" },
+        "toolName": { "type": "string" },
+        "input": {},
+        "state": { "enum": ["pending", "approved", "denied", "cancelled", "expired"] },
+        "expiresMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reported"],
+      "properties": {
+        "reported": { "type": "boolean" },
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "cacheReadTokens": { "type": "integer", "minimum": 0 },
+        "cacheWriteTokens": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "contextTokens": { "type": "integer", "minimum": 0 },
+        "reasoningTokens": { "type": "integer", "minimum": 0 },
+        "costUsd": { "type": "number", "minimum": 0 }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_argument",
+            "session_not_found",
+            "session_exists",
+            "limit_exceeded",
+            "unsupported",
+            "not_running",
+            "busy",
+            "startup_failed",
+            "protocol",
+            "transport",
+            "timeout",
+            "child_exited",
+            "rejected",
+            "closed",
+            "approval_not_found",
+            "approval_settled",
+            "diagnostic",
+            "ui.unsupported",
+            "turn_failed"
+          ]
+        },
+        "message": { "type": "string", "maxLength": 2048 }
+      }
+    }
+  }
+}

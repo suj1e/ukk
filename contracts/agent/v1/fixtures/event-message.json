@@ -1,0 +1,12 @@
+{
+  "kind": "message",
+  "sessionId": "session-demo",
+  "sequence": 2,
+  "message": {
+    "id": "msg-2",
+    "role": "assistant",
+    "text": "OK",
+    "final": true,
+    "createdMs": 1762550009000
+  }
+}

@@ -264,6 +264,8 @@ type Usage struct {
 
 // Snapshot is the complete renderable state of one session.
 type Snapshot struct {
+	// ID is the product session identity the snapshot belongs to.
+	ID                string     `json:"id"`
 	Provider          string     `json:"provider"`
 	ProviderSessionID string     `json:"providerSessionId,omitempty"`
 	State             State      `json:"state"`

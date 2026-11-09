@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ukk pairing invite v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "host_id", "host_ed", "host_x", "invite_id", "secret", "expire_ms", "relay"],
+  "properties": {
+    "v": { "const": 1 },
+    "host_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "host_ed": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "host_x": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "invite_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "secret": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "expire_ms": { "type": "integer", "minimum": 1 },
+    "relay": { "type": "string", "pattern": "^wss://[^@]+$" }
+  }
+}

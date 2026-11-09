@@ -1,6 +1,8 @@
 # ukk — Implementation status
 
 > **Snapshot:** 2026-11-08, PR **#58** merged at `8b5660b5c98f6aaf380a8caa0ba94b05bc2c92cc` (native Go/MyGo Desktop + external herdr-core + SwiftUI iOS). This page records **exact evidence**, not intentions. Where an item has not been verified, it says so. The integration owner appends build, CI, runtime and device evidence as it lands; planned module paths in [tech-design](tech-design.md) are not proof that code exists.
+>
+> **Windows evidence (2026-11-09):** observed on Windows 10 Home China 26H2 (build 26300.9711, AMD64) at `c906c54`, a docs-only commit on top of `8b5660b` with no product-code change. The host's interactive session was locked, so visual rendering, keyboard/a11y and the manual installer walkthrough remain **NOT VERIFIED**.
 
 ## Product contract (fixed)
 
@@ -22,13 +24,13 @@ This table records the **claim**, not a promise. `Pending evidence` means the wo
 | Stage | Claim | Evidence boundary |
 | --- | --- | --- |
 | Docs / architecture reset | Active docs describe the native Go/MyGo + external herdr-core + SwiftUI structure; obsolete Rust/GPUI claims removed | Documentation change only |
-| M0 Cutover + build spine | **Local macOS:** module builds, `ukk.app` packages ad-hoc with the pinned `libghostty-vt.dylib`, and the packaged app opens a native window and self-starts the bridge; CI is green on `bacec97` for macOS/Ubuntu/Windows plus launch smoke | Windows/Linux runtime interaction remains unverified even though they compile and test in CI |
-| M1 Local workspace + terminals | **Local macOS:** real herdr-core v0.1.18 terminal `t1z` attached read/write and rendered in the MyGo terminal; observe/credit/resize behavior has package tests | Window-close process survival, observer denial against a real core, and Windows/Linux attach remain unverified |
-| M2 Provider-neutral omp | **Local macOS:** bridge-owned omp 18.18.1 session started, accepted a prompt, streamed a completed turn and usage, and rendered in the Desktop conversation (`OK`, 13,622 tokens); long Markdown is chunked with a 64 KiB default and explicit 2 MiB expansion | Provider-emitted approvals and provider restart/resume remain unverified |
+| M0 Cutover + build spine | **Local macOS:** module builds, `ukk.app` packages ad-hoc with the pinned `libghostty-vt.dylib`, and the packaged app opens a native window and self-starts the bridge; CI is green on `bacec97` for macOS/Ubuntu/Windows plus launch smoke. **Local Windows 10 26300.9711:** `gofmt`/`vet` clean, 297 tests and race tests pass, `go tool mygo build` produced `ukk.exe` + NSIS setup, and the installed app created a `MyGoWindow` and self-started the bridge from the install directory | Linux runtime interaction and Windows GUI interaction beyond window creation remain unverified even though they compile and test in CI |
+| M1 Local workspace + terminals | **Local macOS:** real herdr-core v0.1.18 terminal `t1z` attached read/write and rendered in the MyGo terminal; observe/credit/resize behavior has package tests. **Local Windows 10:** `internal/hc` against installed herdr-core `hc` 0.1.19 (generation 1): `terminal.run cmd.exe` stayed live, typed input appeared in the stream, resize 120x40 applied, observer write/resize were refused, and the terminal survived attachment + client exit and reattached | Windows Desktop terminal pane, process survival across Desktop close against a real core, and Linux attach remain unverified |
+| M2 Provider-neutral omp | **Local macOS:** bridge-owned omp 18.18.1 session started, accepted a prompt, streamed a completed turn and usage, and rendered in the Desktop conversation (`OK`, 13,622 tokens); long Markdown is chunked with a 64 KiB default and explicit 2 MiB expansion. **Local Windows 10:** bridge-owned omp 18.18.3 session started, prompt produced assistant `OK`, turn `done`, 14,722 tokens, and `agent.stop` reaped the owned child while the session stayed readable as `done` | Windows Desktop conversation path, provider-emitted approvals and provider restart/resume remain unverified |
 | M3 Relay + pairing + iOS | **Local + CI:** host-confirmed pairing, encrypted command dispatch, resume and revocation work through a real relay process; the iOS simulator build and its 94 unit tests pass in CI; the app renders a real SwiftUI screen | No deployed WSS relay, no WAN proof, no physical-device pairing/camera/APNs |
 | M4 Remote Screen | **Local:** real avfoundation capture produced an offer with ICE/DTLS and H.264; stop ended capture; input gating has tests | No TURN media session, no injection into a real app, no iPhone viewer |
 | M5 Plugin safety | Manifest/grants/supervisor/framing and a first-party moejs runtime have package tests (including timeout, import denial and no ambient globals); bridge API and a Settings surface are wired | Third-party helpers are process-isolated, not OS-sandboxed; no malicious-plugin acceptance run |
-| M6 Unsigned distribution | **CI:** release run `42476394079` built and uploaded the macOS DMG, Windows NSIS installer, Linux deb/tar and unsigned device IPA; downloaded artifacts matched their `SHA256SUMS.txt` and formats locally | Unsigned IPA is non-installable; no three-OS install/uninstall/a11y matrix |
+| M6 Unsigned distribution | **CI:** release run `42476394079` built and uploaded the macOS DMG, Windows NSIS installer, Linux deb/tar and unsigned device IPA; downloaded artifacts matched their `SHA256SUMS.txt` and formats locally. **Local Windows 10:** local `go tool mygo build` produced `ukk.exe` (27,165,696 B) and `ukk-setup-0.1.0-amd64.exe` (9,220,545 B) with recorded SHA-256; silent per-user install and uninstall removed the files, Start Menu shortcut, uninstall entry and processes | Silent `/S` is not installer-walkthrough evidence; the macOS/Linux install paths and the three-OS a11y matrix remain unverified; the unsigned IPA is non-installable |
 
 ## Evidence register (2026-11-08)
 
@@ -50,7 +52,28 @@ This table records the **claim**, not a promise. `Pending evidence` means the wo
 | iOS XCTest | CI simulator build + unit tests (run `42476718034`) | **passed**: 94 tests on an available iPhone simulator |
 | Release artifacts | Release run `42476394079` (`21e8d30`, same bridge code as the merged tree) | four jobs success; desktop archives and IPA checksums re-verified locally; NSIS/DMG/IPA formats confirmed |
 
-These are single-host observations beyond the CI run. Windows/Linux runtime GUI, a deployed relay/TURN path and physical iPhone remain **NOT VERIFIED**.
+These are single-host observations beyond the CI run. Windows GUI interaction beyond window creation, Linux runtime GUI, a deployed relay/TURN path and physical iPhone remain **NOT VERIFIED**.
+
+### Windows run (2026-11-09)
+
+Host: Windows 10 Home China 26H2, build 26300.9711, AMD64, interactive session locked. Tools: Go 1.27.3, MyGo 0.8.3, NSIS 3.13 downloaded by MyGo, installed herdr-core `hc` 0.1.19, omp 18.18.3. The installed core and provider are newer than the macOS pins (herdr-core v0.1.18, omp 18.18.1); the core answered the generation-1 framed handshake.
+
+| Check | Observation | Result |
+| --- | --- | --- |
+| Structural gates | `python scripts/check_layout.py`, `check_docs.py`, `check_versions.py` | OK: layout/module/entrypoints present, documentation links valid, version 0.1.0 agrees |
+| Format / vet / tests | `gofmt -l .`, `go vet ./...`, `go test ./...`, `go test -race ./...` in `apps/desktop` | clean; **297 tests, 18 packages**; race clean |
+| Repo gate script | `just check` | **FAIL (tooling):** just's `bash -uc` resolved to `C:\WINDOWS\system32\bash.exe` (WSL launcher without a distro) and the WindowsApps `python3` alias exited 9009; the same gates pass when the commands run directly |
+| Package | `go tool mygo build` | `ukk.exe` 27,165,696 B SHA-256 `9a29d9a03063be441f83194e308fbe01d2e7270cf13a5a76cdbb163a8c8ae17e`; `ukk-setup-0.1.0-amd64.exe` 9,220,545 B SHA-256 `ac1e51db6facc7e5f04d39dc8d077897009e4094c1b1f9005c10cafb74974c48` |
+| Native window | Win32 `EnumWindows` on the launched process | `MyGoWindow`, title `ukk`, 1320x860, responding; the screenshot captured the lock screen, so visual rendering is **NOT VERIFIED** |
+| Bridge lifetime | `WM_CLOSE` on the window, then `GET /v1/health` over the loopback endpoint | desktop process exited, bridge pid unchanged and healthy; relaunch reused the same bridge. Stopping the bridge made the running Desktop spawn a new one and rewrite the endpoint |
+| Local API authorization | `POST /v1/command` with and without the `0600` bearer token | unauthenticated `401`; `workspace.get` and `agent.list` succeeded |
+| herdr-core | throwaway `internal/hc` probe (removed after the run) | `terminal.run cmd.exe` stayed live; typed input appeared in the stream; resize 120x40 applied; observer write+resize refused; terminal survived attachment and client exit, reattached, then explicit kill+rm |
+| omp | bridge `agent.start` → `agent.prompt` → `agent.snapshot` → `agent.stop` | assistant `OK`, turn `done`, 14,722 tokens; owned child reaped; unrelated `omp.exe` processes untouched |
+| Installer | silent `/S` install, launch, silent `/S` uninstall | per-user install in `%LOCALAPPDATA%\Programs\ukk` (`ukk.exe`, `ghostty-vt.dll`, `Uninstall.exe`); Start Menu shortcut and HKCU uninstall entry created; installed app opened a window and self-started the bridge; uninstall removed files, shortcut, entry and processes and left `%AppData%\ukk` user data |
+
+The installer contains no standalone `ukk-bridge.exe`. The packaged Desktop self-starts the bridge as `ukk.exe --bridge`, while [release](release.md) defines the standalone bridge as a separate release-set binary; the "Desktop, bridge" wording in [v1-complete](goals/v1-complete.md) is not satisfied by this NSIS payload.
+
+Not exercised: visual rendering, keyboard/a11y, the Desktop terminal and conversation panes, the NSIS wizard walkthrough and the uninstaller UI (the host session was locked throughout), plus all Linux and macOS runtime interaction.
 
 Do not copy a green result from one milestone or SHA to another. Do not treat an existing `apps/ios` fixture screen as Host integration.
 
@@ -89,7 +112,8 @@ Everything below is **BLOCKED on external environment or credentials**, not on m
 
 | Blocked acceptance item | Why it cannot run here | What would unblock it | Current evidence boundary |
 | --- | --- | --- | --- |
-| Windows and Linux native GUI/runtime matrix | No physical Windows/Linux machine or desktop VM with a display, GPU and OS permissions is attached to this session | A Windows 11 host and a Linux desktop (X11/Wayland) with the packaged artifacts; run window, terminal, pane/tab, Agent view and uninstall checks | CI compiles, tests and smoke-launches macOS only; Windows/Linux runtime interaction is **NOT VERIFIED** |
+| Windows GUI interaction and installer walkthrough | The Windows 10 host (build 26300.9711) had a locked interactive session (LogonUI), so no visual, keyboard/a11y or click-through interaction was possible; silent `/S` install/uninstall is not acceptance evidence per the [release runbook](runbooks/release.md) | An unlocked interactive Windows session: walk the NSIS wizard, verify the Start Menu entry and uninstaller by hand, exercise keyboard/a11y, the terminal and conversation panes, and re-run install/uninstall | Window creation, gate/package results, bridge lifetime, local API authorization, herdr-core and omp runtime, and silent install/uninstall are recorded in the Windows register above; GUI interaction and manual install remain **NOT VERIFIED** |
+| Linux native GUI/runtime matrix | No Linux desktop (X11/Wayland) with a display and the packaged artifacts is attached to this session | A Linux desktop with the `.deb`/tarball; run window, terminal, pane/tab, Agent view and install/uninstall checks | CI compiles and tests Linux only; Linux runtime interaction is **NOT VERIFIED** |
 | Deployed WSS relay + TURN WAN acceptance | No domain, TLS certificate, public relay deployment, TURN credentials or second network | Deploy `ukk-relay` behind TLS, configure TURN, then exercise pairing, resume, revocation, operator-auth denial and reconnect across two networks | Local in-process relay routing and pairing tests only; no WAN or media-over-TURN proof |
 | Physical iPhone camera/pairing/APNs/floating screen | No Apple signing identity, provisioning profile, physical iPhone or APNs key | Sign a device build, install on a physical iPhone, scan the real QR, approve a command and open Remote Screen over the deployed media path | Simulator build and 94 unit tests pass; device camera, APNs and physical pairing are **NOT VERIFIED** |
 | OS-level third-party plugin sandbox | The standard Go toolchain and this session provide no portable OS sandbox; helpers are process-isolated with cleared environment, bounds, deadlines and kill-on-disable | Per-OS sandbox design and implementation (macOS App Sandbox, Windows AppContainer/job objects, Linux namespaces/seccomp or equivalent) plus a malicious-plugin acceptance run | Documented as **process isolation, not an OS sandbox**; no malicious-plugin containment claim |

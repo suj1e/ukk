@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "herdr-core terminal list v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["terminals"],
+  "properties": {
+    "terminals": {
+      "type": "array",
+      "items": { "$ref": "terminal.schema.json" }
+    },
+    "hidden_finished": { "type": "integer", "minimum": 0 },
+    "machines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name", "target", "id", "state"],
+        "properties": {
+          "name": { "type": "string" },
+          "target": { "type": "string" },
+          "id": { "type": "string" },
+          "host": { "type": "string" },
+          "version": { "type": "string" },
+          "state": { "type": "string" }
+        }
+      }
+    }
+  }
+}

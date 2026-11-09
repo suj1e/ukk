@@ -14,21 +14,24 @@ func Theme(dark bool) *ui.Theme {
 	var theme *ui.Theme
 	if dark {
 		theme = ui.DarkTheme()
-		theme.Background = ui.Hex("#18191D")
-		theme.Surface = ui.Hex("#22242A")
-		theme.SurfaceHover = ui.Hex("#2A2C34")
-		theme.SurfacePressed = ui.Hex("#31343D")
-		theme.Border = ui.Hex("#383B45")
-		theme.Text = ui.Hex("#F8F9FB")
-		theme.TextMuted = ui.Hex("#A2A7B6")
-		theme.Accent = ui.Hex("#8B90F6")
-		theme.AccentHover = ui.Hex("#9AA0FA")
-		theme.AccentPressed = ui.Hex("#7B80EA")
-		theme.AccentText = ui.Hex("#14151A")
-		theme.Selection = ui.Hex("#3B3F86")
-		theme.Scrollbar = ui.Hex("#4A4D59")
-		theme.Inverse = ui.Hex("#ECEDF2")
-		theme.InverseText = ui.Hex("#1B1C20")
+		theme.Background = ui.Hex("#111317") // canvas: behind cards
+		theme.Surface = ui.Hex("#0E0F12")    // chrome: sidebar, tabs, status
+		theme.SurfaceHover = ui.Hex("#1C1E22")
+		theme.SurfacePressed = ui.Hex("#24262B")
+		theme.Border = ui.Hex("#2A2C30")
+		theme.Text = ui.Hex("#D2D4D9")
+		theme.TextMuted = ui.Hex("#8A8C91")
+		theme.Accent = ui.Hex("#96B2D7")
+		theme.AccentHover = ui.Hex("#A9C2E3")
+		theme.AccentPressed = ui.Hex("#7F9BC0")
+		theme.AccentText = ui.Hex("#17191D")
+		theme.Selection = ui.Hex("#394454")
+		theme.Scrollbar = ui.Hex("#3A3D42")
+		theme.Inverse = ui.Hex("#D2D4D9")
+		theme.InverseText = ui.Hex("#111317")
+		theme.Success = ui.Hex("#76A8FF") // done
+		theme.Warning = ui.Hex("#E5C07B") // working
+		theme.Danger = ui.Hex("#F0705F")  // blocked
 	} else {
 		theme = ui.LightTheme()
 		theme.Background = ui.Hex("#F6F6F8")
@@ -52,6 +55,14 @@ func Theme(dark bool) *ui.Theme {
 	theme.FontSize = 13
 	theme.Focus = theme.Accent
 	return theme
+}
+
+// Card is the pane surface: one step above the chrome in the dark theme.
+func Card(theme *ui.Theme) ui.Color {
+	if theme.Dark {
+		return ui.Hex("#17191D")
+	}
+	return ui.Hex("#FFFFFF")
 }
 
 // PageTitle is the primary heading of a surface.

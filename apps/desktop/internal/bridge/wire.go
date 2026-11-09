@@ -111,6 +111,7 @@ type Usage struct {
 
 // AgentSnapshot is the complete bounded view of one Agent session.
 type AgentSnapshot struct {
+	SessionID         string     `json:"session_id,omitempty"`
 	Provider          string     `json:"provider"`
 	ProviderSessionID string     `json:"provider_session_id,omitempty"`
 	State             string     `json:"state"`

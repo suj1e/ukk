@@ -529,6 +529,12 @@ func (c *Client) handleNotification(method string, params json.RawMessage) {
 }
 
 func (c *Client) call(ctx context.Context, method string, params, out any, prepare func(json.RawMessage) (func(), error)) error {
+	return c.callWithLimit(ctx, method, params, out, prepare, maxRequestJSON)
+}
+
+// callWithLimit is call with an explicit request-body bound; documents are
+// larger than ordinary RPC parameters but still bounded.
+func (c *Client) callWithLimit(ctx context.Context, method string, params, out any, prepare func(json.RawMessage) (func(), error), limit int) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -537,7 +543,7 @@ func (c *Client) call(ctx context.Context, method string, params, out any, prepa
 	if err != nil {
 		return &Error{Code: CodeProtocol, Method: method, Err: err}
 	}
-	if len(body) > maxRequestJSON {
+	if len(body) > limit {
 		return &Error{Code: CodeRequestTooLarge, Method: method}
 	}
 

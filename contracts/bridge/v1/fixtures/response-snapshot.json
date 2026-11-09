@@ -1,0 +1,16 @@
+{
+  "id": "req-1",
+  "result": {
+    "session_id": "session-demo",
+    "provider": "omp",
+    "provider_session_id": "01a1beb9-9423-774a-aa27-ee47285d2f9a",
+    "state": "idle",
+    "turns": [],
+    "messages": [],
+    "tools": [],
+    "pending_approvals": [],
+    "usage": {},
+    "provenance": "omp-rpc",
+    "updated_ms": 1762550000000
+  }
+}

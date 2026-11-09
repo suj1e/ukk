@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ukk bridge command request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "method"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "method": {
+      "enum": [
+        "health",
+        "workspace.get",
+        "workspace.set",
+        "agent.start",
+        "agent.snapshot",
+        "agent.list",
+        "agent.prompt",
+        "agent.abort",
+        "agent.approve",
+        "agent.stop",
+        "repo.status",
+        "repo.diff",
+        "repo.file",
+        "remote.status",
+        "remote.invite",
+        "remote.confirm",
+        "remote.grant",
+        "remote.revoke",
+        "screen.start",
+        "screen.answer",
+        "screen.stop",
+        "screen.input",
+        "plugin.list",
+        "plugin.install",
+        "plugin.enable",
+        "plugin.disable",
+        "plugin.grant",
+        "plugin.revoke",
+        "plugin.invoke"
+      ]
+    },
+    "params": { "type": "object" }
+  }
+}
