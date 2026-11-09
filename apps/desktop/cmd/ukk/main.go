@@ -48,8 +48,8 @@ func main() {
 		application = app.New(store, dir)
 		window := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "ukk",
-			Width:     1320,
-			Height:    860,
+			Width:     1180,
+			Height:    740,
 			MinWidth:  960,
 			MinHeight: 620,
 			StateKey:  "main",

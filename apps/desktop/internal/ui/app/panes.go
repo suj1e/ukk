@@ -78,15 +78,15 @@ func (a *App) renderLeaf(c *ui.Context, leaf *domain.PaneNode) {
 	}
 	theme := c.Theme()
 	active := leaf.ID == a.activePane
-	ui.Row(c).Fill().BorderWidth(0).Children(func() {
-		gutter := ui.Box(c).Width(5).FillHeight().Background(theme.Border)
+	ui.Row(c).Fill().Padding(2).Children(func() {
+		rail := ui.Box(c).Width(2).FillHeight()
 		if active {
-			gutter.Background(theme.Accent)
+			rail.Background(theme.Accent)
 		}
-		if gutter.Clicked() {
+		if rail.Clicked() {
 			a.activePane = leaf.ID
 		}
-		ui.Column(c).Grow(1).FillHeight().Background(theme.Background).Children(func() {
+		ui.Column(c).Grow(1).FillHeight().Background(theme.Surface).Children(func() {
 			a.renderSurface(c, leaf, p)
 		})
 	})

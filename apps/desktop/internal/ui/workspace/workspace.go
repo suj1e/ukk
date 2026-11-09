@@ -66,12 +66,12 @@ func Layout(c *ui.Context, node *domain.PaneNode, sizes PaneSizes,
 // PaneHeader names a pane and holds its actions.
 func PaneHeader(c *ui.Context, title, subtitle string, actions func()) {
 	theme := c.Theme()
-	ui.Row(c).FillWidth().Height(32).PaddingX(10).Gap(8).
+	ui.Row(c).FillWidth().Height(34).PaddingX(12).Gap(8).
 		AlignItems(ui.Center).Background(theme.Surface).
 		BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
 		ui.Text(c, title).FontSize(12).FontWeight(600).NoWrap()
 		if subtitle != "" {
-			kit.Meta(c, subtitle).NoWrap().Ellipsis(subtitle)
+			ui.Text(c, subtitle).FontSize(10).TextColor(theme.TextMuted).NoWrap().Ellipsis(subtitle)
 		}
 		ui.Spacer(c)
 		if actions != nil {
@@ -82,19 +82,19 @@ func PaneHeader(c *ui.Context, title, subtitle string, actions func()) {
 
 // TabBar shows the Session's tabs with a close action per tab.
 func TabBar(c *ui.Context, tabs []domain.Tab, activeID string,
-	onSelect func(id string), onClose func(id string), onNew func()) {
+	onSelect func(id string), onClose func(id string), onNew func(), actions func(c *ui.Context)) {
 	theme := c.Theme()
-	ui.Row(c).FillWidth().Height(36).PaddingX(8).Gap(2).
+	ui.Row(c).FillWidth().Height(34).PaddingX(8).Gap(3).
 		AlignItems(ui.Center).Background(theme.Background).
 		BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).
 		Role(ui.RoleTabList).Children(func() {
 		for _, tab := range tabs {
 			selected := tab.ID == activeID
 			row := ui.Row(c).Gap(6).AlignItems(ui.Center).
-				PaddingX(10).PaddingY(5).Radius(theme.Radius).
+				PaddingX(9).PaddingY(4).Radius(5).
 				Role(ui.RoleTab).AccessSelected(selected)
 			if selected {
-				row.Background(theme.Surface).Border(1, theme.Border)
+				row.Background(theme.SurfaceHover)
 			}
 			row.Children(func() {
 				label := ui.ButtonBase(c)
@@ -119,7 +119,10 @@ func TabBar(c *ui.Context, tabs []domain.Tab, activeID string,
 			})
 		}
 		ui.Spacer(c)
-		ui.Button(c, "+").Label("New tab").PaddingX(8).PaddingY(3).FontSize(13).OnClick(onNew)
+		ui.Button(c, "+").Label("New terminal").PaddingX(7).PaddingY(3).FontSize(13).OnClick(onNew)
+		if actions != nil {
+			actions(c)
+		}
 	})
 }
 
@@ -134,9 +137,9 @@ func boolColor(on bool, yes, no ui.Color) ui.Color {
 func SessionRow(c *ui.Context, title, subtitle string, status ui.Color, selected bool) bool {
 	theme := c.Theme()
 	row := ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).
-		Padding(7, 9).Radius(theme.Radius)
+		Padding(6, 9).Radius(6)
 	if selected {
-		row.Background(theme.Surface).Border(1, theme.Border)
+		row.Background(theme.SurfaceHover)
 	}
 	clicked := false
 	row.Children(func() {

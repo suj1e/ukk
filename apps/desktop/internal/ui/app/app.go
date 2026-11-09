@@ -1008,6 +1008,17 @@ func (a *App) repoFor(sessionID string) (*repository.Repo, string) {
 	return repo, ""
 }
 
+// sessionCount is how many Sessions a Space holds, for the sidebar.
+func (a *App) sessionCount(spaceID string) int {
+	count := 0
+	for _, session := range a.meta.Sessions {
+		if session.SpaceID == spaceID {
+			count++
+		}
+	}
+	return count
+}
+
 func (a *App) sessionByID(id string) (domain.Session, bool) {
 	for _, session := range a.meta.Sessions {
 		if session.ID == id {

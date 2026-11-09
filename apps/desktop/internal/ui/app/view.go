@@ -1,7 +1,7 @@
 package app
 
 import (
-	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,7 +13,8 @@ import (
 	domain "github.com/suj1e/ukk/apps/desktop/internal/workspace"
 )
 
-// View renders the whole window.
+// View renders the whole window: a spaces and agents sidebar, then the tabs
+// and panes of the selected Session.
 func (a *App) View(c *ui.Context) {
 	if c.Theme().Dark != a.themeDark {
 		a.themeDark = c.Theme().Dark
@@ -23,14 +24,13 @@ func (a *App) View(c *ui.Context) {
 	ui.Row(c).Fill().Background(c.Theme().Background).Children(func() {
 		a.sidebar(c)
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
-			a.header(c)
 			if a.sessionID != "" {
-				uispace.TabBar(c, a.layout.Tabs, a.activeTab, a.selectTab, a.closeTab, a.NewTerminal)
+				uispace.TabBar(c, a.layout.Tabs, a.activeTab, a.selectTab, a.closeTab, a.NewTerminal, a.tabActions)
 			}
 			ui.Column(c).Grow(1).Children(func() {
 				if a.sessionID == "" {
-					if kit.Empty(c, "No Session yet",
-						"Create a Space for a project, then a Session to hold Agent runs, terminals and files.",
+					if kit.Empty(c, "No Space yet",
+						"A Space is a project root. Tabs open shells and Agent sessions inside it.",
 						"New Space") {
 						a.newSpace.Open = true
 					}
@@ -43,7 +43,6 @@ func (a *App) View(c *ui.Context) {
 				}
 				a.renderPanes(c)
 			})
-			a.statusBar(c)
 		})
 	})
 	a.newSpaceDialog(c)
@@ -52,200 +51,226 @@ func (a *App) View(c *ui.Context) {
 	a.paletteDialog(c)
 }
 
+// tabActions are the workspace actions beside the tab strip.
+func (a *App) tabActions(c *ui.Context) {
+	if ui.Button(c, "+ Chat").FontSize(11).Clicked() {
+		a.addTab(domain.SurfaceChat)
+	}
+	ui.PopoverMenuButton(c, "Split", func(m *ui.Menu) {
+		for _, direction := range []struct {
+			label string
+			value string
+		}{{"Split right", domain.SplitRow}, {"Split down", domain.SplitColumn}} {
+			direction := direction
+			m.Submenu(direction.label, func(sub *ui.Menu) {
+				for _, surface := range []string{domain.SurfaceChat, domain.SurfaceTerm, domain.SurfaceFiles, domain.SurfaceDiff, domain.SurfaceLog} {
+					surface := surface
+					if sub.Item(surfaceTitle(surface)).Chosen() {
+						a.splitPane(direction.value, surface)
+					}
+				}
+			})
+		}
+	}).PaddingX(8).PaddingY(3).FontSize(11)
+	if ui.Button(c, "Palette").Label("Command palette").PaddingX(7).PaddingY(3).FontSize(11).Clicked() {
+		a.OpenPalette()
+	}
+}
+
 func (a *App) sidebar(c *ui.Context) {
 	theme := c.Theme()
-	ui.Column(c).Width(248).FillHeight().Background(theme.Surface).
+	ui.Column(c).Width(224).FillHeight().Background(theme.Surface).
 		BorderWidth(0, 1, 0, 0).BorderColor(theme.Border).Children(func() {
-		ui.Row(c).FillWidth().Padding(14, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Gap(1).Children(func() {
-				ui.Text(c, "ukk").FontSize(16).FontWeight(700)
-				kit.Meta(c, "Agent workspace")
-			})
+		ui.Row(c).FillWidth().Height(44).PaddingX(12).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "ukk").FontSize(15).FontWeight(700)
 			ui.Spacer(c)
-			ui.Box(c).Size(8, 8).Radius(999).Background(a.bridgeColor())
+			if ui.Button(c, "Palette").Label("Command palette").PaddingX(6).PaddingY(2).FontSize(10).Clicked() {
+				a.OpenPalette()
+			}
 		})
 
 		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Gap(2).PaddingY(4).Children(func() {
+			ui.Column(c).Gap(1).PaddingX(6).PaddingY(4).Children(func() {
+				kit.SectionLabel(c, "Spaces")
 				for _, space := range a.meta.Spaces {
 					space := space
-					row := ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Padding(6, 10)
-					if space.ID == a.spaceID {
-						row.Background(theme.SurfaceHover)
-					}
-					row.Children(func() {
-						button := ui.ButtonBase(c).FillWidth()
-						button.Label(space.Title)
-						button.Children(func() {
-							ui.Column(c).Gap(1).Children(func() {
+					selected := space.ID == a.spaceID
+					button := ui.ButtonBase(c).FillWidth()
+					button.Children(func() {
+						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(5, 7).Radius(5).
+							Background(boolColor(selected, theme.SurfaceHover, ui.Transparent)).Children(func() {
+							ui.Box(c).Size(18, 18).Radius(4).Background(spaceTint(space.Title)).
+								Center().Children(func() {
+								ui.Text(c, initial(space.Title)).FontSize(9).FontWeight(700).
+									TextColor(ui.Hex("#101319"))
+							})
+							ui.Column(c).Grow(1).Gap(1).Children(func() {
 								ui.Text(c, space.Title).FontSize(12).FontWeight(600).NoWrap().
 									Ellipsis(space.Title)
-								kit.Mono(c, space.ProjectRoot)
+								ui.Text(c, space.ProjectRoot).FontSize(9).TextColor(theme.TextMuted).
+									NoWrap().Ellipsis(space.ProjectRoot)
 							})
+							if count := a.sessionCount(space.ID); count > 0 {
+								ui.Text(c, strconv.Itoa(count)).FontSize(9).TextColor(theme.TextMuted)
+							}
 						})
-						if button.Clicked() {
-							a.spaceID = space.ID
-							a.sessionID = ""
-							a.pickSelection()
-							a.layout = domain.SessionLayout{}
-							a.activeTab = ""
-							a.activePane = ""
-							a.reload()
-						}
 					})
+					if button.Clicked() {
+						a.spaceID = space.ID
+						a.sessionID = ""
+						a.layout = domain.SessionLayout{}
+						a.activeTab = ""
+						a.activePane = ""
+						a.pickSelection()
+						a.reload()
+					}
 					for _, session := range a.meta.Sessions {
 						if session.SpaceID != space.ID {
 							continue
 						}
 						session := session
-						selected := session.ID == a.sessionID
-						status := theme.TextMuted
-						if session.Lifecycle == domain.LifecycleActive {
-							status = theme.Success
+						indicator := theme.TextMuted
+						switch session.Lifecycle {
+						case domain.LifecycleActive:
+							indicator = theme.Success
+						case domain.LifecyclePaused:
+							indicator = theme.Warning
 						}
-						if selected {
-							status = theme.Accent
-						}
-						if uispace.SessionRow(c, session.Title, session.Lifecycle, status, selected) {
-							a.sessionID = session.ID
-							a.layout = domain.SessionLayout{}
-							a.activeTab = ""
-							a.activePane = ""
-							a.reload()
-						}
+						ui.Column(c).PaddingStart(14).Children(func() {
+							if uispace.SessionRow(c, session.Title, session.Lifecycle, indicator, session.ID == a.sessionID) {
+								a.sessionID = session.ID
+								a.layout = domain.SessionLayout{}
+								a.activeTab = ""
+								a.activePane = ""
+								a.reload()
+							}
+						})
 					}
 				}
-				if len(a.liveAgents) > 0 {
-					kit.SectionLabel(c, "Agents")
-					agents := make([]bridge.AgentSnapshot, 0, len(a.liveAgents))
-					for _, snapshot := range a.liveAgents {
-						agents = append(agents, snapshot)
-					}
-					sort.Slice(agents, func(i, j int) bool { return agents[i].UpdatedMS > agents[j].UpdatedMS })
-					for _, snapshot := range agents {
-						snapshot := snapshot
-						color := theme.TextMuted
-						switch snapshot.State {
-						case "running":
-							color = theme.Accent
-						case "blocked":
-							color = theme.Warning
-						case "done":
-							color = theme.Success
-						case "failed":
-							color = theme.Danger
-						}
+				a.agentSidebar(c)
+			})
+		})
+
+		ui.Column(c).FillWidth().Padding(10).Gap(3).BorderWidth(1, 0, 0, 0).
+			BorderColor(theme.Border).Children(func() {
+			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+				kit.Dot(c, a.bridgeColor())
+				ui.Text(c, firstLine(a.bridgeLabel())).FontSize(9).TextColor(theme.TextMuted).
+					NoWrap().Ellipsis(a.bridgeLabel())
+			})
+			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+				kit.Dot(c, a.herdrColor())
+				ui.Text(c, firstLine(herdrLabel(a.hc != nil, a.hcErr))).FontSize(9).
+					TextColor(theme.TextMuted).NoWrap().Ellipsis(herdrLabel(a.hc != nil, a.hcErr))
+			})
+			ui.Row(c).FillWidth().Gap(4).Children(func() {
+				if ui.Button(c, "+ Space").FontSize(11).Clicked() {
+					a.newSpace.Open = true
+				}
+				ui.Button(c, "Settings").FontSize(11).OnClick(func() {
+					a.settings.Open = true
+					a.loadRemoteStatus()
+				})
+			})
+		})
+	})
+}
+
+// agentSidebar lists provider sessions grouped by Space.
+func (a *App) agentSidebar(c *ui.Context) {
+	if len(a.liveAgents) == 0 {
+		return
+	}
+	theme := c.Theme()
+	kit.SectionLabel(c, "Agents")
+	for _, space := range a.meta.Spaces {
+		space := space
+		var rows []bridge.AgentSnapshot
+		for _, snapshot := range a.liveAgents {
+			if session, ok := a.sessionByID(snapshot.SessionID); ok && session.SpaceID == space.ID {
+				rows = append(rows, snapshot)
+			}
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		ui.Text(c, space.Title).FontSize(9).TextColor(theme.TextMuted).Padding(4, 7)
+		for _, snapshot := range rows {
+			snapshot := snapshot
+			button := ui.ButtonBase(c).FillWidth()
+			button.Children(func() {
+				ui.Row(c).FillWidth().Gap(7).AlignItems(ui.Center).Padding(4, 7).Radius(5).Children(func() {
+					kit.Dot(c, agentColor(snapshot.State, theme))
+					ui.Column(c).Grow(1).Gap(0).Children(func() {
 						title := snapshot.Provider
 						if session, ok := a.sessionByID(snapshot.SessionID); ok {
 							title = session.Title
 						}
-						button := ui.ButtonBase(c).FillWidth()
-						button.Children(func() {
-							row := ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(5, 10)
-							row.Children(func() {
-								kit.Dot(c, color)
-								ui.Column(c).Grow(1).Gap(1).Children(func() {
-									ui.Text(c, title).FontSize(12).FontWeight(500).NoWrap().Ellipsis(title)
-									kit.Meta(c, snapshot.Provider+" · "+snapshot.State)
-								})
-							})
-						})
-						if button.Clicked() {
-							a.openSessionAgent(snapshot.SessionID)
-						}
-					}
-				}
-			})
-		})
-
-		ui.Column(c).FillWidth().Padding(10).Gap(6).BorderWidth(1, 0, 0, 0).
-			BorderColor(theme.Border).Children(func() {
-			if ui.Button(c, "+  New Space").Clicked() {
-				a.newSpace.Open = true
-			}
-			ui.Button(c, "Settings").OnClick(func() {
-				a.settings.Open = true
-				a.loadRemoteStatus()
-			})
-		})
-	})
-}
-
-func (a *App) header(c *ui.Context) {
-	theme := c.Theme()
-	session, hasSession := a.session()
-	ui.Row(c).FillWidth().Height(52).Padding(10, 12).Gap(10).
-		AlignItems(ui.Center).Background(theme.Background).
-		BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
-		ui.Column(c).Grow(1).Gap(2).Children(func() {
-			title := "ukk"
-			if hasSession {
-				title = session.Title
-			}
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				kit.PageTitle(c, title)
-				if hasSession {
-					kit.Pill(c, session.Lifecycle, session.Lifecycle)
-				}
-				if count := len(a.agents()); count > 0 {
-					kit.Pill(c, kit.Plural(count, "Agent", "Agents"), "accent")
-				}
-			})
-			if space, ok := a.space(); ok {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					kit.Mono(c, space.ProjectRoot)
-					if hasSession {
-						kit.Meta(c, kit.ShortID(session.ID))
+						ui.Text(c, title).FontSize(11).NoWrap().Ellipsis(title)
+						ui.Text(c, snapshot.Provider+" · "+snapshot.State).FontSize(9).
+							TextColor(theme.TextMuted).NoWrap()
+					})
+					if elapsed := agentElapsed(snapshot); elapsed != "" {
+						ui.Text(c, elapsed).FontSize(9).TextColor(theme.TextMuted)
 					}
 				})
+			})
+			if button.Clicked() {
+				a.openSessionAgent(snapshot.SessionID)
 			}
-		})
-
-		if hasSession {
-			if ui.Button(c, "+ Terminal").Clicked() {
-				a.NewTerminal()
-			}
-			if ui.Button(c, "+ Chat").Clicked() {
-				a.addTab(domain.SurfaceChat)
-			}
-			ui.PopoverMenuButton(c, "Split", func(m *ui.Menu) {
-				for _, direction := range []struct {
-					label string
-					value string
-				}{{"Split right", domain.SplitRow}, {"Split down", domain.SplitColumn}} {
-					direction := direction
-					m.Submenu(direction.label, func(sub *ui.Menu) {
-						for _, surface := range []string{domain.SurfaceChat, domain.SurfaceTerm, domain.SurfaceFiles, domain.SurfaceDiff, domain.SurfaceLog} {
-							surface := surface
-							if sub.Item(surfaceTitle(surface)).Chosen() {
-								a.splitPane(direction.value, surface)
-							}
-						}
-					})
-				}
-			}).PaddingX(9).PaddingY(4).FontSize(12)
 		}
-		ui.Button(c, "Refresh").OnClick(func() {
-			a.reload()
-			a.refreshTerminals()
-		})
-	})
+	}
 }
 
-func (a *App) statusBar(c *ui.Context) {
-	theme := c.Theme()
-	ui.Row(c).FillWidth().Height(26).PaddingX(12).Gap(12).AlignItems(ui.Center).
-		Background(theme.Surface).BorderWidth(1, 0, 0, 0).BorderColor(theme.Border).
-		Children(func() {
-			ui.Box(c).Size(6, 6).Radius(999).Background(a.bridgeColor())
-			kit.Meta(c, a.bridgeLabel())
-			kit.Meta(c, herdrLabel(a.hc != nil, a.hcErr))
-			ui.Spacer(c)
-			if a.hcHello.Core.ID != "" {
-				kit.Mono(c, "core "+kit.ShortID(a.hcHello.Core.ID))
-			}
-			kit.Meta(c, time.Now().Format("15:04"))
-		})
+func agentColor(state string, theme *ui.Theme) ui.Color {
+	switch state {
+	case "running":
+		return theme.Accent
+	case "blocked":
+		return theme.Warning
+	case "done":
+		return theme.Success
+	case "failed":
+		return theme.Danger
+	default:
+		return theme.TextMuted
+	}
+}
+
+// agentElapsed is how long the current turn has run, or "".
+func agentElapsed(snapshot bridge.AgentSnapshot) string {
+	for i := len(snapshot.Turns) - 1; i >= 0; i-- {
+		turn := snapshot.Turns[i]
+		if turn.State == "running" && turn.StartedMS > 0 {
+			return kit.FormatDuration(time.Since(time.UnixMilli(turn.StartedMS)).Milliseconds())
+		}
+	}
+	return ""
+}
+
+// spaceTint gives a Space a stable color, like the program tiles in Herdr.
+func spaceTint(title string) ui.Color {
+	colors := []string{"#E8912A", "#5AA9FF", "#4CC38A", "#C792EA", "#F85149", "#E3B341", "#56D4DD"}
+	hash := uint32(2166136261)
+	for _, r := range title {
+		hash ^= uint32(r)
+		hash *= 16777619
+	}
+	return ui.Hex(colors[int(hash)%len(colors)])
+}
+
+func initial(title string) string {
+	for _, r := range title {
+		return strings.ToUpper(string(r))
+	}
+	return "?"
+}
+
+func boolColor(on bool, yes, no ui.Color) ui.Color {
+	if on {
+		return yes
+	}
+	return no
 }
 
 func (a *App) bridgeColor() ui.Color {
@@ -281,6 +306,22 @@ func herdrLabel(connected bool, err string) string {
 		return "herdr-core: " + firstLine(err)
 	}
 	return "herdr-core not connected"
+}
+
+// herdrColor is the status dot for the terminal runtime.
+func (a *App) herdrColor() ui.Color {
+	theme := a.theme
+	if theme == nil {
+		return ui.Transparent
+	}
+	switch {
+	case a.hc != nil:
+		return theme.Success
+	case a.hcErr != "":
+		return theme.Danger
+	default:
+		return theme.Warning
+	}
 }
 
 func firstLine(text string) string {
