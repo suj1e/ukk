@@ -63,15 +63,22 @@ func Layout(c *ui.Context, node *domain.PaneNode, sizes PaneSizes,
 	return el.Grow(1).Fill()
 }
 
-// PaneHeader names a pane and holds its actions.
-func PaneHeader(c *ui.Context, title, subtitle string, actions func()) {
+// PaneHeader names a pane and holds its actions. focus, when given, makes
+// the title area take the pane's focus.
+func PaneHeader(c *ui.Context, title, subtitle string, actions func(), focus ...func()) {
 	theme := c.Theme()
 	ui.Row(c).FillWidth().Height(30).PaddingX(10).Gap(8).
 		AlignItems(ui.Center).Background(kit.Card(theme)).
 		BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
-		ui.Text(c, title).FontSize(12).FontWeight(600).NoWrap()
-		if subtitle != "" {
-			ui.Text(c, subtitle).FontSize(10).TextColor(theme.TextMuted).NoWrap().Ellipsis(subtitle)
+		if len(focus) > 0 && focus[0] != nil {
+			onFocus := focus[0]
+			area := ui.ButtonBase(c).Label(title).FillHeight()
+			area.Children(func() { paneTitle(c, title, subtitle) })
+			if area.Clicked() {
+				onFocus()
+			}
+		} else {
+			paneTitle(c, title, subtitle)
 		}
 		ui.Spacer(c)
 		if actions != nil {
@@ -80,9 +87,23 @@ func PaneHeader(c *ui.Context, title, subtitle string, actions func()) {
 	})
 }
 
-// TabBar shows the Session's tabs with a close action per tab.
+// paneTitle is the title and subtitle of a PaneHeader, alone or in its
+// clickable area.
+func paneTitle(c *ui.Context, title, subtitle string) {
+	theme := c.Theme()
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, title).FontSize(12).FontWeight(600).NoWrap()
+		if subtitle != "" {
+			ui.Text(c, subtitle).FontSize(10).TextColor(theme.TextMuted).NoWrap().Ellipsis(subtitle)
+		}
+	})
+}
+
+// TabBar shows the Session's tabs with a close action per tab. newMenu
+// fills the new-tab menu; without it the + button opens a terminal.
 func TabBar(c *ui.Context, tabs []domain.Tab, activeID string,
-	onSelect func(id string), onClose func(id string), onNew func(), actions func(c *ui.Context)) {
+	onSelect func(id string), onClose func(id string), onNew func(),
+	newMenu func(*ui.Menu), actions func(c *ui.Context)) {
 	theme := c.Theme()
 	ui.Row(c).FillWidth().Height(42).PaddingX(10).Gap(3).
 		AlignItems(ui.Center).Background(theme.Surface).
@@ -119,7 +140,12 @@ func TabBar(c *ui.Context, tabs []domain.Tab, activeID string,
 			})
 		}
 		ui.Spacer(c)
-		ui.Button(c, "+").Label("New terminal").PaddingX(7).PaddingY(3).FontSize(13).OnClick(onNew)
+		if newMenu != nil {
+			ui.PopoverMenuButton(c, "+", newMenu).Label("New tab").
+				PaddingX(7).PaddingY(3).FontSize(13)
+		} else {
+			ui.Button(c, "+").Label("New terminal").PaddingX(7).PaddingY(3).FontSize(13).OnClick(onNew)
+		}
 		if actions != nil {
 			actions(c)
 		}

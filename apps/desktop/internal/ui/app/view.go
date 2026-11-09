@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/suj1e/ukk/apps/desktop/internal/agentview"
 	"github.com/suj1e/ukk/apps/desktop/internal/bridge"
 	"github.com/suj1e/ukk/apps/desktop/internal/extensions"
 	"github.com/suj1e/ukk/apps/desktop/internal/hc"
@@ -28,7 +28,7 @@ func (a *App) View(c *ui.Context) {
 		a.sidebar(c)
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			if a.sessionID != "" {
-				uispace.TabBar(c, a.layout.Tabs, a.activeTab, a.selectTab, a.closeTab, a.NewTerminal, a.tabActions)
+				uispace.TabBar(c, a.layout.Tabs, a.activeTab, a.selectTab, a.closeTab, a.NewTerminal, a.newTabMenu, a.tabActions)
 			}
 			ui.Column(c).Grow(1).Children(func() {
 				if a.sessionID == "" {
@@ -53,6 +53,22 @@ func (a *App) View(c *ui.Context) {
 	a.newSessionDialog(c)
 	a.settingsDialog(c)
 	a.paletteDialog(c)
+}
+
+// newTabMenu offers the surfaces a new tab can show.
+func (a *App) newTabMenu(m *ui.Menu) {
+	if m.Item("Shell").Chosen() {
+		a.NewTerminal()
+	}
+	if m.Item("Chat").Chosen() {
+		a.addTab(domain.SurfaceChat)
+	}
+	if m.Item("Files").Chosen() {
+		a.addTab(domain.SurfaceFiles)
+	}
+	if m.Item("Diff").Chosen() {
+		a.addTab(domain.SurfaceDiff)
+	}
 }
 
 // tabActions are the workspace actions beside the tab strip.
@@ -176,7 +192,7 @@ func (a *App) sidebar(c *ui.Context) {
 // statusBar is the 28px footer Herdr draws under the panes.
 func (a *App) statusBar(c *ui.Context) {
 	theme := c.Theme()
-	agents := a.terminalAgents()
+	agents := agentview.FromTerminals(a.terminals, time.Now())
 	needs := 0
 	for _, agent := range agents {
 		if agent.State == "blocked" || agent.State == "error" {
@@ -202,142 +218,16 @@ func (a *App) statusBar(c *ui.Context) {
 		})
 }
 
-// terminalAgent is one Agent that a herdr-core terminal reported through
-// OSC 7501, the same source the official sidebar uses.
-type terminalAgent struct {
-	Terminal hc.Terminal
-	App      string
-	State    string
-	Group    string
-	Place    string
-	Title    string
-	Elapsed  string
-}
-
-func (a *App) terminalAgents() []terminalAgent {
-	var agents []terminalAgent
-	for _, term := range a.terminals {
-		if term.Status == nil || term.Status.State == "" {
-			continue
-		}
-		agent := terminalAgent{
-			Terminal: term,
-			App:      term.Status.App,
-			State:    term.Status.State,
-			Group:    agentGroup(term.Status.State),
-			Place:    term.Labels["where"],
-			Title:    cleanAgentTitle(term.Title),
-		}
-		if agent.App == "" {
-			agent.App = "agent"
-		}
-		if agent.Title == "" {
-			agent.Title = a.terminalLabel(term)
-		}
-		if agent.Place == "" {
-			agent.Place = term.Cwd
-		}
-		if term.StatusMS != nil {
-			agent.Elapsed = shortDuration(time.Since(time.UnixMilli(int64(*term.StatusMS))).Milliseconds())
-		}
-		agents = append(agents, agent)
-	}
-	sort.Slice(agents, func(i, j int) bool {
-		if agents[i].Group != agents[j].Group {
-			return groupRank(agents[i].Group) > groupRank(agents[j].Group)
-		}
-		return agents[i].Title < agents[j].Title
-	})
-	return agents
-}
-
-// cleanAgentTitle drops the spinner and status glyphs a program puts before
-// its title, as Herdr's agents mod does.
-func cleanAgentTitle(raw string) string {
-	for i, r := range raw {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			return strings.TrimSpace(raw[i:])
-		}
-	}
-	return strings.TrimSpace(raw)
-}
-
-// shortDuration is Herdr's compact age: <1m, Xm, Xh, Xd.
-func shortDuration(ms int64) string {
-	minutes := ms / 60000
-	if minutes < 1 {
-		return "<1m"
-	}
-	if minutes < 60 {
-		return strconv.FormatInt(minutes, 10) + "m"
-	}
-	hours := minutes / 60
-	if hours < 24 {
-		return strconv.FormatInt(hours, 10) + "h"
-	}
-	return strconv.FormatInt(hours/24, 10) + "d"
-}
-
-func agentGroup(state string) string {
-	switch state {
-	case "blocked", "error":
-		return "Needs you"
-	case "done":
-		return "Done"
-	case "working":
-		return "Working"
-	case "idle":
-		return "Idle"
-	default:
-		return "Agents"
-	}
-}
-
-func groupRank(group string) int {
-	switch group {
-	case "Needs you":
-		return 4
-	case "Done":
-		return 3
-	case "Working":
-		return 2
-	case "Idle":
-		return 1
-	default:
-		return 0
-	}
-}
-
-func agentStateColor(state string, theme *ui.Theme) ui.Color {
-	switch state {
-	case "working":
-		return theme.Warning
-	case "blocked", "error":
-		return theme.Danger
-	case "done":
-		return theme.Success
-	default:
-		return theme.TextMuted
-	}
-}
-
+// agentSidebar draws terminal Agents grouped by attention, using the shared
+// agentview projection, then the bridge's structured provider sessions.
 func (a *App) agentSidebar(c *ui.Context) {
 	theme := c.Theme()
-	agents := a.terminalAgents()
+	agents := agentview.FromTerminals(a.terminals, time.Now())
 	if len(agents) > 0 {
 		kit.SectionLabel(c, "Agents")
-		for _, group := range []string{"Needs you", "Done", "Working", "Idle", "Agents"} {
-			var rows []terminalAgent
-			for _, agent := range agents {
-				if agent.Group == group {
-					rows = append(rows, agent)
-				}
-			}
-			if len(rows) == 0 {
-				continue
-			}
-			ui.Text(c, group).FontSize(9).TextColor(theme.TextMuted).Padding(4, 7)
-			for _, agent := range rows {
+		for _, section := range agentview.Sections(agents) {
+			ui.Text(c, section.Name).FontSize(9).TextColor(theme.TextMuted).Padding(4, 7)
+			for _, agent := range section.Agents {
 				agent := agent
 				button := ui.ButtonBase(c).FillWidth()
 				button.Children(func() {
@@ -359,7 +249,7 @@ func (a *App) agentSidebar(c *ui.Context) {
 					})
 				})
 				if button.Clicked() {
-					a.openTerminal(agent.Terminal)
+					a.openTerminal(hc.Terminal{Address: agent.Address})
 				}
 			}
 		}
@@ -398,16 +288,27 @@ func (a *App) agentSidebar(c *ui.Context) {
 	}
 }
 
+func agentStateColor(state string, theme *ui.Theme) ui.Color {
+	switch state {
+	case "working":
+		return theme.Warning
+	case "blocked", "error":
+		return theme.Danger
+	case "done":
+		return theme.Success
+	default:
+		return theme.TextMuted
+	}
+}
+
 func agentColor(state string, theme *ui.Theme) ui.Color {
 	switch state {
 	case "running":
 		return theme.Warning
-	case "blocked":
+	case "blocked", "failed":
 		return theme.Danger
 	case "done":
 		return theme.Success
-	case "failed":
-		return theme.Danger
 	default:
 		return theme.TextMuted
 	}

@@ -123,6 +123,23 @@ func TestLayoutCASAndValidation(t *testing.T) {
 	}
 }
 
+func TestDefaultLayoutOpensTerminal(t *testing.T) {
+	layout := DefaultLayout("session-1")
+	if len(layout.Tabs) != 1 {
+		t.Fatalf("tabs = %d", len(layout.Tabs))
+	}
+	tab := layout.Tabs[0]
+	if tab.Title != "Terminal" {
+		t.Fatalf("tab title = %q", tab.Title)
+	}
+	if tab.Root == nil || tab.Root.Surface != SurfaceTerm {
+		t.Fatalf("default leaf = %+v", tab.Root)
+	}
+	if tab.Root.TerminalAddress != "" {
+		t.Fatalf("default terminal address = %q, want empty until a shell starts", tab.Root.TerminalAddress)
+	}
+}
+
 func TestTerminalPanePersistsAddress(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir)

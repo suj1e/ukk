@@ -737,7 +737,7 @@ func (a *App) NewTerminal() {
 				return
 			}
 			a.notice = ""
-			a.addTerminalTabTo(sessionID, result.Address)
+			a.openTerminalTab(sessionID, result.Address)
 			a.refreshTerminals()
 		})
 	}()
@@ -761,7 +761,35 @@ func (a *App) openTerminal(term hc.Terminal) {
 		a.layout = domain.SessionLayout{}
 		a.reload()
 	}
-	a.addTerminalTabTo(a.sessionID, term.Address)
+	a.openTerminalTab(a.sessionID, term.Address)
+}
+
+// openTerminalTab fills the empty terminal tab a new Session starts with,
+// or appends a tab when the Session already shows something else.
+func (a *App) openTerminalTab(sessionID, address string) {
+	layout, ok := a.store.Layout(sessionID)
+	if !ok {
+		return
+	}
+	if len(layout.Tabs) == 1 {
+		root := layout.Tabs[0].Root
+		if root != nil && root.Kind == domain.KindLeaf && root.Surface == domain.SurfaceTerm && root.TerminalAddress == "" {
+			root.TerminalAddress = address
+			layout.Tabs[0].Title = "Terminal"
+			saved, err := a.store.SaveLayout(sessionID, layout, layout.Revision)
+			if err != nil {
+				a.notice = err.Error()
+				return
+			}
+			if a.sessionID == sessionID {
+				a.layout = saved
+				a.activeTab = saved.Tabs[0].ID
+				a.activePane = saved.Tabs[0].Root.ID
+			}
+			return
+		}
+	}
+	a.addTerminalTabTo(sessionID, address)
 }
 
 // pollHerdr refreshes terminal status so the Agents sidebar follows OSC 7501
@@ -802,17 +830,33 @@ func (a *App) newSpaceSubmit() {
 	title, root := form.Title, form.Root
 	go func() {
 		space, err := a.store.CreateSpace(title, root)
+		if err != nil {
+			a.update(func() {
+				form.Busy = false
+				form.Err = err.Error()
+			})
+			return
+		}
+		// A new Space opens with a shell tab, as Herdr's space.new does.
+		session, sessionErr := a.store.CreateSession(space.ID, "Terminal")
 		a.update(func() {
 			form.Busy = false
-			if err != nil {
-				form.Err = err.Error()
-				return
-			}
 			form.Open = false
 			form.Title, form.Root = "", ""
 			a.spaceID = space.ID
 			a.sessionID = ""
+			if sessionErr == nil {
+				a.sessionID = session.ID
+			} else {
+				a.notice = "session: " + sessionErr.Error()
+			}
+			a.layout = domain.SessionLayout{}
+			a.activeTab = ""
+			a.activePane = ""
 			a.reload()
+			if sessionErr == nil {
+				a.NewTerminal()
+			}
 		})
 	}()
 }
@@ -840,6 +884,7 @@ func (a *App) newSessionSubmit() {
 			a.activeTab = ""
 			a.activePane = ""
 			a.reload()
+			a.NewTerminal()
 		})
 	}()
 }

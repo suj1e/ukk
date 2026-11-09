@@ -106,9 +106,9 @@ func (a *App) renderSurface(c *ui.Context, leaf *domain.PaneNode, p *pane) {
 	case domain.SurfaceDiff:
 		a.renderDiff(c, p)
 	case domain.SurfaceLog:
-		a.renderActivity(c, p)
+		a.renderActivity(c, leaf, p)
 	case domain.SurfaceSpec:
-		a.renderScreen(c, p)
+		a.renderScreen(c, leaf, p)
 	default:
 		kit.Empty(c, "Unknown surface", p.surface, "")
 	}
@@ -181,19 +181,15 @@ func (a *App) renderTerminal(c *ui.Context, leaf *domain.PaneNode, p *pane) {
 			a.attachPaneTerminal(p)
 		}
 		uispace.PaneHeader(c, "Terminal", p.term.Address, func() {
-			kit.ToolbarButton(c, "Detach").OnClick(func() {
-				p.term.Close()
-				p.term = nil
-				p.attachStarted = false
-			})
-		})
+			a.terminalPaneActions(c, leaf, p)
+		}, func() { a.activePane = leaf.ID })
 		terminal.View(c, p.term)
 		return
 	}
 
 	uispace.PaneHeader(c, "Terminal", "herdr-core", func() {
 		kit.ToolbarButton(c, "Refresh").OnClick(a.refreshTerminals)
-	})
+	}, func() { a.activePane = leaf.ID })
 	if a.hcErr != "" {
 		if kit.Banner(c, "danger", a.hcErr, "Retry") {
 			a.hcErr = ""
@@ -249,6 +245,29 @@ func (a *App) renderTerminal(c *ui.Context, leaf *domain.PaneNode, p *pane) {
 					ui.Button(c, "Bind").OnClick(func() { a.bindTerminal(item.Address) })
 				})
 			}
+		})
+	})
+}
+
+// terminalPaneActions are a live terminal pane's header actions. They
+// rearrange panes and detach the view; none stops or kills the terminal.
+func (a *App) terminalPaneActions(c *ui.Context, leaf *domain.PaneNode, p *pane) {
+	split := func(direction string) {
+		a.activePane = leaf.ID
+		a.splitPane(direction, domain.SurfaceTerm)
+	}
+	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+		kit.ToolbarButton(c, "Split right").OnClick(func() { split(domain.SplitRow) })
+		kit.ToolbarButton(c, "Split down").OnClick(func() { split(domain.SplitColumn) })
+		canClose := false
+		if root := a.tabRoot(); root != nil && len(root.Leaves()) > 1 {
+			canClose = true
+		}
+		kit.ToolbarButton(c, "Close pane").Disabled(!canClose).OnClick(func() { a.closePane(leaf.ID) })
+		kit.ToolbarButton(c, "Detach").OnClick(func() {
+			p.term.Close()
+			p.term = nil
+			p.attachStarted = false
 		})
 	})
 }
@@ -359,9 +378,9 @@ func (a *App) loadDiff(p *pane, target *repository.Repo) {
 	}()
 }
 
-func (a *App) renderActivity(c *ui.Context, p *pane) {
+func (a *App) renderActivity(c *ui.Context, leaf *domain.PaneNode, p *pane) {
 	state := a.conversationFor(a.sessionID)
-	uispace.PaneHeader(c, "Activity", "provider events", nil)
+	uispace.PaneHeader(c, "Activity", "provider events", nil, func() { a.activePane = leaf.ID })
 	if len(state.Snapshot.Tools) == 0 && len(state.Snapshot.Messages) == 0 {
 		kit.Empty(c, "No activity yet", "Provider-reported turns, tools and approvals appear here.", "")
 		return
@@ -389,9 +408,9 @@ func (a *App) renderActivity(c *ui.Context, p *pane) {
 	})
 }
 
-func (a *App) renderScreen(c *ui.Context, p *pane) {
+func (a *App) renderScreen(c *ui.Context, leaf *domain.PaneNode, p *pane) {
 	theme := c.Theme()
-	uispace.PaneHeader(c, "Remote Screen", "on demand", nil)
+	uispace.PaneHeader(c, "Remote Screen", "on demand", nil, func() { a.activePane = leaf.ID })
 	ui.Column(c).Padding(14).Gap(8).Children(func() {
 		ui.Text(c, "Remote Screen is opened from a paired device").
 			FontSize(12).FontWeight(600)

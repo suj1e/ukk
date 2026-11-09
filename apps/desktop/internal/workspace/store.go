@@ -153,10 +153,12 @@ func validateLayout(layout SessionLayout) error {
 
 // DefaultLayout returns a layout with one conversation tab.
 func DefaultLayout(sessionID string) SessionLayout {
-	root := NewLeaf(SurfaceChat)
+	// Herdr opens a shell, not a chat: the default tab is a terminal leaf with
+	// no address yet, which the Desktop fills when it starts the terminal.
+	root := NewTerminalLeaf("")
 	return SessionLayout{
 		SessionID: sessionID,
-		Tabs:      []Tab{{ID: newID(), Title: "Session", Root: root}},
+		Tabs:      []Tab{{ID: newID(), Title: "Terminal", Root: root}},
 		ActiveTab: "",
 	}
 }
