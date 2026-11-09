@@ -202,6 +202,14 @@ func (w *World) SelectTab(spaceID, tabID string) bool {
 
 // FocusPane records the focused pane in a tab. It reports false when the tab or
 // pane does not exist.
+// FocusedPane returns the private view's focused pane for a tab, or "" when
+// this client has not focused one. The value is local, never in the document.
+func (w *World) FocusedPane(tabID string) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.view.FocusedPanes[tabID]
+}
+
 func (w *World) FocusPane(tabID, paneID string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()

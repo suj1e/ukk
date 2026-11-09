@@ -1,6 +1,7 @@
 package app
 
 import (
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -9,15 +10,13 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/suj1e/ukk/apps/desktop/internal/agentview"
 	"github.com/suj1e/ukk/apps/desktop/internal/bridge"
+	"github.com/suj1e/ukk/apps/desktop/internal/corelayout"
 	"github.com/suj1e/ukk/apps/desktop/internal/extensions"
-	"github.com/suj1e/ukk/apps/desktop/internal/hc"
 	"github.com/suj1e/ukk/apps/desktop/internal/ui/kit"
-	uispace "github.com/suj1e/ukk/apps/desktop/internal/ui/workspace"
-	domain "github.com/suj1e/ukk/apps/desktop/internal/workspace"
 )
 
-// View renders the whole window: a spaces and agents sidebar, then the tabs
-// and panes of the selected Session.
+// View renders the whole window: spaces and agents in the sidebar, then the
+// tabs and panes of the active space's herdr-app document.
 func (a *App) View(c *ui.Context) {
 	if c.Theme().Dark != a.themeDark {
 		a.themeDark = c.Theme().Dark
@@ -27,32 +26,57 @@ func (a *App) View(c *ui.Context) {
 	ui.Row(c).Fill().Background(c.Theme().Background).Children(func() {
 		a.sidebar(c)
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
-			if a.sessionID != "" {
-				uispace.TabBar(c, a.layout.Tabs, a.activeTab, a.selectTab, a.closeTab, a.NewTerminal, a.newTabMenu, a.tabActions)
+			if space, ok := a.activeSpace(); ok {
+				activeID := ""
+				if tab, ok := a.activeTab(); ok {
+					activeID = tab.ID
+				}
+				a.tabBar(c, space, activeID)
 			}
 			ui.Column(c).Grow(1).Children(func() {
-				if a.sessionID == "" {
-					if kit.Empty(c, "No Space yet",
-						"A Space is a project root. Tabs open shells and Agent sessions inside it.",
-						"New Space") {
-						a.newSpace.Open = true
-					}
-					return
-				}
-				if a.notice != "" {
-					if kit.Banner(c, "warn", a.notice, "Dismiss") {
-						a.notice = ""
-					}
-				}
-				a.renderPanes(c)
+				a.body(c)
 			})
 			a.statusBar(c)
 		})
 	})
 	a.newSpaceDialog(c)
-	a.newSessionDialog(c)
+	a.renameDialog(c)
 	a.settingsDialog(c)
 	a.paletteDialog(c)
+}
+
+func (a *App) body(c *ui.Context) {
+	if a.world == nil {
+		if a.hcErr != "" {
+			if kit.Empty(c, "herdr-core is unavailable", firstLine(a.hcErr), "Retry") {
+				a.hcErr = ""
+				a.refreshTerminals()
+			}
+			return
+		}
+		if a.worldErr != "" {
+			if kit.Empty(c, "The shared world is unavailable", firstLine(a.worldErr), "Retry") {
+				a.retryWorld()
+			}
+			return
+		}
+		kit.Meta(c, "Loading the shared world…")
+		return
+	}
+	if _, ok := a.activeSpace(); !ok {
+		if kit.Empty(c, "No Space yet",
+			"A Space is a project folder. Tabs open shells and Agent conversations inside it.",
+			"New Space") {
+			a.NewSpace()
+		}
+		return
+	}
+	if a.notice != "" {
+		if kit.Banner(c, "warn", a.notice, "Dismiss") {
+			a.notice = ""
+		}
+	}
+	a.renderPanes(c)
 }
 
 // newTabMenu offers the surfaces a new tab can show.
@@ -61,35 +85,79 @@ func (a *App) newTabMenu(m *ui.Menu) {
 		a.NewTerminal()
 	}
 	if m.Item("Chat").Chosen() {
-		a.addTab(domain.SurfaceChat)
+		a.newConversationTab()
 	}
 	if m.Item("Files").Chosen() {
-		a.addTab(domain.SurfaceFiles)
+		a.newModTab("files", "Files")
 	}
 	if m.Item("Diff").Chosen() {
-		a.addTab(domain.SurfaceDiff)
+		a.newModTab("changes", "Diff")
 	}
 }
 
-// tabActions are the workspace actions beside the tab strip.
-func (a *App) tabActions(c *ui.Context) {
-	if ui.Button(c, "+ Chat").FontSize(11).Clicked() {
-		a.addTab(domain.SurfaceChat)
-	}
-	ui.PopoverMenuButton(c, "Split", func(m *ui.Menu) {
-		for _, direction := range []struct {
-			label string
-			value string
-		}{{"Split right", domain.SplitRow}, {"Split down", domain.SplitColumn}} {
-			direction := direction
-			m.Submenu(direction.label, func(sub *ui.Menu) {
-				for _, surface := range []string{domain.SurfaceChat, domain.SurfaceTerm, domain.SurfaceFiles, domain.SurfaceDiff, domain.SurfaceLog} {
-					surface := surface
-					if sub.Item(surfaceTitle(surface)).Chosen() {
-						a.splitPane(direction.value, surface)
-					}
+// tabBar shows the tabs of the active space and the world actions beside them.
+func (a *App) tabBar(c *ui.Context, space corelayout.SharedSpace, activeID string) {
+	theme := c.Theme()
+	ui.Row(c).FillWidth().Height(42).PaddingX(10).Gap(3).
+		AlignItems(ui.Center).Background(theme.Surface).
+		BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).
+		Role(ui.RoleTabList).Children(func() {
+		for _, tab := range space.Tabs {
+			tab := tab
+			name := tabDisplayName(tab)
+			selected := tab.ID == activeID
+			row := ui.Row(c).Gap(6).AlignItems(ui.Center).
+				Height(29).PaddingX(10).Radius(7).
+				Role(ui.RoleTab).AccessSelected(selected)
+			if selected {
+				row.Background(theme.SurfaceHover).Border(1, theme.Border)
+			}
+			row.Children(func() {
+				label := ui.ButtonBase(c).Label(name)
+				label.Role(ui.RoleTab).AccessSelected(selected)
+				label.Children(func() {
+					ui.Text(c, name).FontSize(12).
+						TextColor(boolColor(selected, theme.Text, theme.TextMuted))
+				})
+				if label.Clicked() && !selected {
+					a.selectTab(tab.ID)
+				}
+				close := ui.ButtonBase(c).Label("Close "+name).
+					Size(18, 18).Radius(4)
+				close.Children(func() {
+					ui.Text(c, "×").FontSize(13).TextColor(theme.TextMuted)
+				})
+				if close.Clicked() {
+					a.closeTab(tab.ID)
 				}
 			})
+		}
+		ui.Spacer(c)
+		ui.PopoverMenuButton(c, "+", a.newTabMenu).Label("New tab").
+			PaddingX(7).PaddingY(3).FontSize(13)
+		if tab, ok := a.activeTab(); ok {
+			active := tab
+			ui.PopoverMenuButton(c, "···", func(m *ui.Menu) {
+				if m.Item("Rename tab…").Chosen() {
+					a.openTabRename(space, active)
+				}
+				if m.Item("Close tab").Chosen() {
+					a.closeTab(active.ID)
+				}
+			}).Label("Tab actions").PaddingX(6).PaddingY(3).FontSize(12)
+		}
+		a.tabActions(c)
+	})
+}
+
+// tabActions are the world actions beside the tab strip.
+func (a *App) tabActions(c *ui.Context) {
+	ui.PopoverMenuButton(c, "Split", func(m *ui.Menu) {
+		if m.Item("Split right").Chosen() {
+			a.splitActive(corelayout.TypeRow)
+		}
+		if m.Item("Split down").Chosen() {
+			a.splitActive(corelayout.TypeColumn)
 		}
 	}).PaddingX(8).PaddingY(3).FontSize(11)
 	if ui.Button(c, "Palette").Label("Command palette").PaddingX(7).PaddingY(3).FontSize(11).Clicked() {
@@ -112,60 +180,57 @@ func (a *App) sidebar(c *ui.Context) {
 		ui.Scroll(c).Grow(1).MinHeight(90).Children(func() {
 			ui.Column(c).Gap(1).PaddingX(8).PaddingY(4).Children(func() {
 				kit.SectionLabel(c, "Spaces")
-				for _, space := range a.meta.Spaces {
+				spaces := a.spaces()
+				activeID := ""
+				if active, ok := a.activeSpace(); ok {
+					activeID = active.ID
+				}
+				if len(spaces) == 0 {
+					if a.world == nil {
+						kit.Meta(c, "The shared world is not loaded.")
+					} else {
+						kit.Meta(c, "No Space yet.")
+					}
+				}
+				for _, space := range spaces {
 					space := space
-					selected := space.ID == a.spaceID
-					button := ui.ButtonBase(c).FillWidth()
-					button.Children(func() {
-						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(4, 7).Radius(6).
-							Background(boolColor(selected, theme.SurfaceHover, ui.Transparent)).Children(func() {
-							ui.Box(c).Size(18, 18).Radius(4).Background(spaceTint(space.Title)).
-								Center().Children(func() {
-								ui.Text(c, initial(space.Title)).FontSize(9).FontWeight(700).
-									TextColor(theme.InverseText)
+					name := spaceDisplayName(space)
+					selected := activeID == space.ID
+					ui.Row(c).FillWidth().Gap(2).AlignItems(ui.Center).Children(func() {
+						button := ui.ButtonBase(c).Grow(1)
+						button.Children(func() {
+							ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(4, 7).Radius(6).
+								Background(boolColor(selected, theme.SurfaceHover, ui.Transparent)).Children(func() {
+								ui.Box(c).Size(18, 18).Radius(4).Background(spaceTint(name)).
+									Center().Children(func() {
+									ui.Text(c, initial(name)).FontSize(9).FontWeight(700).
+										TextColor(theme.InverseText)
+								})
+								ui.Column(c).Grow(1).Gap(1).Children(func() {
+									ui.Text(c, name).FontSize(12).FontWeight(600).NoWrap().
+										Ellipsis(name)
+									if space.Folder != "" {
+										ui.Text(c, space.Folder).FontSize(9).TextColor(theme.TextMuted).
+											NoWrap().Ellipsis(space.Folder)
+									}
+								})
+								if count := len(space.Tabs); count > 0 {
+									ui.Text(c, strconv.Itoa(count)).FontSize(9).TextColor(theme.TextMuted)
+								}
 							})
-							ui.Column(c).Grow(1).Gap(1).Children(func() {
-								ui.Text(c, space.Title).FontSize(12).FontWeight(600).NoWrap().
-									Ellipsis(space.Title)
-								ui.Text(c, space.ProjectRoot).FontSize(9).TextColor(theme.TextMuted).
-									NoWrap().Ellipsis(space.ProjectRoot)
-							})
-							if count := a.sessionCount(space.ID); count > 0 {
-								ui.Text(c, strconv.Itoa(count)).FontSize(9).TextColor(theme.TextMuted)
-							}
 						})
+						if button.Clicked() {
+							a.selectSpace(space.ID)
+						}
+						ui.PopoverMenuButton(c, "···", func(m *ui.Menu) {
+							if m.Item("Rename space…").Chosen() {
+								a.openSpaceRename(space)
+							}
+							if m.Item("Close space").Chosen() {
+								a.closeSpace(space.ID)
+							}
+						}).Label("Space actions").FontSize(11).PaddingX(4).PaddingY(2)
 					})
-					if button.Clicked() {
-						a.spaceID = space.ID
-						a.sessionID = ""
-						a.layout = domain.SessionLayout{}
-						a.activeTab = ""
-						a.activePane = ""
-						a.pickSelection()
-						a.reload()
-					}
-					for _, session := range a.meta.Sessions {
-						if session.SpaceID != space.ID {
-							continue
-						}
-						session := session
-						indicator := theme.TextMuted
-						switch session.Lifecycle {
-						case domain.LifecycleActive:
-							indicator = theme.Success
-						case domain.LifecyclePaused:
-							indicator = theme.Warning
-						}
-						ui.Column(c).PaddingStart(14).Children(func() {
-							if uispace.SessionRow(c, session.Title, session.Lifecycle, indicator, session.ID == a.sessionID) {
-								a.sessionID = session.ID
-								a.layout = domain.SessionLayout{}
-								a.activeTab = ""
-								a.activePane = ""
-								a.reload()
-							}
-						})
-					}
 				}
 			})
 		})
@@ -179,11 +244,11 @@ func (a *App) sidebar(c *ui.Context) {
 		ui.Column(c).FillWidth().Height(69).Padding(8, 4).Gap(0).BorderWidth(1, 0, 0, 0).
 			BorderColor(theme.Border).Children(func() {
 			if ui.Button(c, "Settings").FillWidth().Height(28).FontSize(12).Clicked() {
-				a.settings.Open = true
-				a.loadRemoteStatus()
+				a.OpenSettings()
 			}
 			if ui.Button(c, "+ Space").FillWidth().Height(28).FontSize(12).Clicked() {
 				a.newSpace.Open = true
+				a.newSpace.Err = ""
 			}
 		})
 	})
@@ -249,7 +314,7 @@ func (a *App) agentSidebar(c *ui.Context) {
 					})
 				})
 				if button.Clicked() {
-					a.openTerminal(hc.Terminal{Address: agent.Address})
+					a.openTerminal(agent.Address)
 				}
 			}
 		}
@@ -269,8 +334,8 @@ func (a *App) agentSidebar(c *ui.Context) {
 					kit.Dot(c, agentColor(snapshot.State, theme))
 					ui.Column(c).Grow(1).Gap(0).Children(func() {
 						title := snapshot.Provider
-						if session, ok := a.sessionByID(snapshot.SessionID); ok {
-							title = session.Title
+						if name := a.tabTitleForSession(snapshot.SessionID); name != "" {
+							title = name
 						}
 						ui.Text(c, title).FontSize(11).NoWrap().Ellipsis(title)
 						ui.Text(c, snapshot.Provider+" · "+snapshot.State).FontSize(9).
@@ -325,6 +390,26 @@ func agentElapsed(snapshot bridge.AgentSnapshot) string {
 	return ""
 }
 
+// tabDisplayName is the tab's name, or a neutral label when it has none.
+func tabDisplayName(tab corelayout.SharedTab) string {
+	if name := strings.TrimSpace(tab.Name); name != "" {
+		return name
+	}
+	return "Tab"
+}
+
+// spaceDisplayName is the space's name, or its folder's base name when the
+// document has not named it.
+func spaceDisplayName(space corelayout.SharedSpace) string {
+	if name := strings.TrimSpace(space.Name); name != "" {
+		return name
+	}
+	if space.Folder != "" {
+		return filepath.Base(space.Folder)
+	}
+	return "Space"
+}
+
 // spaceTint gives a Space a stable color, like the program tiles in Herdr.
 func spaceTint(title string) ui.Color {
 	colors := []string{"#E8912A", "#5AA9FF", "#4CC38A", "#C792EA", "#F85149", "#E3B341", "#56D4DD"}
@@ -350,20 +435,6 @@ func boolColor(on bool, yes, no ui.Color) ui.Color {
 	return no
 }
 
-func (a *App) bridgeColor() ui.Color {
-	theme := a.theme
-	if theme == nil {
-		return ui.Transparent
-	}
-	if a.bridge != nil && a.bridgeErr == "" {
-		return theme.Success
-	}
-	if a.bridgeErr != "" {
-		return theme.Danger
-	}
-	return theme.Warning
-}
-
 func (a *App) bridgeLabel() string {
 	switch {
 	case a.bridge != nil && a.bridgeErr == "":
@@ -373,16 +444,6 @@ func (a *App) bridgeLabel() string {
 	default:
 		return "bridge starting"
 	}
-}
-
-func herdrLabel(connected bool, err string) string {
-	if connected {
-		return "herdr-core connected"
-	}
-	if err != "" {
-		return "herdr-core: " + firstLine(err)
-	}
-	return "herdr-core not connected"
 }
 
 // herdrColor is the status dot for the terminal runtime.
@@ -408,17 +469,6 @@ func firstLine(text string) string {
 	return text
 }
 
-func (a *App) selectTab(id string) {
-	a.activeTab = id
-	a.mutateLayout(func(layout *domain.SessionLayout) error {
-		layout.ActiveTab = id
-		return nil
-	})
-	if leaves := a.tabRoot().Leaves(); len(leaves) > 0 {
-		a.activePane = leaves[0].ID
-	}
-}
-
 func (a *App) newSpaceDialog(c *ui.Context) {
 	if !a.newSpace.Open {
 		return
@@ -427,13 +477,13 @@ func (a *App) newSpaceDialog(c *ui.Context) {
 	ui.Modal(c, &form.Open, func() {
 		ui.Column(c).Width(460).Gap(12).Padding(20).Children(func() {
 			kit.PageTitle(c, "New Space")
-			ui.Text(c, "A Space is a project root. Sessions and Agents live inside it.").
+			ui.Text(c, "A Space is a project folder. Its first tab opens a shell there; Agent conversations are tabs inside it.").
 				FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 			ui.Field(c, "Name", func() {
-				ui.TextInput(c, &form.Title).Placeholder("ukk").FillWidth()
+				ui.TextInput(c, &form.Name).Placeholder("ukk").FillWidth()
 			})
-			ui.Field(c, "Project root", func() {
-				ui.TextInput(c, &form.Root).Placeholder("/Users/you/project").FillWidth()
+			ui.Field(c, "Project folder", func() {
+				ui.TextInput(c, &form.Folder).Placeholder("/Users/you/project").FillWidth()
 			})
 			kit.ErrorLine(c, form.Err)
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
@@ -441,7 +491,7 @@ func (a *App) newSpaceDialog(c *ui.Context) {
 					form.Open = false
 				}
 				if ui.PrimaryButton(c, "Create").Disabled(form.Busy ||
-					strings.TrimSpace(form.Title) == "" || strings.TrimSpace(form.Root) == "").
+					strings.TrimSpace(form.Name) == "" || strings.TrimSpace(form.Folder) == "").
 					Clicked() {
 					a.newSpaceSubmit()
 				}
@@ -450,26 +500,28 @@ func (a *App) newSpaceDialog(c *ui.Context) {
 	})
 }
 
-func (a *App) newSessionDialog(c *ui.Context) {
-	if !a.newSession.Open {
+func (a *App) renameDialog(c *ui.Context) {
+	if !a.rename.Open {
 		return
 	}
-	form := &a.newSession
+	form := &a.rename
+	title := "Rename space"
+	if form.Kind == "tab" {
+		title = "Rename tab"
+	}
 	ui.Modal(c, &form.Open, func() {
 		ui.Column(c).Width(420).Gap(12).Padding(20).Children(func() {
-			kit.PageTitle(c, "New Session")
-			ui.Text(c, "A Session groups Agent runs, terminals, files and diffs. It never owns a process by itself.").
-				FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
-			ui.Field(c, "Title", func() {
-				ui.TextInput(c, &form.Title).Placeholder("Implement the bridge").FillWidth()
+			kit.PageTitle(c, title)
+			ui.Field(c, "Name", func() {
+				ui.TextInput(c, &form.Name).FillWidth()
 			})
 			kit.ErrorLine(c, form.Err)
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, "Cancel").Clicked() {
 					form.Open = false
 				}
-				if ui.PrimaryButton(c, "Create").Disabled(form.Busy || strings.TrimSpace(form.Title) == "").Clicked() {
-					a.newSessionSubmit()
+				if ui.PrimaryButton(c, "Rename").Disabled(strings.TrimSpace(form.Name) == "").Clicked() {
+					a.renameSubmit()
 				}
 			})
 		})
@@ -668,7 +720,7 @@ func (a *App) aboutSettings(c *ui.Context) {
 		kit.KeyValue(c, "Bridge", a.bridgeLabel())
 		kit.KeyValue(c, "herdr-core", a.hcHello.Version)
 		kit.KeyValue(c, "Core", a.hcHello.Core.ID)
-		ui.Text(c, "ukk keeps Agent processes in the background bridge and terminals in herdr-core. Closing this window detaches views; it does not stop them.").
+		ui.Text(c, "ukk keeps Agent processes in the background bridge and terminals in herdr-core. Closing this view detaches metadata; it does not stop them.").
 			FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 	})
 }

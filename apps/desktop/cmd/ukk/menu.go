@@ -26,14 +26,15 @@ func buildMenu(application *app.App) *mygo.Menu {
 		{
 			Label: "File",
 			Submenu: []*mygo.MenuItem{
+				{Label: "New Space", Accelerator: "CmdOrCtrl+Shift+N", Click: func(*mygo.MenuItem, *mygo.Window) {
+					application.NewSpace()
+				}},
+				mygo.Separator(),
 				{Label: "New Terminal", Accelerator: "CmdOrCtrl+Shift+T", Click: func(*mygo.MenuItem, *mygo.Window) {
 					application.NewTerminal()
 				}},
 				{Label: "New Tab", Accelerator: "CmdOrCtrl+T", Click: func(*mygo.MenuItem, *mygo.Window) {
 					application.NewTab()
-				}},
-				{Label: "New Session", Accelerator: "CmdOrCtrl+N", Click: func(*mygo.MenuItem, *mygo.Window) {
-					application.NewSession()
 				}},
 				mygo.Separator(),
 				{Role: mygo.RoleClose},

@@ -2,23 +2,27 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/suj1e/ukk/apps/desktop/internal/agents"
+	"github.com/suj1e/ukk/apps/desktop/internal/corelayout"
 	"github.com/suj1e/ukk/apps/desktop/internal/repository"
 	"github.com/suj1e/ukk/apps/desktop/internal/ui/conversation"
 	"github.com/suj1e/ukk/apps/desktop/internal/ui/kit"
 	uiviews "github.com/suj1e/ukk/apps/desktop/internal/ui/repository"
 	"github.com/suj1e/ukk/apps/desktop/internal/ui/terminal"
-	uispace "github.com/suj1e/ukk/apps/desktop/internal/ui/workspace"
-	domain "github.com/suj1e/ukk/apps/desktop/internal/workspace"
+	"github.com/suj1e/ukk/apps/desktop/internal/world"
 )
 
+// pane is the presentation state of one block, keyed by the block's id. It
+// holds attachments and view models only; the terminal process lives in
+// herdr-core and the Agent lives in the bridge.
 type pane struct {
-	surface         string
-	agentRunID      string
 	terminalAddress string
+	convSession     string
+	folder          string
 	term            *terminal.State
 	files           *uiviews.FilesState
 	diff            *uiviews.DiffState
@@ -28,108 +32,199 @@ type pane struct {
 	filesLoading  bool
 	diffLoaded    bool
 	diffLoading   bool
-	bindOpen      bool
-	err           string
 }
 
-func (a *App) paneFor(id string) *pane {
-	if id == "" {
-		return nil
-	}
-	leaf := a.tabRoot().Find(id)
-	if leaf == nil {
-		return nil
-	}
-	if existing, ok := a.panes[id]; ok {
+// paneFor returns the presentation state for a block, reconciling it with the
+// block's current content. The shared document can be edited by another
+// client, so an address or mod props may legitimately change under an id.
+func (a *App) paneFor(block corelayout.Node) *pane {
+	address := blockTerminalAddress(block)
+	sessionID := conversationBlockSession(block)
+	if existing, ok := a.panes[block.ID]; ok {
+		if existing.terminalAddress != address {
+			if existing.term != nil {
+				existing.term.Close()
+				existing.term = nil
+			}
+			existing.attachStarted = false
+			existing.terminalAddress = address
+		}
+		existing.convSession = sessionID
 		return existing
 	}
-	p := &pane{surface: leaf.Surface, agentRunID: leaf.AgentRunID, terminalAddress: leaf.TerminalAddress}
-	a.panes[id] = p
+	p := &pane{terminalAddress: address, convSession: sessionID}
+	a.panes[block.ID] = p
 	return p
 }
 
 func (a *App) renderPanes(c *ui.Context) {
-	root := a.tabRoot()
-	if root == nil {
-		kit.Empty(c, "No tab", "Create a tab to begin.", "")
+	tab, ok := a.activeTab()
+	if !ok {
+		if kit.Empty(c, "No tab", "Open a shell or conversation tab to begin.", "New Tab") {
+			a.NewTerminal()
+		}
 		return
 	}
-	uispace.Layout(c, root, a.sizes, func(nodeID string, percent float32) {
-		a.mutateLayout(func(layout *domain.SessionLayout) error {
-			for index := range layout.Tabs {
-				if layout.Tabs[index].ID != a.activeTab {
-					continue
-				}
-				if node := layout.Tabs[index].Root.Find(nodeID); node != nil {
-					node.Ratio = percent / 100
-				}
-			}
-			return nil
-		})
-	}, func(c *ui.Context, leaf *domain.PaneNode, grow float32) {
-		a.renderLeaf(c, leaf)
+	if len(tab.Root.Blocks()) == 0 {
+		kit.Empty(c, "No pane in this tab", "The tab's layout is empty.", "")
+		return
+	}
+	focused := a.focusedPane(tab)
+	renderWorldNode(c, tab.Root, focused, func(c *ui.Context, block corelayout.Node) {
+		a.renderBlock(c, block, focused)
 	})
 }
 
-func (a *App) renderLeaf(c *ui.Context, leaf *domain.PaneNode) {
-	p := a.paneFor(leaf.ID)
-	if p == nil {
-		return
-	}
+func (a *App) renderBlock(c *ui.Context, block corelayout.Node, focused string) {
+	p := a.paneFor(block)
 	theme := c.Theme()
-	active := leaf.ID == a.activePane
 	ui.Row(c).Fill().Padding(4).Children(func() {
 		rail := ui.Box(c).Width(2).FillHeight()
 		if rail.Clicked() {
-			a.activePane = leaf.ID
+			a.focusBlock(block.ID)
 		}
 		card := ui.Column(c).Grow(1).FillHeight().Background(kit.Card(theme)).Radius(10)
-		if active {
+		if block.ID != "" && block.ID == focused {
 			card.Border(1, theme.Accent)
 		} else {
 			card.Border(1, theme.Border)
 		}
 		card.Children(func() {
-			a.renderSurface(c, leaf, p)
+			a.paneHeader(c, block, p)
+			a.renderBlockContent(c, block, p)
 		})
 	})
 }
 
-func (a *App) renderSurface(c *ui.Context, leaf *domain.PaneNode, p *pane) {
-	switch p.surface {
-	case domain.SurfaceChat:
-		a.renderConversation(c, p)
-	case domain.SurfaceTerm:
-		a.renderTerminal(c, leaf, p)
-	case domain.SurfaceFiles:
-		a.renderFiles(c, p)
-	case domain.SurfaceDiff:
-		a.renderDiff(c, p)
-	case domain.SurfaceLog:
-		a.renderActivity(c, leaf, p)
-	case domain.SurfaceSpec:
-		a.renderScreen(c, leaf, p)
-	default:
-		kit.Empty(c, "Unknown surface", p.surface, "")
+// paneHeader names a block and carries its view-only actions. The title area
+// focuses the pane; the menu only rearranges or detaches views.
+func (a *App) paneHeader(c *ui.Context, block corelayout.Node, p *pane) {
+	theme := c.Theme()
+	title, subtitle := a.blockTitle(block)
+	ui.Row(c).FillWidth().Height(30).PaddingX(10).Gap(8).AlignItems(ui.Center).
+		BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
+		area := ui.ButtonBase(c).Label(title).FillHeight()
+		area.Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, title).FontSize(12).FontWeight(600).NoWrap()
+				if subtitle != "" {
+					ui.Text(c, subtitle).FontSize(10).TextColor(theme.TextMuted).NoWrap().Ellipsis(subtitle)
+				}
+			})
+		})
+		if area.Clicked() {
+			a.focusBlock(block.ID)
+		}
+		ui.Spacer(c)
+		a.paneMenu(c, block, p)
+	})
+}
+
+func (a *App) paneMenu(c *ui.Context, block corelayout.Node, p *pane) {
+	ui.PopoverMenuButton(c, "···", func(m *ui.Menu) {
+		if m.Item("Split right").Chosen() {
+			a.focusBlock(block.ID)
+			a.splitActive(corelayout.TypeRow)
+		}
+		if m.Item("Split down").Chosen() {
+			a.focusBlock(block.ID)
+			a.splitActive(corelayout.TypeColumn)
+		}
+		if m.Item("Close pane").Chosen() {
+			a.closePane(block.ID)
+		}
+		if p.term != nil {
+			if m.Item("Detach view").Chosen() {
+				p.term.Close()
+				p.term = nil
+				p.attachStarted = false
+			}
+		}
+	}).Label("Pane actions").FontSize(12).PaddingX(6).PaddingY(2)
+}
+
+func (a *App) blockTitle(block corelayout.Node) (string, string) {
+	if address := blockTerminalAddress(block); address != "" {
+		return "Terminal", address
 	}
+	if block.Content != nil && block.Content.Mod != nil {
+		switch *block.Content.Mod {
+		case "conversation":
+			if sessionID := conversationBlockSession(block); sessionID != "" {
+				return "Conversation", kit.ShortID(sessionID)
+			}
+			return "Conversation", "no session"
+		case "files":
+			return "Files", a.activeFolder()
+		case "changes":
+			return "Diff", a.activeFolder()
+		default:
+			return "Unsupported", *block.Content.Mod
+		}
+	}
+	if block.Content != nil && block.Content.Tab != nil {
+		return "Context", "content.tab"
+	}
+	return "Unsupported", "unknown content"
+}
+
+func (a *App) renderBlockContent(c *ui.Context, block corelayout.Node, p *pane) {
+	if p.terminalAddress != "" {
+		a.renderTerminal(c, p)
+		return
+	}
+	if block.Content != nil && block.Content.Mod != nil {
+		switch *block.Content.Mod {
+		case "conversation":
+			a.renderConversation(c, p)
+		case "files":
+			a.renderFiles(c, p)
+		case "changes":
+			a.renderDiff(c, p)
+		default:
+			a.renderUnsupported(c, block)
+		}
+		return
+	}
+	a.renderUnsupported(c, block)
+}
+
+// renderUnsupported names explicitly why a pane cannot be drawn. It never
+// substitutes data the document does not carry.
+func (a *App) renderUnsupported(c *ui.Context, block corelayout.Node) {
+	detail := "This Desktop build cannot render this pane's content."
+	if block.Content != nil {
+		switch {
+		case block.Content.Tab != nil:
+			detail = "Context panes (content.tab) are not supported by this Desktop build."
+		case block.Content.Mod != nil:
+			detail = "The mod " + *block.Content.Mod + " is not supported by this Desktop build."
+		case block.Content.Terminal == nil && block.Content.Agent == nil:
+			detail = "The block has no recognized content variant."
+		}
+	}
+	kit.Empty(c, "Unsupported pane", detail, "")
 }
 
 func (a *App) renderConversation(c *ui.Context, p *pane) {
-	if a.sessionID == "" {
-		kit.Empty(c, "No Session selected", "Create or select a Session first.", "")
+	if p.convSession == "" {
+		kit.Empty(c, "Conversation has no session",
+			"This conversation block has no props.session, so no Agent can be addressed.", "")
 		return
 	}
-	state := a.conversationFor(a.sessionID)
+	state := a.conversationFor(p.convSession)
 	if state.Snapshot.Provider == "" && !state.Loading && state.ActionErr == "" {
 		a.loadAgentSnapshot(state)
 	}
+	space, _ := a.activeSpace()
+	sessionID := p.convSession
 	conversation.View(c, state, conversation.Actions{
-		Start:  a.startAgent,
-		Prompt: a.prompt,
-		Abort:  a.abortAgent,
-		Stop:   a.stopAgent,
+		Start:  func() { a.startAgent(sessionID, space.Folder) },
+		Prompt: func(text string) { a.prompt(sessionID, text) },
+		Abort:  func() { a.abortAgent(sessionID) },
+		Stop:   func() { a.stopAgent(sessionID) },
 		Approve: func(id string, decision agents.Decision) {
-			a.approve(id, string(decision))
+			a.approve(sessionID, id, string(decision))
 		},
 	})
 }
@@ -158,126 +253,52 @@ func (a *App) loadAgentSnapshot(state *conversation.State) {
 	}()
 }
 
-func (a *App) renderTerminal(c *ui.Context, leaf *domain.PaneNode, p *pane) {
-	theme := c.Theme()
-	if p.term == nil && p.agentRunID != "" {
-		if run, ok := a.agentRun(p.agentRunID); ok {
-			p.term = terminal.New(run.TerminalAddress, a.agentLabel(run), false)
-		}
-	}
-	if p.term == nil && p.terminalAddress != "" {
-		p.term = terminal.New(p.terminalAddress, p.terminalAddress, false)
-	}
-	if p.term != nil {
-		if a.termLibErr != "" {
-			kit.Banner(c, "danger", "Terminal engine unavailable: "+a.termLibErr, "")
-		} else if !a.termLibReady {
-			kit.Banner(c, "warn", "Loading the terminal engine…", "")
-		}
-		if a.hc == nil && !a.termLoading && !a.termTried && a.hcErr == "" {
-			a.refreshTerminals()
-		}
-		if a.hc != nil && a.termLibReady {
-			a.attachPaneTerminal(p)
-		}
-		uispace.PaneHeader(c, "Terminal", p.term.Address, func() {
-			a.terminalPaneActions(c, leaf, p)
-		}, func() { a.activePane = leaf.ID })
-		terminal.View(c, p.term)
+func (a *App) renderTerminal(c *ui.Context, p *pane) {
+	if p.terminalAddress == "" {
+		kit.Empty(c, "Terminal has no address",
+			"This block does not name a herdr-core terminal, so there is nothing to attach.", "")
 		return
 	}
-
-	uispace.PaneHeader(c, "Terminal", "herdr-core", func() {
-		kit.ToolbarButton(c, "Refresh").OnClick(a.refreshTerminals)
-	}, func() { a.activePane = leaf.ID })
-	if a.hcErr != "" {
+	if p.term == nil {
+		p.term = terminal.New(p.terminalAddress, p.terminalAddress, false)
+	}
+	if a.termLibErr != "" {
+		kit.Banner(c, "danger", "Terminal engine unavailable: "+a.termLibErr, "")
+	} else if !a.termLibReady {
+		kit.Banner(c, "warn", "Loading the terminal engine…", "")
+	}
+	if a.hc == nil && !a.termLoading && !a.termTried && a.hcErr == "" {
+		a.refreshTerminals()
+	}
+	if a.hc == nil && a.hcErr != "" {
 		if kit.Banner(c, "danger", a.hcErr, "Retry") {
 			a.hcErr = ""
 			a.refreshTerminals()
 		}
 	}
-	if a.hc == nil {
-		if ui.PrimaryButton(c, "Connect to herdr-core").Clicked() {
-			a.termTried = false
-			a.refreshTerminals()
-		}
-		kit.Meta(c, "Connecting reads the terminal list; it never starts or stops a program.")
-		return
+	if a.hc != nil && a.termLibReady {
+		a.attachPaneTerminal(p)
 	}
-
-	bound := a.agents()
-	if len(bound) > 0 {
-		kit.SectionLabel(c, "Bound to this Session")
-		ui.Column(c).Gap(4).Padding(8).Children(func() {
-			for _, run := range bound {
-				run := run
-				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(6, 8).Radius(theme.Radius).
-					Background(theme.Surface).Border(1, theme.Border).Children(func() {
-					ui.Column(c).Grow(1).Gap(1).Children(func() {
-						ui.Text(c, a.agentLabel(run)).FontSize(11).FontWeight(600)
-						kit.Mono(c, run.CoreID+" · "+run.TerminalAddress)
-					})
-					ui.Button(c, "Attach").OnClick(func() { a.attachAgentRun(run) })
-				})
-			}
-		})
-	}
-
-	kit.SectionLabel(c, "Live terminals")
-	rows := a.sortedTerminals()
-	if len(rows) == 0 {
-		kit.Meta(c, "herdr-core reports no live terminal.")
-		return
-	}
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(4).Padding(8).Children(func() {
-			for _, item := range rows {
-				item := item
-				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(6, 8).Radius(theme.Radius).
-					Background(theme.Surface).Border(1, theme.Border).Children(func() {
-					ui.Column(c).Grow(1).Gap(1).Children(func() {
-						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, a.terminalLabel(item)).FontSize(11).FontWeight(600).NoWrap()
-							kit.Pill(c, item.State, item.State)
-						})
-						kit.Mono(c, item.Address)
-					})
-					ui.Button(c, "Bind").OnClick(func() { a.bindTerminal(item.Address) })
-				})
-			}
-		})
-	})
+	terminal.View(c, p.term)
 }
 
-// terminalPaneActions are a live terminal pane's header actions. They
-// rearrange panes and detach the view; none stops or kills the terminal.
-func (a *App) terminalPaneActions(c *ui.Context, leaf *domain.PaneNode, p *pane) {
-	split := func(direction string) {
-		a.activePane = leaf.ID
-		a.splitPane(direction, domain.SurfaceTerm)
+func (a *App) activeFolder() string {
+	space, ok := a.activeSpace()
+	if !ok {
+		return ""
 	}
-	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-		kit.ToolbarButton(c, "Split right").OnClick(func() { split(domain.SplitRow) })
-		kit.ToolbarButton(c, "Split down").OnClick(func() { split(domain.SplitColumn) })
-		canClose := false
-		if root := a.tabRoot(); root != nil && len(root.Leaves()) > 1 {
-			canClose = true
-		}
-		kit.ToolbarButton(c, "Close pane").Disabled(!canClose).OnClick(func() { a.closePane(leaf.ID) })
-		kit.ToolbarButton(c, "Detach").OnClick(func() {
-			p.term.Close()
-			p.term = nil
-			p.attachStarted = false
-		})
-	})
+	return space.Folder
 }
 
 func (a *App) renderFiles(c *ui.Context, p *pane) {
-	if a.sessionID == "" {
-		kit.Empty(c, "No Session selected", "Files belong to a Session's project.", "")
-		return
+	folder := a.activeFolder()
+	if p.folder != folder {
+		p.files = nil
+		p.filesLoaded = false
+		p.filesLoading = false
+		p.folder = folder
 	}
-	target, message := a.currentRepo()
+	target, message := a.repoFor(folder)
 	if message != "" {
 		kit.Empty(c, "Repository unavailable", message, "")
 		return
@@ -293,7 +314,7 @@ func (a *App) renderFiles(c *ui.Context, p *pane) {
 			a.filesReload(p)
 		}
 	}, func() {
-		a.openDiffPane()
+		a.openDiffTab()
 	}, func(path string) {
 		a.loadFileInto(p, path)
 	})
@@ -302,6 +323,7 @@ func (a *App) renderFiles(c *ui.Context, p *pane) {
 func (a *App) loadFiles(p *pane) {
 	p.filesLoading = true
 	repo := p.files.Repo
+	files := p.files
 	go func() {
 		ctx, cancel := context.WithTimeout(a.bridgeCtx, 15*time.Second)
 		defer cancel()
@@ -309,16 +331,19 @@ func (a *App) loadFiles(p *pane) {
 		nodes, treeErr := repo.Tree(ctx)
 		a.update(func() {
 			p.filesLoading = false
+			if p.files != files {
+				return
+			}
 			p.filesLoaded = true
 			if statusErr != nil {
-				p.files.Err = statusErr.Error()
+				files.Err = statusErr.Error()
 			} else {
-				p.files.Status = status
+				files.Status = status
 			}
 			if treeErr != nil {
-				p.files.Err = treeErr.Error()
+				files.Err = treeErr.Error()
 			} else {
-				p.files.Nodes = nodes
+				files.Nodes = nodes
 			}
 		})
 	}()
@@ -334,14 +359,26 @@ func (a *App) loadFileInto(p *pane, path string) {
 		return
 	}
 	repo := p.files.Repo
+	files := p.files
 	go func() {
 		content, err := repo.Read(path)
-		a.update(func() { p.files.SetContent(path, content, err) })
+		a.update(func() {
+			if p.files == files {
+				files.SetContent(path, content, err)
+			}
+		})
 	}()
 }
 
 func (a *App) renderDiff(c *ui.Context, p *pane) {
-	target, message := a.currentRepo()
+	folder := a.activeFolder()
+	if p.folder != folder {
+		p.diff = nil
+		p.diffLoaded = false
+		p.diffLoading = false
+		p.folder = folder
+	}
+	target, message := a.repoFor(folder)
 	if message != "" {
 		kit.Empty(c, "Repository unavailable", message, "")
 		return
@@ -362,217 +399,91 @@ func (a *App) renderDiff(c *ui.Context, p *pane) {
 
 func (a *App) loadDiff(p *pane, target *repository.Repo) {
 	p.diffLoading = true
+	diff := p.diff
 	go func() {
 		ctx, cancel := context.WithTimeout(a.bridgeCtx, 15*time.Second)
 		defer cancel()
 		patch, err := target.Diff(ctx, repository.ScopeHead)
 		a.update(func() {
 			p.diffLoading = false
-			p.diffLoaded = true
-			if err != nil {
-				p.diff.Err = err.Error()
+			if p.diff != diff {
 				return
 			}
-			p.diff.SetPatch(patch)
+			p.diffLoaded = true
+			if err != nil {
+				diff.Err = err.Error()
+				return
+			}
+			diff.SetPatch(patch)
 		})
 	}()
 }
 
-func (a *App) renderActivity(c *ui.Context, leaf *domain.PaneNode, p *pane) {
-	state := a.conversationFor(a.sessionID)
-	uispace.PaneHeader(c, "Activity", "provider events", nil, func() { a.activePane = leaf.ID })
-	if len(state.Snapshot.Tools) == 0 && len(state.Snapshot.Messages) == 0 {
-		kit.Empty(c, "No activity yet", "Provider-reported turns, tools and approvals appear here.", "")
-		return
+// openDiffTab reveals a changes pane in the active Space. It changes document
+// metadata only and starts no process.
+func (a *App) openDiffTab() { a.newModTab("changes", "Diff") }
+
+// blockTerminalAddress returns the terminal a block shows. A content.agent
+// block names an agent's terminal and is attached the same way.
+func blockTerminalAddress(block corelayout.Node) string {
+	if block.Content == nil {
+		return ""
 	}
-	theme := c.Theme()
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(6).Padding(10).Children(func() {
-			for _, tool := range state.Snapshot.Tools {
-				tool := tool
-				ui.Row(c).Gap(8).Children(func() {
-					ui.Text(c, tool.Name).FontSize(11).FontWeight(600).Width(160)
-					kit.Meta(c, string(tool.Status))
-					if tool.IsError {
-						kit.Pill(c, "error", "danger")
-					}
-				})
-			}
-			for _, approval := range state.Snapshot.PendingApprovals {
-				ui.Row(c).Gap(8).Children(func() {
-					kit.Pill(c, "approval", "warn")
-					ui.Text(c, approval.ToolName).FontSize(11).TextColor(theme.Text)
-				})
-			}
-		})
-	})
+	if block.Content.Terminal != nil && *block.Content.Terminal != "" {
+		return *block.Content.Terminal
+	}
+	if block.Content.Agent != nil && *block.Content.Agent != "" {
+		return *block.Content.Agent
+	}
+	return ""
 }
 
-func (a *App) renderScreen(c *ui.Context, leaf *domain.PaneNode, p *pane) {
-	theme := c.Theme()
-	uispace.PaneHeader(c, "Remote Screen", "on demand", nil, func() { a.activePane = leaf.ID })
-	ui.Column(c).Padding(14).Gap(8).Children(func() {
-		ui.Text(c, "Remote Screen is opened from a paired device").
-			FontSize(12).FontWeight(600)
-		ui.Text(c, "This Session tile controls an active share. Viewing and control are separate grants; capture stops when the viewer stops or the grant is revoked.").
-			FontSize(11).TextColor(theme.TextMuted).Wrap()
-		if a.bridge == nil {
-			kit.Banner(c, "warn", "The bridge is unavailable.", "")
-		} else if ui.Button(c, "Stop sharing in this Session").Clicked() {
-			a.stopScreen()
+// conversationBlockSession reads props.session from a conversation mod block.
+func conversationBlockSession(block corelayout.Node) string {
+	if block.Content == nil || block.Content.Mod == nil || *block.Content.Mod != "conversation" {
+		return ""
+	}
+	if len(block.Content.Props) == 0 {
+		return ""
+	}
+	var props struct {
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(block.Content.Props, &props); err != nil {
+		return ""
+	}
+	return props.Session
+}
+
+// newModBlock builds a block whose content is a mod with opaque props.
+func newModBlock(mod string, props map[string]string) corelayout.Node {
+	node := corelayout.Node{
+		ID:      world.NewID("p"),
+		Type:    corelayout.TypeBlock,
+		Content: &corelayout.Content{Mod: &mod},
+	}
+	if len(props) > 0 {
+		if raw, err := json.Marshal(props); err == nil {
+			node.Content.Props = raw
 		}
-		kit.ErrorLine(c, a.settings.ScreenMsg)
-	})
+	}
+	return node
 }
 
-func (a *App) stopScreen() {
-	if a.bridge == nil || a.sessionID == "" {
-		return
-	}
-	client := a.bridge
-	sessionID := a.sessionID
-	go func() {
-		ctx, cancel := context.WithTimeout(a.bridgeCtx, 15*time.Second)
-		defer cancel()
-		err := client.ScreenStop(ctx, sessionID)
-		a.update(func() {
-			if err != nil {
-				a.settings.ScreenMsg = err.Error()
-			} else {
-				a.settings.ScreenMsg = "Screen sharing stopped."
-			}
-		})
-	}()
-}
-
-// addTab appends a tab with one surface.
-func (a *App) addTab(surface string) {
-	a.openTab(domain.Tab{ID: domain.NewID(), Title: surfaceTitle(surface), Root: domain.NewLeaf(surface)})
-}
-
-// addTerminalTabTo opens a tab for a core-owned terminal in sessionID and
-// shows it when that Session is still the selected one.
-func (a *App) addTerminalTabTo(sessionID, address string) {
-	layout, ok := a.store.Layout(sessionID)
-	if !ok {
-		return
-	}
-	root := domain.NewTerminalLeaf(address)
-	tab := domain.Tab{ID: domain.NewID(), Title: "Terminal", Root: root}
-	layout.Tabs = append(layout.Tabs, tab)
-	layout.ActiveTab = tab.ID
-	saved, err := a.store.SaveLayout(sessionID, layout, layout.Revision)
-	if err != nil {
-		a.notice = err.Error()
-		return
-	}
-	if a.sessionID == sessionID {
-		a.layout = saved
-		a.activeTab = tab.ID
-		a.activePane = root.ID
+// terminalBlock builds a terminal block for a core-owned terminal address.
+func terminalBlock(address string) corelayout.Node {
+	return corelayout.Node{
+		ID:      world.NewID("p"),
+		Type:    corelayout.TypeBlock,
+		Content: &corelayout.Content{Terminal: &address},
 	}
 }
 
-func (a *App) openTab(tab domain.Tab) {
-	a.mutateLayout(func(layout *domain.SessionLayout) error {
-		layout.Tabs = append(layout.Tabs, tab)
-		layout.ActiveTab = tab.ID
-		return nil
-	})
-	a.activeTab = tab.ID
-	a.activePane = tab.Root.ID
-}
-
-func (a *App) closeTab(id string) {
-	if len(a.layout.Tabs) <= 1 {
-		return
-	}
-	a.mutateLayout(func(layout *domain.SessionLayout) error {
-		tabs := layout.Tabs[:0]
-		for _, tab := range layout.Tabs {
-			if tab.ID != id {
-				tabs = append(tabs, tab)
-			}
-		}
-		layout.Tabs = tabs
-		if layout.ActiveTab == id && len(tabs) > 0 {
-			layout.ActiveTab = tabs[0].ID
-		}
-		return nil
-	})
-	a.activeTab = a.layout.ActiveTab
-	if leaves := a.tabRoot().Leaves(); len(leaves) > 0 {
-		a.activePane = leaves[0].ID
-	}
-}
-
-func (a *App) splitPane(direction, surface string) {
-	if a.activePane == "" {
-		return
-	}
-	active := a.activePane
-	var created string
-	a.mutateLayout(func(layout *domain.SessionLayout) error {
-		for index := range layout.Tabs {
-			if layout.Tabs[index].ID != a.activeTab {
-				continue
-			}
-			root, err := layout.Tabs[index].Root.SplitLeaf(active, direction, 0.5, surface)
-			if err != nil {
-				return err
-			}
-			layout.Tabs[index].Root = root
-			if leaves := root.Leaves(); len(leaves) > 0 {
-				created = leaves[len(leaves)-1].ID
-			}
-			return nil
-		}
-		return domain.ErrNotFound
-	})
-	if created != "" {
-		a.activePane = created
-	}
-}
-
-func (a *App) closePane(id string) {
-	a.mutateLayout(func(layout *domain.SessionLayout) error {
-		for index := range layout.Tabs {
-			if layout.Tabs[index].ID != a.activeTab {
-				continue
-			}
-			root, err := layout.Tabs[index].Root.CloseLeaf(id)
-			if err != nil {
-				return err
-			}
-			layout.Tabs[index].Root = root
-			return nil
-		}
-		return domain.ErrNotFound
-	})
-	if leaves := a.tabRoot().Leaves(); len(leaves) > 0 {
-		a.activePane = leaves[0].ID
-	}
-}
-
-func (a *App) openDiffPane() {
-	a.splitPane(domain.SplitColumn, domain.SurfaceDiff)
-}
-
-func surfaceTitle(surface string) string {
-	switch surface {
-	case domain.SurfaceChat:
-		return "Conversation"
-	case domain.SurfaceTerm:
-		return "Terminal"
-	case domain.SurfaceFiles:
-		return "Files"
-	case domain.SurfaceDiff:
-		return "Diff"
-	case domain.SurfaceLog:
-		return "Activity"
-	case domain.SurfaceSpec:
-		return "Screen"
-	default:
-		return surface
+// terminalTab builds a tab whose root is one terminal block.
+func terminalTab(name, address string) corelayout.SharedTab {
+	return corelayout.SharedTab{
+		ID:   world.NewID("tb"),
+		Name: name,
+		Root: terminalBlock(address),
 	}
 }
