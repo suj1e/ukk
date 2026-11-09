@@ -26,6 +26,9 @@ func buildMenu(application *app.App) *mygo.Menu {
 		{
 			Label: "File",
 			Submenu: []*mygo.MenuItem{
+				{Label: "New Terminal", Accelerator: "CmdOrCtrl+Shift+T", Click: func(*mygo.MenuItem, *mygo.Window) {
+					application.NewTerminal()
+				}},
 				{Label: "New Tab", Accelerator: "CmdOrCtrl+T", Click: func(*mygo.MenuItem, *mygo.Window) {
 					application.NewTab()
 				}},
@@ -51,6 +54,10 @@ func buildMenu(application *app.App) *mygo.Menu {
 		{
 			Label: "View",
 			Submenu: []*mygo.MenuItem{
+				{Label: "Command Palette…", Accelerator: "CmdOrCtrl+Shift+P", Click: func(*mygo.MenuItem, *mygo.Window) {
+					application.OpenPalette()
+				}},
+				mygo.Separator(),
 				{Label: "Split Right", Accelerator: "CmdOrCtrl+D", Click: func(*mygo.MenuItem, *mygo.Window) {
 					application.SplitRight()
 				}},

@@ -197,7 +197,7 @@ never an `UnbindAgent` call.
         "split": "row",
         "ratio": 0.5,
         "first": {"id": "…", "kind": "leaf", "surface": "conversation"},
-        "second": {"id": "…", "kind": "leaf", "surface": "terminal", "agent_run_id": "…"}
+        "second": {"id": "…", "kind": "leaf", "surface": "terminal", "terminal_address": "t7"}
       }
     }
   ],
@@ -207,8 +207,11 @@ never an `UnbindAgent` call.
 ```
 
 A `PaneNode` is either a leaf (`kind: "leaf"`, one surface, optional
-`agent_run_id`) or a split (`kind: "split"`, `split` is `row` or `column`, two
-children and one ratio for the first child). Limits, enforced by
+`agent_run_id` or `terminal_address`) or a split (`kind: "split"`, `split` is
+`row` or `column`, two children and one ratio for the first child). A
+`terminal_address` leaf shows a herdr-core terminal that no AgentRun owns, such
+as a shell the Desktop started in a Space root; it is a view reference, not
+process ownership, and closing the pane only detaches. Limits, enforced by
 `PaneNode.Validate` at load and on every save:
 
 | Limit | Value | Failure |

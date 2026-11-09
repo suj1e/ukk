@@ -1,6 +1,7 @@
 package app
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -24,9 +25,7 @@ func (a *App) View(c *ui.Context) {
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			a.header(c)
 			if a.sessionID != "" {
-				uispace.TabBar(c, a.layout.Tabs, a.activeTab, a.selectTab, a.closeTab, func() {
-					a.addTab(domain.SurfaceChat)
-				})
+				uispace.TabBar(c, a.layout.Tabs, a.activeTab, a.selectTab, a.closeTab, a.NewTerminal)
 			}
 			ui.Column(c).Grow(1).Children(func() {
 				if a.sessionID == "" {
@@ -50,6 +49,7 @@ func (a *App) View(c *ui.Context) {
 	a.newSpaceDialog(c)
 	a.newSessionDialog(c)
 	a.settingsDialog(c)
+	a.paletteDialog(c)
 }
 
 func (a *App) sidebar(c *ui.Context) {
@@ -115,6 +115,46 @@ func (a *App) sidebar(c *ui.Context) {
 						}
 					}
 				}
+				if len(a.liveAgents) > 0 {
+					kit.SectionLabel(c, "Agents")
+					agents := make([]bridge.AgentSnapshot, 0, len(a.liveAgents))
+					for _, snapshot := range a.liveAgents {
+						agents = append(agents, snapshot)
+					}
+					sort.Slice(agents, func(i, j int) bool { return agents[i].UpdatedMS > agents[j].UpdatedMS })
+					for _, snapshot := range agents {
+						snapshot := snapshot
+						color := theme.TextMuted
+						switch snapshot.State {
+						case "running":
+							color = theme.Accent
+						case "blocked":
+							color = theme.Warning
+						case "done":
+							color = theme.Success
+						case "failed":
+							color = theme.Danger
+						}
+						title := snapshot.Provider
+						if session, ok := a.sessionByID(snapshot.SessionID); ok {
+							title = session.Title
+						}
+						button := ui.ButtonBase(c).FillWidth()
+						button.Children(func() {
+							row := ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(5, 10)
+							row.Children(func() {
+								kit.Dot(c, color)
+								ui.Column(c).Grow(1).Gap(1).Children(func() {
+									ui.Text(c, title).FontSize(12).FontWeight(500).NoWrap().Ellipsis(title)
+									kit.Meta(c, snapshot.Provider+" · "+snapshot.State)
+								})
+							})
+						})
+						if button.Clicked() {
+							a.openSessionAgent(snapshot.SessionID)
+						}
+					}
+				}
 			})
 		})
 
@@ -162,7 +202,10 @@ func (a *App) header(c *ui.Context) {
 		})
 
 		if hasSession {
-			if ui.Button(c, "+ Tab").Clicked() {
+			if ui.Button(c, "+ Terminal").Clicked() {
+				a.NewTerminal()
+			}
+			if ui.Button(c, "+ Chat").Clicked() {
 				a.addTab(domain.SurfaceChat)
 			}
 			ui.PopoverMenuButton(c, "Split", func(m *ui.Menu) {
@@ -181,13 +224,6 @@ func (a *App) header(c *ui.Context) {
 					})
 				}
 			}).PaddingX(9).PaddingY(4).FontSize(12)
-			if ui.Button(c, "New Session").Clicked() {
-				a.newSession.Open = true
-				a.newSession.Err = ""
-			}
-			if ui.Button(c, "Close pane").Clicked() {
-				a.closePane(a.activePane)
-			}
 		}
 		ui.Button(c, "Refresh").OnClick(func() {
 			a.reload()

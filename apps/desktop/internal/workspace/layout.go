@@ -33,6 +33,9 @@ type PaneNode struct {
 
 	Surface    string `json:"surface,omitempty"`
 	AgentRunID string `json:"agent_run_id,omitempty"`
+	// TerminalAddress shows a herdr-core terminal that no AgentRun owns, such
+	// as a shell started from the Desktop. The core still owns the process.
+	TerminalAddress string `json:"terminal_address,omitempty"`
 }
 
 // Tab groups panes under one title.
@@ -54,6 +57,12 @@ type SessionLayout struct {
 // NewLeaf returns a leaf pane for the given surface.
 func NewLeaf(surface string) *PaneNode {
 	return &PaneNode{ID: newID(), Kind: KindLeaf, Surface: surface}
+}
+
+// NewTerminalLeaf returns a terminal leaf that shows a core-owned terminal
+// which no AgentRun owns.
+func NewTerminalLeaf(address string) *PaneNode {
+	return &PaneNode{ID: newID(), Kind: KindLeaf, Surface: SurfaceTerm, TerminalAddress: address}
 }
 
 // NewSplit returns a split holding first and second.

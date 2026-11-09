@@ -16,11 +16,12 @@ import (
 )
 
 type pane struct {
-	surface    string
-	agentRunID string
-	term       *terminal.State
-	files      *uiviews.FilesState
-	diff       *uiviews.DiffState
+	surface         string
+	agentRunID      string
+	terminalAddress string
+	term            *terminal.State
+	files           *uiviews.FilesState
+	diff            *uiviews.DiffState
 
 	attachStarted bool
 	filesLoaded   bool
@@ -42,7 +43,7 @@ func (a *App) paneFor(id string) *pane {
 	if existing, ok := a.panes[id]; ok {
 		return existing
 	}
-	p := &pane{surface: leaf.Surface, agentRunID: leaf.AgentRunID}
+	p := &pane{surface: leaf.Surface, agentRunID: leaf.AgentRunID, terminalAddress: leaf.TerminalAddress}
 	a.panes[id] = p
 	return p
 }
@@ -160,6 +161,9 @@ func (a *App) renderTerminal(c *ui.Context, leaf *domain.PaneNode, p *pane) {
 		if run, ok := a.agentRun(p.agentRunID); ok {
 			p.term = terminal.New(run.TerminalAddress, a.agentLabel(run), false)
 		}
+	}
+	if p.term == nil && p.terminalAddress != "" {
+		p.term = terminal.New(p.terminalAddress, p.terminalAddress, false)
 	}
 	if p.term != nil {
 		if a.termLibErr != "" {
@@ -421,15 +425,40 @@ func (a *App) stopScreen() {
 
 // addTab appends a tab with one surface.
 func (a *App) addTab(surface string) {
-	root := domain.NewLeaf(surface)
-	tab := domain.Tab{ID: domain.NewID(), Title: surfaceTitle(surface), Root: root}
+	a.openTab(domain.Tab{ID: domain.NewID(), Title: surfaceTitle(surface), Root: domain.NewLeaf(surface)})
+}
+
+// addTerminalTabTo opens a tab for a core-owned terminal in sessionID and
+// shows it when that Session is still the selected one.
+func (a *App) addTerminalTabTo(sessionID, address string) {
+	layout, ok := a.store.Layout(sessionID)
+	if !ok {
+		return
+	}
+	root := domain.NewTerminalLeaf(address)
+	tab := domain.Tab{ID: domain.NewID(), Title: "Terminal", Root: root}
+	layout.Tabs = append(layout.Tabs, tab)
+	layout.ActiveTab = tab.ID
+	saved, err := a.store.SaveLayout(sessionID, layout, layout.Revision)
+	if err != nil {
+		a.notice = err.Error()
+		return
+	}
+	if a.sessionID == sessionID {
+		a.layout = saved
+		a.activeTab = tab.ID
+		a.activePane = root.ID
+	}
+}
+
+func (a *App) openTab(tab domain.Tab) {
 	a.mutateLayout(func(layout *domain.SessionLayout) error {
 		layout.Tabs = append(layout.Tabs, tab)
 		layout.ActiveTab = tab.ID
 		return nil
 	})
 	a.activeTab = tab.ID
-	a.activePane = root.ID
+	a.activePane = tab.Root.ID
 }
 
 func (a *App) closeTab(id string) {

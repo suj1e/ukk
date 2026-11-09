@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"runtime"
 	"sort"
 	"time"
 
@@ -47,14 +49,17 @@ type App struct {
 	repos   map[string]*repository.Repo
 	repoErr map[string]string
 
-	bridge    *bridge.Client
-	bridgeErr string
-	bridgeCtx context.Context
-	cancelAll context.CancelFunc
+	bridge     *bridge.Client
+	bridgeErr  string
+	bridgeCtx  context.Context
+	cancelAll  context.CancelFunc
+	liveAgents map[string]bridge.AgentSnapshot
 
 	hc          *hc.Client
 	hcHello     hc.HelloResult
 	hcErr       string
+	hcRetry     *time.Timer
+	hcBackoff   time.Duration
 	terminals   []hc.Terminal
 	termAt      time.Time
 	termLoading bool
@@ -62,6 +67,7 @@ type App struct {
 
 	newSpace   formState
 	newSession formState
+	palette    paletteState
 	settings   settingsState
 	notice     string
 
@@ -77,6 +83,11 @@ type formState struct {
 	Root  string
 	Busy  bool
 	Err   string
+}
+
+type paletteState struct {
+	Open  bool
+	Query string
 }
 
 type settingsState struct {
@@ -98,14 +109,15 @@ type settingsState struct {
 // New creates the application state.
 func New(store *domain.Store, dir string) *App {
 	return &App{
-		store:   store,
-		dir:     dir,
-		convs:   map[string]*conversation.State{},
-		panes:   map[string]*pane{},
-		sizes:   uispace.PaneSizes{},
-		repos:   map[string]*repository.Repo{},
-		repoErr: map[string]string{},
-		theme:   kit.Theme(false),
+		store:      store,
+		dir:        dir,
+		convs:      map[string]*conversation.State{},
+		panes:      map[string]*pane{},
+		sizes:      uispace.PaneSizes{},
+		repos:      map[string]*repository.Repo{},
+		repoErr:    map[string]string{},
+		liveAgents: map[string]bridge.AgentSnapshot{},
+		theme:      kit.Theme(false),
 	}
 }
 
@@ -119,6 +131,10 @@ func (a *App) Attach(win *mygo.Window) {
 	go a.watchStore()
 	go a.connectBridge()
 	go a.preloadTerminal()
+	// Like the official client, connect to herdr-core at startup instead of
+	// waiting for a terminal pane: the core owns the terminals, and the app is
+	// only useful once their list is visible.
+	a.refreshTerminals()
 }
 
 // Shutdown stops background work. It never stops an Agent or terminal.
@@ -126,6 +142,7 @@ func (a *App) Shutdown() {
 	if a.cancelAll != nil {
 		a.cancelAll()
 	}
+	a.stopHerdrRetry()
 	for _, p := range a.panes {
 		if p.term != nil {
 			p.term.Close()
@@ -375,6 +392,7 @@ func (a *App) connectBridge() {
 			a.bridge = client
 			a.bridgeErr = ""
 			a.pushWorkspace()
+			a.loadAgents()
 		})
 		events, err := client.Events(a.bridgeCtx, "")
 		if err != nil {
@@ -413,9 +431,34 @@ func (a *App) applyAgentEvent(event bridge.Event) {
 	state.Snapshot = toAgentSnapshot(*event.Agent)
 	state.Loading = false
 	state.ActionErr = ""
+	a.liveAgents[event.SessionID] = *event.Agent
 	if event.Type == bridge.EventError {
 		state.ActionErr = event.Error
 	}
+}
+
+// loadAgents reads every provider session the bridge owns so the sidebar
+// reflects Agents started from another window or before a restart.
+func (a *App) loadAgents() {
+	client := a.bridge
+	if client == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(a.bridgeCtx, 10*time.Second)
+		defer cancel()
+		list, err := client.AgentList(ctx)
+		if err != nil {
+			return
+		}
+		next := make(map[string]bridge.AgentSnapshot, len(list))
+		for _, snapshot := range list {
+			if snapshot.SessionID != "" {
+				next[snapshot.SessionID] = snapshot
+			}
+		}
+		a.update(func() { a.liveAgents = next })
+	}()
 }
 
 func (a *App) pushWorkspace() {
@@ -467,6 +510,8 @@ func (a *App) startAgent() {
 				return
 			}
 			state.Snapshot = toAgentSnapshot(snapshot)
+			a.liveAgents[sessionID] = snapshot
+			a.loadAgents()
 		})
 	}()
 }
@@ -538,6 +583,7 @@ func (a *App) approve(id string, decision string) {
 }
 
 // refreshTerminals connects to herdr-core when needed and lists terminals.
+// A failed connect or a lost connection is retried with capped backoff.
 func (a *App) refreshTerminals() {
 	if a.termLoading {
 		return
@@ -545,9 +591,17 @@ func (a *App) refreshTerminals() {
 	if a.hcErr == "" && a.hc != nil && time.Since(a.termAt) < 2*time.Second {
 		return
 	}
+	client := a.hc
+	if client != nil {
+		select {
+		case <-client.Done():
+			client = nil
+			a.hc = nil
+		default:
+		}
+	}
 	a.termLoading = true
 	a.termTried = true
-	client := a.hc
 	go func() {
 		ctx, cancel := context.WithTimeout(a.bridgeCtx, 20*time.Second)
 		defer cancel()
@@ -557,18 +611,27 @@ func (a *App) refreshTerminals() {
 				a.update(func() {
 					a.termLoading = false
 					a.hcErr = err.Error()
+					a.scheduleHerdrRetry()
 				})
 				return
 			}
 			client = connected
 			hello := connected.Hello()
-			a.update(func() { a.hc = connected; a.hcHello = hello; a.hcErr = "" })
+			a.update(func() {
+				a.hc = connected
+				a.hcHello = hello
+				a.hcErr = ""
+				a.hcBackoff = 0
+				a.stopHerdrRetry()
+			})
+			go a.watchHerdr(connected)
 		}
 		result, err := client.TerminalList(ctx, hc.TerminalListOptions{All: false})
 		if err != nil {
 			a.update(func() {
 				a.termLoading = false
 				a.hcErr = err.Error()
+				a.scheduleHerdrRetry()
 			})
 			return
 		}
@@ -579,6 +642,117 @@ func (a *App) refreshTerminals() {
 			a.hcErr = ""
 		})
 	}()
+}
+
+// watchHerdr notices a lost core connection and reconnects. Terminals live in
+// herdr-core, so losing this client never stops one.
+func (a *App) watchHerdr(client *hc.Client) {
+	select {
+	case <-a.bridgeCtx.Done():
+		return
+	case <-client.Done():
+	}
+	a.update(func() {
+		if a.hc != client {
+			return
+		}
+		a.hc = nil
+		a.hcHello = hc.HelloResult{}
+		a.terminals = nil
+		a.hcErr = "lost the herdr-core connection"
+		a.scheduleHerdrRetry()
+	})
+}
+
+// scheduleHerdrRetry retries a failed connect or a lost connection with capped
+// backoff. The caller runs on the UI thread.
+func (a *App) scheduleHerdrRetry() {
+	if a.hcRetry != nil || a.bridgeCtx.Err() != nil {
+		return
+	}
+	delay := a.hcBackoff
+	if delay <= 0 {
+		delay = time.Second
+	}
+	a.hcBackoff = min(delay*2, 30*time.Second)
+	a.hcRetry = time.AfterFunc(delay, func() {
+		a.update(func() {
+			a.hcRetry = nil
+			a.refreshTerminals()
+		})
+	})
+}
+
+func (a *App) stopHerdrRetry() {
+	if a.hcRetry != nil {
+		a.hcRetry.Stop()
+		a.hcRetry = nil
+	}
+}
+
+// NewTerminal starts a shell in the selected Space's project root through
+// herdr-core and opens it in a tab. Closing the tab detaches; it never stops
+// the shell.
+func (a *App) NewTerminal() {
+	space, ok := a.space()
+	if !ok {
+		a.notice = "Create a Space before starting a terminal."
+		return
+	}
+	client := a.hc
+	if client == nil {
+		a.notice = "herdr-core is not connected yet."
+		a.refreshTerminals()
+		return
+	}
+	sessionID := a.sessionID
+	spaceID, cwd := space.ID, space.ProjectRoot
+	go func() {
+		if sessionID == "" {
+			session, err := a.store.CreateSession(spaceID, "Terminal")
+			if err != nil {
+				a.update(func() { a.notice = "session: " + err.Error() })
+				return
+			}
+			sessionID = session.ID
+			a.update(func() {
+				a.sessionID = sessionID
+				a.layout = domain.SessionLayout{}
+				a.reload()
+			})
+		}
+		ctx, cancel := context.WithTimeout(a.bridgeCtx, 20*time.Second)
+		defer cancel()
+		result, err := client.TerminalRun(ctx, hc.RunOptions{
+			Argv:   defaultShell(),
+			Cwd:    cwd,
+			Caller: "ukk-desktop",
+			Keep:   true,
+			Size:   &hc.InitialSize{Cols: 100, Rows: 30},
+		})
+		a.update(func() {
+			if err != nil {
+				a.notice = "terminal: " + err.Error()
+				return
+			}
+			a.notice = ""
+			a.addTerminalTabTo(sessionID, result.Address)
+			a.refreshTerminals()
+		})
+	}()
+}
+
+func defaultShell() []string {
+	if runtime.GOOS == "windows" {
+		if comspec := os.Getenv("COMSPEC"); comspec != "" {
+			return []string{comspec}
+		}
+		return []string{"cmd.exe"}
+	}
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return []string{shell}
+	}
+	return []string{"/bin/sh"}
 }
 
 func (a *App) newSpaceSubmit() {
@@ -841,6 +1015,34 @@ func (a *App) sessionByID(id string) (domain.Session, bool) {
 		}
 	}
 	return domain.Session{}, false
+}
+
+// openSessionAgent selects the Agent's Session and brings its conversation into view.
+func (a *App) openSessionAgent(sessionID string) {
+	session, ok := a.sessionByID(sessionID)
+	if !ok {
+		return
+	}
+	a.spaceID = session.SpaceID
+	a.sessionID = session.ID
+	a.layout = domain.SessionLayout{}
+	a.activeTab = ""
+	a.activePane = ""
+	a.reload()
+	a.focusChat()
+}
+
+func (a *App) focusChat() {
+	for _, tab := range a.layout.Tabs {
+		for _, leaf := range tab.Root.Leaves() {
+			if leaf.Surface == domain.SurfaceChat {
+				a.selectTab(tab.ID)
+				a.activePane = leaf.ID
+				return
+			}
+		}
+	}
+	a.addTab(domain.SurfaceChat)
 }
 
 func (a *App) spaceByID(id string) (domain.Space, bool) {

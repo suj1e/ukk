@@ -123,6 +123,50 @@ func TestLayoutCASAndValidation(t *testing.T) {
 	}
 }
 
+func TestTerminalPanePersistsAddress(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err := store.CreateSpace("Desk", "/p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.CreateSession(space.ID, "Shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, _ := store.Layout(session.ID)
+	layout.Tabs[0].Root = NewTerminalLeaf("t7")
+	saved, err := store.SaveLayout(session.ID, layout, layout.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := saved.Tabs[0].Root.TerminalAddress; got != "t7" {
+		t.Fatalf("terminal address = %q", got)
+	}
+	if got := store.Snapshot().Layouts[session.ID].Tabs[0].Root.TerminalAddress; got != "t7" {
+		t.Fatalf("snapshot terminal address = %q", got)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	loaded, ok := reopened.Layout(session.ID)
+	if !ok || loaded.Tabs[0].Root.TerminalAddress != "t7" {
+		t.Fatalf("reloaded layout = %+v ok=%v", loaded, ok)
+	}
+	if err := loaded.Tabs[0].Root.Validate(); err != nil {
+		t.Fatalf("terminal leaf validation = %v", err)
+	}
+}
+
 func TestCloseLeafPromotesSibling(t *testing.T) {
 	left := NewLeaf(SurfaceChat)
 	right := NewLeaf(SurfaceTerm)
