@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "file": "agent/v1/fixtures/snapshot-done.json",
+      "schema": "agent/v1/snapshot.schema.json",
+      "go": "agents.Snapshot"
+    },
+    {
+      "file": "agent/v1/fixtures/event-message.json",
+      "schema": "agent/v1/event.schema.json",
+      "go": "agents.Event"
+    },
+    {
+      "file": "agent/v1/fixtures/event-approval.json",
+      "schema": "agent/v1/event.schema.json",
+      "go": "agents.Event"
+    },
+    {
+      "file": "bridge/v1/fixtures/request-start.json",
+      "schema": "bridge/v1/request.schema.json",
+      "go": "bridge.Request"
+    },
+    {
+      "file": "bridge/v1/fixtures/response-snapshot.json",
+      "schema": "bridge/v1/response.schema.json",
+      "go": "bridge.Response"
+    },
+    {
+      "file": "bridge/v1/fixtures/response-error.json",
+      "schema": "bridge/v1/response.schema.json",
+      "go": "bridge.Response"
+    },
+    {
+      "file": "core/v1/fixtures/hello.json",
+      "schema": "core/v1/hello.schema.json",
+      "go": "hc.HelloResult"
+    },
+    {
+      "file": "core/v1/fixtures/terminal-list.json",
+      "schema": "core/v1/list.schema.json",
+      "go": "hc.ListResult"
+    },
+    {
+      "file": "remote/v1/fixtures/invite.json",
+      "schema": "remote/v1/invite.schema.json",
+      "go": ""
+    },
+    {
+      "file": "remote/v1/fixtures/c1.json",
+      "schema": "remote/v1/handshake.schema.json",
+      "go": ""
+    },
+    {
+      "file": "remote/v1/fixtures/s1.json",
+      "schema": "remote/v1/handshake.schema.json",
+      "go": ""
+    }
+  ]
+}

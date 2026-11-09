@@ -1761,6 +1761,7 @@ func (s *ompSession) snapshotLocked() Snapshot {
 		approvals[index] = approval
 	}
 	snapshot := Snapshot{
+		ID:                s.id,
 		Provider:          ProviderNameOMP,
 		ProviderSessionID: s.providerSessionID,
 		State:             s.state,

@@ -1,0 +1,9 @@
+{
+  "id": "req-1",
+  "method": "agent.start",
+  "params": {
+    "session_id": "session-demo",
+    "cwd": "D:\\dev\\ukk",
+    "adapter": "omp"
+  }
+}

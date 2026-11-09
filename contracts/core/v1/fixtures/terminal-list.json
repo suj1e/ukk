@@ -1,0 +1,21 @@
+{
+  "terminals": [
+    {
+      "address": "t7",
+      "labels": {
+        "ukk": "desktop"
+      },
+      "argv": ["cmd.exe"],
+      "cwd": "D:/dev/ukk",
+      "state": "live",
+      "created_ms": 1762550000000,
+      "screen": "",
+      "cols": 100,
+      "rows": 30,
+      "keep": true,
+      "pid": 4242
+    }
+  ],
+  "hidden_finished": 0,
+  "machines": []
+}

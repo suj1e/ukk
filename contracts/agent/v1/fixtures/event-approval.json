@@ -1,0 +1,15 @@
+{
+  "kind": "approval",
+  "sessionId": "session-demo",
+  "sequence": 3,
+  "approval": {
+    "id": "approval-1",
+    "turnId": "turn-2",
+    "toolName": "shell",
+    "input": {
+      "argv": ["git", "status", "--short"]
+    },
+    "state": "pending",
+    "expiresMs": 1762550300000
+  }
+}

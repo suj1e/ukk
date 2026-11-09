@@ -22,7 +22,7 @@ A feature is **not complete** when its source merely exists. It must have a test
    `gofmt -l .` must print nothing. `go test` must include real assertions, not placeholder tests that pass vacuously. Run the race detector on at least Linux and macOS; if a platform cannot run it, record that explicitly instead of claiming a race pass.
 4. Validate macOS, Windows and Linux. Desktop window creation, native permissions and OS services differ per platform; a compile on one OS is not evidence for the others.
 5. For iOS, generate the project from `apps/ios/project.yml` and run the simulator build/tests. A simulator build is not physical-device acceptance.
-6. After every protocol, provider or schema change, add a fixture or contract test and update the affected docs.
+6. After every protocol, provider or schema change, update `contracts/` first (schema plus fixture), then the implementation; `go test ./internal/contracts` must pass and the affected docs update.
 7. Treat GitHub Actions run status on the exact SHA as authoritative. A source commit or a configured workflow is not proof that checks passed.
 8. Keep integration tests safe by default: no real Agent runs, destructive signals, screen capture or unintended network requests unless the test explicitly opts in.
 9. Never claim build/runtime/device acceptance that was not observed; write **NOT VERIFIED** with the exact missing prerequisite.
@@ -31,6 +31,7 @@ A feature is **not complete** when its source merely exists. It must have a test
 
 | Area | Owns | Does not own |
 |---|---|---|
+| `contracts/` | Versioned wire schemas, normative fixtures and protocol pages | Go implementation, runtime state, secrets |
 | `cmd/ukk` | MyGo app lifecycle, window creation, binding services | Domain rules, SQL, herdr-core parsing, remote credentials |
 | `cmd/ukk-bridge` | Background service lifecycle and wiring | UI rendering, direct widget state |
 | `cmd/ukk-relay` | Relay server startup, TLS/operator configuration | Product domain state, plaintext control content, screen media |

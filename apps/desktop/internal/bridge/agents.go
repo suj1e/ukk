@@ -185,6 +185,7 @@ func mapAgentError(err error) error {
 
 func convertSnapshot(in agents.Snapshot) AgentSnapshot {
 	out := AgentSnapshot{
+		SessionID:         in.ID,
 		Provider:          in.Provider,
 		ProviderSessionID: in.ProviderSessionID,
 		State:             string(in.State),

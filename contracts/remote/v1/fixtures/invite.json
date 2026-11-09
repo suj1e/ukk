@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "host_id": "host-demo",
+  "host_ed": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "host_x": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+  "invite_id": "invite-demo",
+  "secret": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+  "expire_ms": 1762550300000,
+  "relay": "wss://relay.example/ws"
+}

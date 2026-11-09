@@ -1,0 +1,22 @@
+{
+  "generation": 1,
+  "version": "hc 0.1.19",
+  "core": {
+    "id": "core-demo",
+    "name": "vostro"
+  },
+  "framed": true,
+  "methods": [
+    "terminal.run",
+    "terminal.list",
+    "terminal.get",
+    "terminal.attach",
+    "terminal.kill",
+    "terminal.rm",
+    "events.subscribe"
+  ],
+  "features": [
+    "automatic-input",
+    "resize-notifications"
+  ]
+}

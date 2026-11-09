@@ -65,6 +65,7 @@ flowchart TB
 
 | Information | Authoritative component | Notes |
 |---|---|---|
+| Wire shapes (agent, bridge, core, remote) | `contracts/` | Versioned JSON Schemas plus normative fixtures; Go and Swift implement them, and `internal/contracts` proves every fixture against its schema and the Go type. |
 | PTY, process tree, terminal identity, reported program status | herdr-core | Survives closing ukk windows. Status uses structured reporting (OSC 7501); never inferred from ANSI. |
 | Terminal surface, resize intent, input provenance | Desktop UI → bridge → herdr-core | The UI is an observer/controller client; it does not own the process. MyGo's terminal plugin exposes one `Conn.Write`, so the Desktop currently sends both human keys and terminal-generated replies as DATA (herdr-core's legacy path); bytes are never sniffed. `hc-client` exposes `AutomaticWrite` for a future source-tagged hook. |
 | Workspaces, app sessions, agent-run metadata, layouts | Desktop `internal/workspace` | One atomic JSON document with revision CAS; the bridge serves a read-only mirror to remote clients. |
@@ -76,9 +77,10 @@ flowchart TB
 
 ## Internal modules
 
-Module root is `apps/desktop` (one Go module with all Go metadata). Target layout:
+Module root is `apps/desktop` (one Go module with all Go metadata). The normative wire contracts live at repository root `contracts/`; `internal/contracts` validates them. Target layout:
 
 ```text
+contracts/          normative wire contracts (agent, bridge, core, remote)
 apps/
   desktop/
     go.mod, go.sum, mygo.json
