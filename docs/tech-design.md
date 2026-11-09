@@ -8,7 +8,8 @@
 ukk is a native multi-agent coding workspace with a remote mobile companion.
 
 - **Desktop** is a native Go application built with MyGo (`apps/desktop`, package `ui`). It is not a webview page, not a GPUI/Rust app and not a fork of herdr-app.
-- **`ukk-bridge`** is the background service that authorizes remote, agent-adapter and screen connections, owns Agent children and supervises provider adapters. It runs independently of any window. The Desktop owns durable workspace metadata and publishes a read-only mirror to the bridge for remote clients.
+- **`ukk-bridge`** is the background service that authorizes remote, agent-adapter and screen connections, owns Agent children and supervises provider adapters. It runs independently of any window. It does not own the workspace structure: spaces, tabs and panes are the core-owned `herdr-app` document, and Agent control is addressed per pane through the bridge.
+- **Desktop view state** is local and ephemeral: active space and tab, pane focus, zoom and floating-tile position live in a per-installation view file, not in the shared document and not on the bridge.
 - **herdr-core** (pinned v0.1.18) is the external authority for persistent terminals, processes and reported program status. ukk integrates through its documented API; it never copies or rewrites the runtime.
 - **`ukk-relay`** is a self-hostable control-plane relay: WSS/TLS with operator authentication, opaque end-to-end encrypted frames, and no raw video.
 - **iOS/iPadOS** is a native SwiftUI companion sharing the protocol, never the desktop UI code.
@@ -20,14 +21,14 @@ The reset is greenfield: no data, schema, protocol or release-artifact migration
 ```mermaid
 flowchart TB
   subgraph Clients["Native clients"]
-    D["Desktop · Go + MyGo native UI<br/>Spaces · Sessions · chat · terminal · diff · screen tile"]
+    D["Desktop · Go + MyGo native UI<br/>Spaces · tabs · panes · chat · terminal · diff · screen tile"]
     I["iPhone / iPad · SwiftUI<br/>chat · approvals · QR pairing · floating screen"]
   end
 
   subgraph Local["Device · ukk-bridge (Go background service)"]
     AUTH["Connection authorization<br/>local peer · remote device · adapter · screen lease"]
-    MODEL["Workspace & event service<br/>Space · Session · AgentRun · cursors · grants"]
-    STORE[("JSON workspace store +<br/>trust · grants · audit")]
+    MODEL["Event service & world cache<br/>herdr-app snapshot · cursors · grants"]
+    STORE[("JSON event/binding store +<br/>trust · grants · audit")]
     PROV["Provider supervisor<br/>neutral Agent contract · omp first"]
     HC["herdr-core client<br/>documented API · framed attach"]
     SCR["Remote Screen authority<br/>view/control leases · capture/input adapters"]
@@ -67,13 +68,15 @@ flowchart TB
 |---|---|---|
 | Wire shapes (agent, bridge, core, remote) | `contracts/` | Versioned JSON Schemas plus normative fixtures; Go and Swift implement them, and `internal/contracts` proves every fixture against its schema and the Go type. |
 | PTY, process tree, terminal identity, reported program status | herdr-core | Survives closing ukk windows. Status uses structured reporting (OSC 7501); never inferred from ANSI. |
-| Terminal surface, resize intent, input provenance | Desktop UI → bridge → herdr-core | The UI is an observer/controller client; it does not own the process. MyGo's terminal plugin exposes one `Conn.Write`, so the Desktop currently sends both human keys and terminal-generated replies as DATA (herdr-core's legacy path); bytes are never sniffed. `hc-client` exposes `AutomaticWrite` for a future source-tagged hook. |
-| Workspaces, app sessions, agent-run metadata, layouts | Desktop `internal/workspace` | One atomic JSON document with revision CAS; the bridge serves a read-only mirror to remote clients. |
+| Terminal surface, resize intent, input provenance | Desktop UI (via `internal/hc`) → herdr-core | The UI is an observer/controller client; it does not own the process. MyGo's terminal plugin exposes one `Conn.Write`, so the Desktop currently sends both human keys and terminal-generated replies as DATA (herdr-core's legacy path); bytes are never sniffed. `hc-client` exposes `AutomaticWrite` for a future source-tagged hook. |
+| Spaces, tabs, panes, layout trees | herdr-core `herdr-app` document | Machine-owned world document read and written with `doc.get` / `doc.set` and a version CAS; every client of that machine shares it. The Desktop keeps no second copy, and a stale write is a conflict to reload, not a merge. |
+| Local view: active space/tab, pane focus, zoom, floating-tile position | Each Desktop installation | A local view file. Ephemeral presentation state, never synchronized and safe to discard; it is not product metadata. |
 | Device trust, grants, pairing state | `ukk-bridge` | Durable trust JSON plus live scope/TTL checks; the Desktop can grant or revoke explicitly. |
 | Provider turns, tool calls, approvals, capabilities | Provider adapter inside the bridge | Only explicit provider semantics; unsupported features degrade to terminal output, never fabricated. |
 | Relay routes and connection liveness | `ukk-relay` | Content is opaque ciphertext; the relay is not a source of product state. |
 | Screen media and input events | Endpoint media path | Independent of the relay and of Agent event history; leased and revocable. |
-| Selected tab, pane focus, floating-window position | Each client | Local ephemeral presentation state, not globally synchronized. |
+
+Spaces, tabs and panes are not ukk-owned metadata: the Desktop is one client of the machine's `herdr-app` document, alongside other clients and the core. The Desktop never writes a private copy of that structure, and the bridge never becomes its owner. What remains Desktop-local is the view file listed above, and what remains bridge-owned is Agent execution: an Agent is started, prompted, steered or stopped through the bridge for a specific pane.
 
 ## Internal modules
 
@@ -91,23 +94,24 @@ apps/
     internal/
       ui/
         app/            shell, navigation, menus, settings, keybindings
-        workspace/      Spaces, Sessions, tabs/panes, sidebar, activity
+        workspace/      spaces/tabs/panes UI rendered from the herdr-app document
+        view/           local view file: active space/tab, focus, zoom, floating tile
         conversation/   provider-neutral turns, tools, approvals, Markdown
         terminal/       libghostty-vt surface; observer/controller views
         repository/     files, Git status, diff and activity surfaces
-        remotescreen/   floating Session tile and permission UI
+        remotescreen/   floating Remote Screen tile and permission UI
       bridge/           local API, authorization, lifecycle, audit, persistence wiring
       relay/            WSS/TLS server, operator auth, opaque routing
       agents/           provider-neutral contract and omp adapter
-      hc/               herdr-core client, framed attach, resize, provenance, credit
-      workspace/        domain identities, layouts, atomic JSON persistence
+      hc/               herdr-core client: framed attach, resize, provenance, credit, doc.get/doc.set
+      corelayout/       herdr-app world document types, Validate, unknown-field preservation
       remote/           pairing, device identity, E2E, relay client, revocation
       remotescreen/     capture/input adapters, media negotiation, leases
     testdata/           provider/hc fixtures and contract vectors
   ios/                  SwiftUI companion (fixture code retained; real integration not yet claimed)
 ```
 
-The old Rust crates, GPUI app, root Cargo workspace, plugins directory, root Go metadata and obsolete build workflows are removed during the cutover. Active workflows are `ci.yml`, `ios.yml` and `release.yml`.
+The old Rust crates, GPUI app, root Cargo workspace, plugins directory, root Go metadata and obsolete build workflows are removed during the cutover. Active workflows are `ci.yml`, `ios.yml` and `release.yml`. The Desktop-owned `internal/workspace` document (Spaces, Sessions, AgentRuns, layouts) is retired by the same cutover: Session and AgentRun metadata no longer appear in the Desktop UI, and pane-level Agent control goes through the bridge. Existing code may remain until the `herdr-app` wiring lands, but its document is no longer a target source of truth.
 
 ### Desktop build configuration
 
@@ -131,18 +135,20 @@ The Go tool is pinned to MyGo v0.8.3 (release SHA `5add3817c74bb7505d0b473bc5fb2
 ## Runtime and terminal rules
 
 1. **External runtime.** Talk to herdr-core through its documented JSON-RPC/OpenRPC surfaces and framed terminal streams, pinned to v0.1.18 for the first acceptance. Compatibility tests use a recorded schema and a real daemon; do not invent operations the upstream version does not expose.
-2. **Process ownership.** Closing a Desktop window, Pane, Tab or Session detaches and must not call stop/kill. Only explicit user intent with the agent-control capability may stop execution.
+2. **Process ownership.** Closing a Desktop window, Space, Tab or Pane detaches and must not call stop/kill; see [ADR-0003](decisions/0003-close-detaches-not-kills.md). Only explicit user intent with the agent-control capability may stop execution.
 3. **Terminal surface.** Render with MyGo's native UI terminal plugin (libghostty-vt through purego runtime libraries). The terminal plugin is a view over the herdr-core terminal, not a second process authority. An external connection supports detach without ending the process.
 4. **Input provenance.** Human input and automatic Agent input are combined by the MyGo terminal plugin on one `Conn.Write`. The current adapter uses herdr-core's legacy DATA path for both and never inspects bytes; `AutomaticWrite` (kind 6) is implemented in `hc-client` but not yet reachable through the plugin hook. Observers remain read-only.
 5. **Observer safety.** An observer connection never writes and never resizes. A controller lease is explicit, single-writer and expiring.
 6. **Sizing and backpressure.** Apply the core's RESIZE result before painting the terminal surface; do not paint a stale grid. Use bounded credit/flow control in both directions, drop or coalesce only under an explicit policy, and surface degraded state instead of blocking the UI thread.
 7. **No ANSI semantics.** Terminal text is presentation. Tool calls, plans and approvals come only from the active provider adapter.
 8. **Crash honesty.** Window independence is not crash recovery. The bridge can restart and reattach to herdr-core terminals, but an adapter-owned provider RPC child may be lost with the bridge; resume is only claimed where the provider RPC explicitly supports it.
+9. **World document ownership.** Spaces, tabs and panes are read from and written to the core's `herdr-app` document with `doc.get` / `doc.set` and a version CAS. A conflicting version is reloaded and reapplied, never force-written. The Desktop's local view file holds only presentation state that can be discarded without losing work.
 
 ## Provider-neutral Agent contract
 
 One bridge/Desktop contract covers sessions, turns, messages, tool calls, progress, artifacts, approvals, capabilities and bounded errors.
 
+- **Per-pane control.** Agent control is addressed to a pane: the Desktop asks the bridge to start, prompt, steer, abort or stop the terminal a pane shows. Pane binding is bridge state, not a Desktop metadata entity, and closing the pane only detaches.
 - **omp is the first real provider**, speaking its RPC through `internal/agents` with host-owned child lifecycle, bounded timelines and typed events.
 - **Codex and Claude Code are adapter targets**, specified by versioned fixture contracts. They may be fixture-tested; no live support is claimed until an actual provider run passes.
 - **No fake adapters.** A provider that lacks structured semantics is not mapped into invented approvals or tool events; the UI falls back to explicit raw terminal output and an `unsupported` capability state.
@@ -159,7 +165,7 @@ One bridge/Desktop contract covers sessions, turns, messages, tool calls, progre
 
 ## Remote Screen
 
-A first-party, opt-in plugin inside a Session. It is surfaced as a small floating tile above the conversation; expanding it temporarily opens the viewer, minimizing returns to the same conversation.
+A first-party, opt-in plugin inside a workspace view. It is surfaced as a small floating tile above the conversation; expanding it temporarily opens the viewer, minimizing returns to the same conversation.
 
 - Viewing and control require separate grants; control requires a short lease and visible takeover.
 - Capture uses macOS ScreenCaptureKit (permission via a permission-flow UI), Windows Graphics Capture where verified, and Linux PipeWire/portal where available. Unsupported combinations are named in the UI and docs.
@@ -173,7 +179,7 @@ Native SwiftUI, sharing the wire protocol only.
 
 - Real QR/camera pairing, Keychain-backed device identity, live chat, approvals only where the provider supports them, APNs with opaque wake hints.
 - The current `apps/ios` fixture shell may be preserved as UI scaffolding, but it is not evidence of Host/relay integration. Fixture labels stay until a real authenticated connection exists.
-- The Session overlay slot is reserved for Remote Screen and must not become permanent navigation.
+- The conversation overlay slot is reserved for Remote Screen and must not become permanent navigation.
 
 ## Plugin safety
 
@@ -208,6 +214,7 @@ Not a fork of herdr-app; not an Agent framework replacing omp/Codex/Claude; not 
 - [Implementation plan](goals/mygo-implementation.md)
 - [Platform and runtime decision](decisions/0001-platform-and-runtime.md)
 - [Remote control decision](decisions/0002-remote-control-is-plugin.md)
+- [Close detaches decision](decisions/0003-close-detaches-not-kills.md)
 - [Domain model](subsystems/domain-model.md)
 - [Security](subsystems/security.md)
 - [Plugins](subsystems/plugins.md)

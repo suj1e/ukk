@@ -21,10 +21,10 @@ the MyGo version recorded in `apps/desktop/go.mod`; the local module source and
 
 - Build Go/MyGo native Desktop, native SwiftUI iOS, and use external herdr-core; never fork herdr-app.
 - All product code lives in apps/desktop or apps/ios. The single Go module and MyGo config live in apps/desktop.
-- Closing a Pane/Tab/Session/window must never signal an Agent or terminal.
-- Space, Session, AgentRun, TerminalRef and Pane are distinct entities with distinct lifetimes.
+- Closing a Pane/Tab/Space view/window must never signal an Agent or terminal; it detaches only ([ADR-0003](docs/decisions/0003-close-detaches-not-kills.md)).
+- Space, Tab, Pane and TerminalRef are distinct entities with distinct lifetimes. Spaces/tabs/panes are the core `herdr-app` document (`doc.get`/`doc.set`, version CAS); ukk keeps only local view state.
 - Never infer approvals, turns or tool execution from terminal text; use typed events only.
-- Remote Screen is an opt-in floating Session plugin. Pairing, Agent control and screen control are separate grants.
+- Remote Screen is an opt-in floating plugin. Pairing, Agent control and screen control are separate grants.
 - Android, Web and TUI are deferred. iOS stays native SwiftUI.
 - Bridge and relay share the Desktop Go module but must not import the GUI. Relay carries control/signalling, not video.
 - This is a development reset: no user-data migration or old Rust Host compatibility layer.

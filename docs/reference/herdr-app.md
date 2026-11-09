@@ -117,21 +117,28 @@ Dark themes derive from the terminal palette:
 
 Herdr ends a terminal when its pane, tab or space closes (`window.rs`
 `pane.close`/`tab.close`/`space.close` call `kill`). ukk's non-negotiable is
-the opposite: closing a Pane/Tab/Session/window only detaches, and only an
-explicit stop with agent control may end a process (AGENTS.md). Do not copy
-Herdr's kill-on-close; if that product decision ever changes it needs its own
-decision record and user approval.
+the opposite: closing a Pane/Tab/Space view/window only detaches, and only an
+explicit stop with agent control may end a process (AGENTS.md,
+[ADR-0003](../decisions/0003-close-detaches-not-kills.md)). Do not copy
+Herdr's kill-on-close; changing that product decision needs its own decision
+record and explicit user approval.
 
-## What ukk must change to match
+## Resolved in ukk's direction
+
+| Herdr | ukk now |
+| --- | --- |
+| World model in core `herdr-app` document via `doc.get`/`doc.set` CAS | Accepted as the source of truth: the Go model and validation are `apps/desktop/internal/corelayout`, the document calls are `hc.DocGet`/`hc.DocSet`. Desktop wiring and local view file are target work, tracked in [status](../status.md). |
+| Terminal pane is the default | A new tab opens a terminal pane; the conversation is a sibling view. |
+| Agents four sections + state-change duration | Ordering and grouping into Needs you / Done / Working / Idle (plus Agents) live in `internal/agentview`; status comes from core terminal state, never terminal text. |
+
+## Remaining gaps
 
 | Herdr | ukk today | Change |
 | --- | --- | --- |
-| World model in core `herdr-app` doc | ukk JSON store, bridge mirror | Read/write `doc.get`/`doc.set`; keep ukk metadata separate |
-| Layout JSON + mods | compiled Go composition | Compile the metrics below into Go; layout files later |
+| Layout JSON files + mods | compiled Go composition, no mod files | Compile the metrics below into Go; layout files later |
 | Sidebar 268 / brand 46 / footer 69 | 224 / 44 / footer | Match the metrics |
 | Tabs 42, chip h29 | 34, chip smaller | Match |
 | Pane radius 10, border/focus, header 30 | rail + no radius | Match |
 | Status bar 28 | removed | Re-add |
-| Agents four sections + state-change duration | three groups, status_ms | Match |
-| Terminal pane is the default | conversation tab default | New session/tab opens a shell |
-| OSC 7501 agents | now reads terminal status | Keep; add sub-agent rollup later |
+| Sub-agent rollup in the agents list | one row per terminal | Add rollup later |
+| Window layout in `~/.config/herdr-app/layouts` | none; local view file only holds active space/tab, focus, zoom | Deferred; not product state |

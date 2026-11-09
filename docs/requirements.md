@@ -13,8 +13,8 @@ Primary user: a developer who works with several coding agents and wants persist
 Build a **complete product**, not a terminal MVP, on native Desktop (macOS, Windows, Linux) and iOS/iPadOS first:
 
 - **Desktop:** native Go application built with MyGo, using MyGo's native UI. No webview-based primary interface, no GPUI/Rust application, and no TUI-themed desktop facade.
-- **Runtime:** herdr-core v0.1.18 remains the external authority for persistent terminals and processes. ukk never copies or rewrites it.
-- **Background service:** `ukk-bridge` authorizes remote, agent-adapter and screen connections and owns ukk's durable product state. Closing any ukk UI never stops an Agent.
+- **Runtime:** herdr-core v0.1.18 remains the external authority for persistent terminals and processes, and for the shared `herdr-app` world document that holds spaces, tabs and panes. ukk never copies or rewrites it.
+- **Background service:** `ukk-bridge` authorizes remote, agent-adapter and screen connections, owns Agent children, provider adapters, device trust and grants, and drives Agent control per pane. The workspace structure itself is the core document; the Desktop keeps only a local view file. Closing any ukk UI never stops an Agent.
 - **Remote:** a self-hostable `ukk-relay` (WSS/TLS, operator authentication) plus independent STUN/TURN media connectivity. The relay never carries raw video.
 - **Mobile:** native SwiftUI iOS/iPadOS companion with real QR/camera pairing, chat, approvals and APNs.
 
@@ -25,7 +25,7 @@ Android/Web/TUI are explicitly **deferred client implementations**. Do not build
 ## Design pillars
 
 1. **Multi-agent, not fixed pipeline.** omp is the first real provider; Codex, Claude Code and compatible agents are dynamic peers through one provider-neutral contract. Agents may delegate to children; no hard-coded Planner/Coder/Reviewer/Tester funnel.
-2. **Spaces organize work.** Projects/worktrees/remote machines can contain sessions. Tabs and panes are view composition; closing a pane must not silently kill an agent.
+2. **Spaces organize work, panes show terminals.** Projects/worktrees/remote machines are Spaces; tabs and panes are view composition over core-owned terminals. Closing a pane must not silently kill an agent.
 3. **Native-first.** MyGo native UI on desktop, SwiftUI on iOS. The desktop shell is native Go, not an embedded browser dressed as a desktop app.
 4. **Portable ongoing sessions.** Agent execution and terminals live in herdr-core, not in a window. Closing a pane, tab, window or the whole Desktop detaches the view. Reattach after app exit or network loss; do not promise crash recovery that the runtime does not provide.
 5. **Extensible by design.** A small, reviewed plugin surface with lifecycle, capabilities, typed commands/events, versioning and per-device grants. Third-party plugin safety and durable grants are product scope, not a generic framework project.
@@ -36,7 +36,7 @@ Android/Web/TUI are explicitly **deferred client implementations**. Do not build
 | Area | Intended capabilities |
 |---|---|
 | Workspaces | Multiple local/remote devices; named Spaces; project roots; recent/pinned; per-Space settings; quick switch and search. |
-| Sessions | Multiple concurrent sessions, rename/archive/reopen, persistent history, timeline, interruption recovery, share a link to a specific workspace view. |
+| Terminals | Multiple concurrent terminals per Space; persistent across window close and app exit; reattach and rename views; scrollback history; interruption recovery; share a link to a specific workspace view. |
 | Agents | Run omp first through a neutral provider contract; target Codex/Claude-compatible CLIs; status and child hierarchy; dispatch instructions; monitor parallel tasks; per-agent capabilities; human approval. |
 | Composition | Tabs, resizable split panes, workspace presets, agent chat, terminal, files, diff, activity, search and command palette. |
 | Code context | Git/worktree integration, changed files and hunks, branch metadata, read-only remote diff, open file, patch review, optional git actions behind permissions. |
@@ -55,11 +55,11 @@ Platform scope: **active** Desktop on macOS/Windows/Linux with one MyGo native-U
 
 ### Desktop everyday usage
 
-Launch app → choose Space → open an existing Session or create one → start one or more Agents → switch between their tabs/panes → review changes, approvals and activity → close window; agents stay running → reopen and reattach.
+Launch app → choose Space → open an existing tab or create one → start one or more Agents in panes → switch between their tabs/panes → review changes, approvals and activity → close window; agents stay running → reopen and reattach.
 
 ### Mobile everyday usage
 
-Open iOS App → select a paired device and Space → see live Agents/Sessions → tap a Session → compose a follow-up prompt or approve → optional floating screen control to interact with a native dialog → minimize screen and continue chat.
+Open iOS App → select a paired device and Space → see live Agents and terminals → open one → compose a follow-up prompt or approve → optional floating screen control to interact with a native dialog → minimize screen and continue chat.
 
 ### First pairing
 
@@ -69,7 +69,7 @@ Pairing grants no agent control, screen viewing or screen control by itself. Tho
 
 ## Navigation principles
 
-Desktop: left sidebar Spaces / Agents / Sessions / Git; center native conversation or multi-pane view; optional right context panel; terminal present but not primary. iOS: Workspace / Sessions / Agents; session detail is chat-first. Remote screen must remain an overlay or compact floating window, not a new permanent navigation tab.
+Desktop: left sidebar Spaces / Agents / Git; center native conversation or multi-pane view; optional right context panel; terminal present but not primary. iOS: Workspace / Agents; a workspace view is chat-first. Remote screen must remain an overlay or compact floating window, not a new permanent navigation tab.
 
 ## Quality requirements
 
@@ -98,7 +98,7 @@ An unsigned IPA is an artifact, not an installable App Store/TestFlight release.
 
 ## Core success scenario
 
-On Mac, start two coding agents in the same Space; one creates a child agent. Close the Desktop window. On an iPhone that was QR-paired previously, reopen the same session, see the three processes and their correct states, send a message to a chosen Agent, inspect a diff, approve a request, briefly open an on-demand floating Remote Screen to handle a native dialog, then minimize it and continue the session. All state survives app reconnect; the relay never sees screen media.
+On Mac, start two coding agents in the same Space; one creates a child agent. Close the Desktop window. On an iPhone that was QR-paired previously, reopen the same workspace view, see the three processes and their correct states, send a message to a chosen Agent, inspect a diff, approve a request, briefly open an on-demand floating Remote Screen to handle a native dialog, then minimize it and continue the work. All state survives app reconnect; the relay never sees screen media.
 
 ## Reset scope
 
