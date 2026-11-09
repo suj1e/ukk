@@ -10,7 +10,7 @@ the MyGo version recorded in `apps/desktop/go.mod`; the local module source and
 0. [Goal](docs/goals/v1-complete.md) and [implementation plan](docs/goals/mygo-implementation.md) — one delivery track, issue #55.
 1. [Wire contracts](contracts/README.md) — versioned agent/bridge/core/remote schemas and fixtures. Change the contract here first.
 2. [Requirements](docs/requirements.md) — product scope and decisions.
-3. [Technical design](docs/tech-design.md) — architecture and ownership.
+3. [Technical design](docs/tech-design.md) — architecture and ownership; [Herdr reference](docs/reference/herdr-app.md) records the official app's model and metrics.
 4. [Coding standard](docs/coding-standard.md) — quality gate and commands.
 5. [Status](docs/status.md) and [roadmap](docs/roadmap.md) — what is verified and what is claimable.
 6. [Subsystem contracts](docs/subsystems/) — workspace identity, security and plugin boundaries.

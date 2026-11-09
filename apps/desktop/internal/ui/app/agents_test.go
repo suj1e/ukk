@@ -30,18 +30,27 @@ func TestTerminalAgentsReadOSCStatus(t *testing.T) {
 	if len(agents) != 2 {
 		t.Fatalf("agents = %d, want 2 (a terminal without status is not an Agent)", len(agents))
 	}
-	first := agents[0]
-	if first.Group != "Working" || first.App != "omp" || first.Title != "TREE: contracts" {
-		t.Fatalf("first agent = %+v", first)
+	byAddress := map[string]terminalAgent{}
+	for _, agent := range agents {
+		byAddress[agent.Terminal.Address] = agent
 	}
-	if first.Place != "ukk / 1" {
-		t.Fatalf("place = %q", first.Place)
+	working := byAddress["t6"]
+	if working.Group != "Working" || working.App != "omp" || working.Title != "TREE: contracts" {
+		t.Fatalf("working agent = %+v", working)
 	}
-	if first.Elapsed == "" {
+	if working.Place != "ukk / 1" {
+		t.Fatalf("place = %q", working.Place)
+	}
+	if working.Elapsed == "" {
 		t.Fatal("working agent has no elapsed time")
 	}
-	if agents[1].Group != "Idle" || agents[1].Title != "t1" {
-		t.Fatalf("second agent = %+v", agents[1])
+	done := byAddress["t1"]
+	if done.Group != "Done" || done.Title != "t1" {
+		t.Fatalf("done agent = %+v", done)
+	}
+	// Herdr ranks Needs you, Done, Working, Idle.
+	if agents[0].Group != "Done" || agents[1].Group != "Working" {
+		t.Fatalf("order = %q, %q", agents[0].Group, agents[1].Group)
 	}
 }
 
@@ -50,7 +59,7 @@ func TestAgentGroup(t *testing.T) {
 		"working": "Working",
 		"blocked": "Needs you",
 		"error":   "Needs you",
-		"done":    "Idle",
+		"done":    "Done",
 		"idle":    "Idle",
 		"strange": "Agents",
 	}

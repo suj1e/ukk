@@ -78,15 +78,18 @@ func (a *App) renderLeaf(c *ui.Context, leaf *domain.PaneNode) {
 	}
 	theme := c.Theme()
 	active := leaf.ID == a.activePane
-	ui.Row(c).Fill().Padding(2).Children(func() {
+	ui.Row(c).Fill().Padding(4).Children(func() {
 		rail := ui.Box(c).Width(2).FillHeight()
-		if active {
-			rail.Background(theme.Accent)
-		}
 		if rail.Clicked() {
 			a.activePane = leaf.ID
 		}
-		ui.Column(c).Grow(1).FillHeight().Background(theme.Surface).Children(func() {
+		card := ui.Column(c).Grow(1).FillHeight().Background(kit.Card(theme)).Radius(10)
+		if active {
+			card.Border(1, theme.Accent)
+		} else {
+			card.Border(1, theme.Border)
+		}
+		card.Children(func() {
 			a.renderSurface(c, leaf, p)
 		})
 	})

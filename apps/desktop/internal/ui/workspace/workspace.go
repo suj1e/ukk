@@ -66,8 +66,8 @@ func Layout(c *ui.Context, node *domain.PaneNode, sizes PaneSizes,
 // PaneHeader names a pane and holds its actions.
 func PaneHeader(c *ui.Context, title, subtitle string, actions func()) {
 	theme := c.Theme()
-	ui.Row(c).FillWidth().Height(34).PaddingX(12).Gap(8).
-		AlignItems(ui.Center).Background(theme.Surface).
+	ui.Row(c).FillWidth().Height(30).PaddingX(10).Gap(8).
+		AlignItems(ui.Center).Background(kit.Card(theme)).
 		BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
 		ui.Text(c, title).FontSize(12).FontWeight(600).NoWrap()
 		if subtitle != "" {
@@ -84,17 +84,17 @@ func PaneHeader(c *ui.Context, title, subtitle string, actions func()) {
 func TabBar(c *ui.Context, tabs []domain.Tab, activeID string,
 	onSelect func(id string), onClose func(id string), onNew func(), actions func(c *ui.Context)) {
 	theme := c.Theme()
-	ui.Row(c).FillWidth().Height(34).PaddingX(8).Gap(3).
-		AlignItems(ui.Center).Background(theme.Background).
+	ui.Row(c).FillWidth().Height(42).PaddingX(10).Gap(3).
+		AlignItems(ui.Center).Background(theme.Surface).
 		BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).
 		Role(ui.RoleTabList).Children(func() {
 		for _, tab := range tabs {
 			selected := tab.ID == activeID
 			row := ui.Row(c).Gap(6).AlignItems(ui.Center).
-				PaddingX(9).PaddingY(4).Radius(5).
+				Height(29).PaddingX(10).Radius(7).
 				Role(ui.RoleTab).AccessSelected(selected)
 			if selected {
-				row.Background(theme.SurfaceHover)
+				row.Background(theme.SurfaceHover).Border(1, theme.Border)
 			}
 			row.Children(func() {
 				label := ui.ButtonBase(c)

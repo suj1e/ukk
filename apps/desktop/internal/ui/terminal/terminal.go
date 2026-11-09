@@ -46,7 +46,7 @@ func (s *State) Attach(att *hc.Attachment) error {
 		DarkTheme:  dark,
 		Cursor:     mygoterm.CursorBar,
 		Scrollback: 20 << 20,
-		Padding:    mygoterm.Padding{X: 10, Y: 6},
+		Padding:    mygoterm.Padding{X: 14, Y: 12},
 		OnTitle: func(title string) {
 			if s.OnTitle != nil {
 				s.OnTitle(title)

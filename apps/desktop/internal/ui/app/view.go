@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/suj1e/ukk/apps/desktop/internal/bridge"
@@ -45,6 +46,7 @@ func (a *App) View(c *ui.Context) {
 				}
 				a.renderPanes(c)
 			})
+			a.statusBar(c)
 		})
 	})
 	a.newSpaceDialog(c)
@@ -81,30 +83,30 @@ func (a *App) tabActions(c *ui.Context) {
 
 func (a *App) sidebar(c *ui.Context) {
 	theme := c.Theme()
-	ui.Column(c).Width(224).FillHeight().Background(theme.Surface).
+	ui.Column(c).Width(268).FillHeight().Background(theme.Surface).
 		BorderWidth(0, 1, 0, 0).BorderColor(theme.Border).Children(func() {
-		ui.Row(c).FillWidth().Height(44).PaddingX(12).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "ukk").FontSize(15).FontWeight(700)
+		ui.Row(c).FillWidth().Height(46).PaddingX(14).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "ukk").FontSize(14).FontWeight(600)
 			ui.Spacer(c)
 			if ui.Button(c, "Palette").Label("Command palette").PaddingX(6).PaddingY(2).FontSize(10).Clicked() {
 				a.OpenPalette()
 			}
 		})
 
-		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Gap(1).PaddingX(6).PaddingY(4).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(90).Children(func() {
+			ui.Column(c).Gap(1).PaddingX(8).PaddingY(4).Children(func() {
 				kit.SectionLabel(c, "Spaces")
 				for _, space := range a.meta.Spaces {
 					space := space
 					selected := space.ID == a.spaceID
 					button := ui.ButtonBase(c).FillWidth()
 					button.Children(func() {
-						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(5, 7).Radius(5).
+						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(4, 7).Radius(6).
 							Background(boolColor(selected, theme.SurfaceHover, ui.Transparent)).Children(func() {
 							ui.Box(c).Size(18, 18).Radius(4).Background(spaceTint(space.Title)).
 								Center().Children(func() {
 								ui.Text(c, initial(space.Title)).FontSize(9).FontWeight(700).
-									TextColor(ui.Hex("#101319"))
+									TextColor(theme.InverseText)
 							})
 							ui.Column(c).Grow(1).Gap(1).Children(func() {
 								ui.Text(c, space.Title).FontSize(12).FontWeight(600).NoWrap().
@@ -149,33 +151,55 @@ func (a *App) sidebar(c *ui.Context) {
 						})
 					}
 				}
+			})
+		})
+
+		ui.Scroll(c).Grow(1).MinHeight(90).Children(func() {
+			ui.Column(c).Gap(1).PaddingX(8).PaddingY(4).Children(func() {
 				a.agentSidebar(c)
 			})
 		})
 
-		ui.Column(c).FillWidth().Padding(10).Gap(3).BorderWidth(1, 0, 0, 0).
+		ui.Column(c).FillWidth().Height(69).Padding(8, 4).Gap(0).BorderWidth(1, 0, 0, 0).
 			BorderColor(theme.Border).Children(func() {
-			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-				kit.Dot(c, a.bridgeColor())
-				ui.Text(c, firstLine(a.bridgeLabel())).FontSize(9).TextColor(theme.TextMuted).
-					NoWrap().Ellipsis(a.bridgeLabel())
-			})
-			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-				kit.Dot(c, a.herdrColor())
-				ui.Text(c, firstLine(herdrLabel(a.hc != nil, a.hcErr))).FontSize(9).
-					TextColor(theme.TextMuted).NoWrap().Ellipsis(herdrLabel(a.hc != nil, a.hcErr))
-			})
-			ui.Row(c).FillWidth().Gap(4).Children(func() {
-				if ui.Button(c, "+ Space").FontSize(11).Clicked() {
-					a.newSpace.Open = true
-				}
-				ui.Button(c, "Settings").FontSize(11).OnClick(func() {
-					a.settings.Open = true
-					a.loadRemoteStatus()
-				})
-			})
+			if ui.Button(c, "Settings").FillWidth().Height(28).FontSize(12).Clicked() {
+				a.settings.Open = true
+				a.loadRemoteStatus()
+			}
+			if ui.Button(c, "+ Space").FillWidth().Height(28).FontSize(12).Clicked() {
+				a.newSpace.Open = true
+			}
 		})
 	})
+}
+
+// statusBar is the 28px footer Herdr draws under the panes.
+func (a *App) statusBar(c *ui.Context) {
+	theme := c.Theme()
+	agents := a.terminalAgents()
+	needs := 0
+	for _, agent := range agents {
+		if agent.State == "blocked" || agent.State == "error" {
+			needs++
+		}
+	}
+	ui.Row(c).FillWidth().Height(28).PaddingX(14).Gap(16).AlignItems(ui.Center).
+		Background(theme.Surface).BorderWidth(1, 0, 0, 0).BorderColor(theme.Border).
+		Children(func() {
+			kit.Dot(c, a.herdrColor())
+			ui.Text(c, "This computer").FontSize(11).TextColor(theme.TextMuted)
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				kit.Dot(c, theme.TextMuted)
+				ui.Text(c, kit.Plural(len(agents), "agent", "agents")).FontSize(11).
+					TextColor(theme.TextMuted)
+				if needs > 0 {
+					ui.Text(c, "· "+strconv.Itoa(needs)+" needs you").FontSize(11).
+						TextColor(theme.Danger)
+				}
+			})
+			ui.Spacer(c)
+			ui.Text(c, "Ctrl+Shift+P  commands").FontSize(11).TextColor(theme.TextMuted)
+		})
 }
 
 // terminalAgent is one Agent that a herdr-core terminal reported through
@@ -202,7 +226,7 @@ func (a *App) terminalAgents() []terminalAgent {
 			State:    term.Status.State,
 			Group:    agentGroup(term.Status.State),
 			Place:    term.Labels["where"],
-			Title:    strings.TrimSpace(term.Title),
+			Title:    cleanAgentTitle(term.Title),
 		}
 		if agent.App == "" {
 			agent.App = "agent"
@@ -214,26 +238,55 @@ func (a *App) terminalAgents() []terminalAgent {
 			agent.Place = term.Cwd
 		}
 		if term.StatusMS != nil {
-			agent.Elapsed = kit.FormatDuration(time.Since(time.UnixMilli(int64(*term.StatusMS))).Milliseconds())
+			agent.Elapsed = shortDuration(time.Since(time.UnixMilli(int64(*term.StatusMS))).Milliseconds())
 		}
 		agents = append(agents, agent)
 	}
 	sort.Slice(agents, func(i, j int) bool {
 		if agents[i].Group != agents[j].Group {
-			return groupRank(agents[i].Group) < groupRank(agents[j].Group)
+			return groupRank(agents[i].Group) > groupRank(agents[j].Group)
 		}
 		return agents[i].Title < agents[j].Title
 	})
 	return agents
 }
 
+// cleanAgentTitle drops the spinner and status glyphs a program puts before
+// its title, as Herdr's agents mod does.
+func cleanAgentTitle(raw string) string {
+	for i, r := range raw {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			return strings.TrimSpace(raw[i:])
+		}
+	}
+	return strings.TrimSpace(raw)
+}
+
+// shortDuration is Herdr's compact age: <1m, Xm, Xh, Xd.
+func shortDuration(ms int64) string {
+	minutes := ms / 60000
+	if minutes < 1 {
+		return "<1m"
+	}
+	if minutes < 60 {
+		return strconv.FormatInt(minutes, 10) + "m"
+	}
+	hours := minutes / 60
+	if hours < 24 {
+		return strconv.FormatInt(hours, 10) + "h"
+	}
+	return strconv.FormatInt(hours/24, 10) + "d"
+}
+
 func agentGroup(state string) string {
 	switch state {
-	case "working":
-		return "Working"
 	case "blocked", "error":
 		return "Needs you"
-	case "idle", "done":
+	case "done":
+		return "Done"
+	case "working":
+		return "Working"
+	case "idle":
 		return "Idle"
 	default:
 		return "Agents"
@@ -242,23 +295,25 @@ func agentGroup(state string) string {
 
 func groupRank(group string) int {
 	switch group {
-	case "Working":
-		return 0
 	case "Needs you":
-		return 1
-	case "Idle":
-		return 2
-	default:
+		return 4
+	case "Done":
 		return 3
+	case "Working":
+		return 2
+	case "Idle":
+		return 1
+	default:
+		return 0
 	}
 }
 
 func agentStateColor(state string, theme *ui.Theme) ui.Color {
 	switch state {
 	case "working":
-		return theme.Accent
-	case "blocked", "error":
 		return theme.Warning
+	case "blocked", "error":
+		return theme.Danger
 	case "done":
 		return theme.Success
 	default:
@@ -271,7 +326,7 @@ func (a *App) agentSidebar(c *ui.Context) {
 	agents := a.terminalAgents()
 	if len(agents) > 0 {
 		kit.SectionLabel(c, "Agents")
-		for _, group := range []string{"Working", "Needs you", "Idle", "Agents"} {
+		for _, group := range []string{"Needs you", "Done", "Working", "Idle", "Agents"} {
 			var rows []terminalAgent
 			for _, agent := range agents {
 				if agent.Group == group {
@@ -346,9 +401,9 @@ func (a *App) agentSidebar(c *ui.Context) {
 func agentColor(state string, theme *ui.Theme) ui.Color {
 	switch state {
 	case "running":
-		return theme.Accent
-	case "blocked":
 		return theme.Warning
+	case "blocked":
+		return theme.Danger
 	case "done":
 		return theme.Success
 	case "failed":
