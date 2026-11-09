@@ -131,6 +131,7 @@ func (a *App) Attach(win *mygo.Window) {
 	go a.watchStore()
 	go a.connectBridge()
 	go a.preloadTerminal()
+	go a.pollHerdr()
 	// Like the official client, connect to herdr-core at startup instead of
 	// waiting for a terminal pane: the core owns the terminals, and the app is
 	// only useful once their list is visible.
@@ -740,6 +741,42 @@ func (a *App) NewTerminal() {
 			a.refreshTerminals()
 		})
 	}()
+}
+
+// openTerminal shows a terminal the core already runs in a tab, creating a
+// Session when none is selected.
+func (a *App) openTerminal(term hc.Terminal) {
+	if a.sessionID == "" {
+		space, ok := a.space()
+		if !ok {
+			a.notice = "Create a Space before opening a terminal."
+			return
+		}
+		session, err := a.store.CreateSession(space.ID, "Terminal")
+		if err != nil {
+			a.notice = "session: " + err.Error()
+			return
+		}
+		a.sessionID = session.ID
+		a.layout = domain.SessionLayout{}
+		a.reload()
+	}
+	a.addTerminalTabTo(a.sessionID, term.Address)
+}
+
+// pollHerdr refreshes terminal status so the Agents sidebar follows OSC 7501
+// reports without a manual refresh.
+func (a *App) pollHerdr() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.bridgeCtx.Done():
+			return
+		case <-ticker.C:
+			a.update(func() { a.refreshTerminals() })
+		}
+	}
 }
 
 func defaultShell() []string {

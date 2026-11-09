@@ -1,6 +1,7 @@
 package app
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/suj1e/ukk/apps/desktop/internal/bridge"
 	"github.com/suj1e/ukk/apps/desktop/internal/extensions"
+	"github.com/suj1e/ukk/apps/desktop/internal/hc"
 	"github.com/suj1e/ukk/apps/desktop/internal/ui/kit"
 	uispace "github.com/suj1e/ukk/apps/desktop/internal/ui/workspace"
 	domain "github.com/suj1e/ukk/apps/desktop/internal/workspace"
@@ -176,26 +178,145 @@ func (a *App) sidebar(c *ui.Context) {
 	})
 }
 
-// agentSidebar lists provider sessions grouped by Space.
-func (a *App) agentSidebar(c *ui.Context) {
-	if len(a.liveAgents) == 0 {
-		return
-	}
-	theme := c.Theme()
-	kit.SectionLabel(c, "Agents")
-	for _, space := range a.meta.Spaces {
-		space := space
-		var rows []bridge.AgentSnapshot
-		for _, snapshot := range a.liveAgents {
-			if session, ok := a.sessionByID(snapshot.SessionID); ok && session.SpaceID == space.ID {
-				rows = append(rows, snapshot)
-			}
-		}
-		if len(rows) == 0 {
+// terminalAgent is one Agent that a herdr-core terminal reported through
+// OSC 7501, the same source the official sidebar uses.
+type terminalAgent struct {
+	Terminal hc.Terminal
+	App      string
+	State    string
+	Group    string
+	Place    string
+	Title    string
+	Elapsed  string
+}
+
+func (a *App) terminalAgents() []terminalAgent {
+	var agents []terminalAgent
+	for _, term := range a.terminals {
+		if term.Status == nil || term.Status.State == "" {
 			continue
 		}
-		ui.Text(c, space.Title).FontSize(9).TextColor(theme.TextMuted).Padding(4, 7)
-		for _, snapshot := range rows {
+		agent := terminalAgent{
+			Terminal: term,
+			App:      term.Status.App,
+			State:    term.Status.State,
+			Group:    agentGroup(term.Status.State),
+			Place:    term.Labels["where"],
+			Title:    strings.TrimSpace(term.Title),
+		}
+		if agent.App == "" {
+			agent.App = "agent"
+		}
+		if agent.Title == "" {
+			agent.Title = a.terminalLabel(term)
+		}
+		if agent.Place == "" {
+			agent.Place = term.Cwd
+		}
+		if term.StatusMS != nil {
+			agent.Elapsed = kit.FormatDuration(time.Since(time.UnixMilli(int64(*term.StatusMS))).Milliseconds())
+		}
+		agents = append(agents, agent)
+	}
+	sort.Slice(agents, func(i, j int) bool {
+		if agents[i].Group != agents[j].Group {
+			return groupRank(agents[i].Group) < groupRank(agents[j].Group)
+		}
+		return agents[i].Title < agents[j].Title
+	})
+	return agents
+}
+
+func agentGroup(state string) string {
+	switch state {
+	case "working":
+		return "Working"
+	case "blocked", "error":
+		return "Needs you"
+	case "idle", "done":
+		return "Idle"
+	default:
+		return "Agents"
+	}
+}
+
+func groupRank(group string) int {
+	switch group {
+	case "Working":
+		return 0
+	case "Needs you":
+		return 1
+	case "Idle":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func agentStateColor(state string, theme *ui.Theme) ui.Color {
+	switch state {
+	case "working":
+		return theme.Accent
+	case "blocked", "error":
+		return theme.Warning
+	case "done":
+		return theme.Success
+	default:
+		return theme.TextMuted
+	}
+}
+
+func (a *App) agentSidebar(c *ui.Context) {
+	theme := c.Theme()
+	agents := a.terminalAgents()
+	if len(agents) > 0 {
+		kit.SectionLabel(c, "Agents")
+		for _, group := range []string{"Working", "Needs you", "Idle", "Agents"} {
+			var rows []terminalAgent
+			for _, agent := range agents {
+				if agent.Group == group {
+					rows = append(rows, agent)
+				}
+			}
+			if len(rows) == 0 {
+				continue
+			}
+			ui.Text(c, group).FontSize(9).TextColor(theme.TextMuted).Padding(4, 7)
+			for _, agent := range rows {
+				agent := agent
+				button := ui.ButtonBase(c).FillWidth()
+				button.Children(func() {
+					ui.Row(c).FillWidth().Gap(7).AlignItems(ui.Center).Padding(4, 7).Radius(5).Children(func() {
+						kit.Dot(c, agentStateColor(agent.State, theme))
+						ui.Column(c).Grow(1).Gap(0).Children(func() {
+							ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, agent.App).FontSize(10).FontWeight(600).TextColor(theme.TextMuted)
+								ui.Text(c, agent.Title).FontSize(11).NoWrap().Ellipsis(agent.Title)
+							})
+							if agent.Place != "" {
+								ui.Text(c, agent.Place).FontSize(9).TextColor(theme.TextMuted).
+									NoWrap().Ellipsis(agent.Place)
+							}
+						})
+						if agent.Elapsed != "" {
+							ui.Text(c, agent.Elapsed).FontSize(9).TextColor(theme.TextMuted)
+						}
+					})
+				})
+				if button.Clicked() {
+					a.openTerminal(agent.Terminal)
+				}
+			}
+		}
+	}
+	if len(a.liveAgents) > 0 {
+		kit.SectionLabel(c, "Provider sessions")
+		providers := make([]bridge.AgentSnapshot, 0, len(a.liveAgents))
+		for _, snapshot := range a.liveAgents {
+			providers = append(providers, snapshot)
+		}
+		sort.Slice(providers, func(i, j int) bool { return providers[i].UpdatedMS > providers[j].UpdatedMS })
+		for _, snapshot := range providers {
 			snapshot := snapshot
 			button := ui.ButtonBase(c).FillWidth()
 			button.Children(func() {
@@ -237,7 +358,7 @@ func agentColor(state string, theme *ui.Theme) ui.Color {
 	}
 }
 
-// agentElapsed is how long the current turn has run, or "".
+// agentElapsed is how long the current provider turn has run, or "".
 func agentElapsed(snapshot bridge.AgentSnapshot) string {
 	for i := len(snapshot.Turns) - 1; i >= 0; i-- {
 		turn := snapshot.Turns[i]
